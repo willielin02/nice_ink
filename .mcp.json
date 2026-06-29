@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "VibeUE-Claude": {
+      "type": "http",
+      "url": "http://127.0.0.1:8089/mcp"
+    },
+    "unrealclaude": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "Plugins/UnrealClaude/Resources/mcp-bridge/index.js"
+      ],
+      "env": {
+        "UNREAL_MCP_URL": "http://localhost:3000"
+      }
+    }
+  }
+}
