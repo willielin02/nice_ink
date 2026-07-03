@@ -28,6 +28,14 @@ ATattooPrototypeActor::ATattooPrototypeActor()
 
 	TattooComponent = CreateDefaultSubobject<UTattooComponent>(TEXT("TattooComponent"));
 	TattooComponent->bAutoDemoDrawing = false;
+
+	PrototypePalette = {
+		FLinearColor::Black,
+		FLinearColor(0.03f, 0.04f, 0.08f, 1.0f),
+		FLinearColor(0.45f, 0.02f, 0.025f, 1.0f),
+		FLinearColor(0.02f, 0.18f, 0.08f, 1.0f),
+		FLinearColor(0.02f, 0.1f, 0.42f, 1.0f)
+	};
 }
 
 void ATattooPrototypeActor::BeginPlay()
@@ -38,6 +46,7 @@ void ATattooPrototypeActor::BeginPlay()
 	{
 		TattooComponent->InitializeRenderTarget(TattooComponent->RenderTargetResolution);
 		TattooComponent->bAutoDemoDrawing = bStartAutoDemoOnBeginPlay;
+		SelectPaletteColor(SelectedPaletteIndex);
 	}
 
 	if (PlaneMaterial && PlaneMesh && TattooComponent)
@@ -55,12 +64,22 @@ void ATattooPrototypeActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (!bEnableMousePaintingInPIE || !TattooComponent || !GetWorld() || !GetWorld()->IsPlayInEditor())
+	if (!TattooComponent || !GetWorld() || !GetWorld()->IsPlayInEditor())
 	{
 		return;
 	}
 
 	APlayerController* PlayerController = GetWorld()->GetFirstPlayerController();
+	if (bEnablePrototypeHotkeys)
+	{
+		HandlePrototypeHotkeys(PlayerController);
+	}
+
+	if (!bEnableMousePaintingInPIE)
+	{
+		return;
+	}
+
 	const bool bWantsPaint = PlayerController && PlayerController->IsInputKeyDown(EKeys::LeftMouseButton);
 	if (!bWantsPaint)
 	{
@@ -91,6 +110,69 @@ void ATattooPrototypeActor::Tick(float DeltaSeconds)
 	else
 	{
 		TattooComponent->SubmitStrokeAtUV(PaintUV, 1.0f);
+	}
+}
+
+bool ATattooPrototypeActor::SelectPaletteColor(int32 PaletteIndex)
+{
+	if (!PrototypePalette.IsValidIndex(PaletteIndex) || !TattooComponent)
+	{
+		return false;
+	}
+
+	SelectedPaletteIndex = PaletteIndex;
+	TattooComponent->SelectColor(PrototypePalette[SelectedPaletteIndex]);
+	return true;
+}
+
+FLinearColor ATattooPrototypeActor::GetSelectedPaletteColor() const
+{
+	return PrototypePalette.IsValidIndex(SelectedPaletteIndex) ? PrototypePalette[SelectedPaletteIndex] : FLinearColor::Black;
+}
+
+void ATattooPrototypeActor::HandlePrototypeHotkeys(APlayerController* PlayerController)
+{
+	if (!PlayerController || !TattooComponent)
+	{
+		return;
+	}
+
+	if (PlayerController->WasInputKeyJustPressed(EKeys::One))
+	{
+		TattooComponent->SelectNeedle(ENiceInkNeedleType::RoundLiner);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Two))
+	{
+		TattooComponent->SelectNeedle(ENiceInkNeedleType::RoundShader);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Three))
+	{
+		TattooComponent->SelectNeedle(ENiceInkNeedleType::Magnum);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Four))
+	{
+		TattooComponent->SelectNeedle(ENiceInkNeedleType::CurvedMagnum);
+	}
+
+	if (PlayerController->WasInputKeyJustPressed(EKeys::Five))
+	{
+		SelectPaletteColor(0);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Six))
+	{
+		SelectPaletteColor(1);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Seven))
+	{
+		SelectPaletteColor(2);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Eight))
+	{
+		SelectPaletteColor(3);
+	}
+	else if (PlayerController->WasInputKeyJustPressed(EKeys::Nine))
+	{
+		SelectPaletteColor(4);
 	}
 }
 

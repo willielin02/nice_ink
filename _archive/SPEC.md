@@ -111,7 +111,15 @@ The tattoo must appear embedded in the dermis, not adhered on top.
 
 ### Overview
 
-MetaHuman base + runtime morph targets. Goal: player can make character resemble themselves in ~3 minutes.
+Runtime customization first, MetaHuman base later. Goal: player can make character resemble themselves in ~3-5 minutes without photo upload, editor tools, or a backend generation job.
+
+**Current decision:** Nice Ink's player-facing customization system is built by us. MetaHuman is only the planned realistic character base. MetaHuman Creator / MetaHuman Character Editor is an official developer/editor tool, not the runtime UI that ships to players.
+
+**Non-goals for first in-game flow:**
+- Do not embed MetaHuman Creator inside the packaged game.
+- Do not depend on photo-to-character generation or backend generation jobs.
+- Do not treat MetaHuman as the tattoo, save, sync, or UI system.
+- Do not claim a slider is complete unless it visibly affects a real mesh or is clearly marked unbound in debug UI.
 
 ### Core Class
 
@@ -121,6 +129,35 @@ FCharacterAppearance     — Serializable struct holding all customization param
 ```
 
 ### Customization Parameters
+
+**Required asset foundation:**
+- A character base must exist before the system can be called complete. This can be a MetaHuman or a test skeletal mesh with real morph targets.
+- Add `UNiceInkCharacterProfile` as the asset/profile layer for face mesh, body mesh, eye materials, skin material slots, hair/brow/facial hair options, available morph targets, morph bindings, and preset data.
+- The same runtime UI talks to the profile layer, so replacing a test mesh with MetaHuman should not require rewriting the UI.
+
+**Current runtime control target:**
+- Face: 35 player-facing controls grouped by head, brow, eyes, nose, cheeks, mouth, jaw/chin, ears/neck, and detail.
+- Body: 12 controls covering height, shoulders, chest, waist, hips, arm/leg proportions, body fat, muscle mass, and posture.
+- Body base: body archetype, gender presentation/body base, height in cm or explicit scale mapping, and body preset.
+- Appearance: skin tone preset/override, undertone, skin detail, freckles, blemishes, scars, age detail, eye color, hair, brows, facial hair, makeup.
+- Facial marks: each mole/freckle/scar/spot stores type, face UV position, size, color, opacity, rotation, and layer order.
+- Replication: only `FCharacterAppearance` values replicate; generated mesh assets do not replicate at runtime.
+
+**Implemented C++ face controls:**
+- HeadWidth, HeadHeight, FaceRoundness, ForeheadHeight
+- BrowHeight, BrowAngle
+- EyeSize, EyeSpacing, EyeDepth, EyeAngle, UpperEyelid, LowerEyelid
+- NoseBridgeHeight, NoseBridgeWidth, NoseTipSize, NoseTipAngle, NostrilWidth
+- CheekboneHeight, CheekboneWidth, CheekFullness
+- MouthWidth, UpperLipFullness, LowerLipFullness, MouthCornerHeight
+- ChinWidth, ChinHeight, ChinProjection
+- JawWidth, JawAngle, JawForward
+- EarSize, EarAngle, NeckThickness, AgeLines, FaceAsymmetry
+
+**Implemented C++ body controls:**
+- Height, ShoulderWidth, ChestSize, WaistSize, HipWidth
+- ArmMuscle, ArmLength, LegMuscle, LegLength
+- BodyFat, MuscleMass, Posture
 
 **Face (15-20 morph targets):**
 - Jaw width, jaw height, chin protrusion
@@ -139,24 +176,83 @@ FCharacterAppearance     — Serializable struct holding all customization param
 - Skin tone: FLinearColor (hue + saturation + brightness)
 - Hair style: 4-6 preset mesh swaps
 - Hair color: FLinearColor
+- Facial marks: player can pick common positions or click the face preview to place marks freely.
+- Starting appearance presets: East Asian, Southeast Asian, South Asian / Indian, Black / African diaspora, White / European, Latino / Latin American, Middle Eastern / North African, Indigenous / Native American, Pacific Islander. These are editable starting points, not locked identity classes.
+- Preset blend: optional advanced flow where the player chooses two explicit presets and a ratio, e.g. Preset A 60% + Preset B 40%. Do not use vague "mixed" preset labels.
+
+### Scope Split
+
+**MVP customization:**
+- Real character base or test mesh with real morph targets
+- Preset selection
+- Face sliders that visibly move the mesh
+- Skin tone, eye color, hair color
+- Hair/brow/facial hair style index swaps
+- Body type, height, body fat, muscle mass
+- Save/load `FCharacterAppearance`
+- Replicate confirmed appearance through PlayerState
+
+**Full customization:**
+- Free placement for moles/freckles/scars/spots on the face
+- Preset blend between two explicit starting presets
+- More skin detail layers: pores, blemishes, scars, aging, makeup
+- MetaHuman-specific material forks and LOD handling
+- Screenshot-verified preset library covering multiple body bases and skin tones
 
 ### UX Flow
 
-1. Select one of 8-10 ethnic/gender presets as starting point
+1. Select an optional starting appearance preset and body base
 2. Adjust face sliders (grouped: eyes, nose, mouth, jaw)
 3. Pick skin tone from a gradient picker
-4. Choose hair
-5. Select body type (3-4 presets with optional slider fine-tune)
-6. Confirm → serialize to FCharacterAppearance → replicate to all players
+4. Choose hair, brows, facial hair, eye color, and makeup
+5. Select body type, height, fat, muscle, and posture
+6. Place optional facial marks such as moles, freckles, scars, and spots
+7. Confirm → serialize to FCharacterAppearance → replicate to all players
 
 ### Technical Details
 
+- Runtime customization is implemented with our own C++/UMG layer; MetaHuman is only an asset base.
 - MetaHuman LOD: Use LOD2-3 during gameplay (4-6 players), LOD0-1 for tattoo close-ups
 - MetaHuman Optimized Export (UE 5.5+): 60MB per character vs 800MB
 - Morph targets driven via `USkeletalMeshComponent::SetMorphTarget(FName, float)`
+- Skin/eye/hair colors driven through Dynamic Material Instance parameters
+- Hair/brow/facial hair driven through groom or mesh option swaps recorded in the character profile
+- Facial marks use face UV placement and a face overlay texture/render target layer; they are data-driven, not baked into the base mesh
 - All in C++; Blueprint gets a simple "Apply Preset" and individual slider nodes
 
+### Verification Standard
+
+- Every slider in the MVP must have a viewport screenshot proving visible change, or it must be marked as unbound.
+- Every preset must be screenshot-tested from front and side views.
+- Skin tone, hair color, eye color, body type, and height must round-trip through save/load.
+- Two-player PIE must show confirmed appearance replicated to the other client.
+- MetaHuman integration is not considered complete until the same tests pass on an imported MetaHuman asset.
+
 ### Exposed Blueprint Ports
+
+**Current runtime inputs:**
+- ApplyPreset(int32 Index)
+- SetFaceControl(ENiceInkFaceControl, float)
+- SetBodyControl(ENiceInkBodyControl, float)
+- SetFaceMorph(FName, float) for direct/debug overrides
+- SetBodyMorph(FName, float) for direct/debug overrides
+- SetBodyType(EBodyType)
+- SetHeightScale(float)
+- SetSkinTone(FLinearColor)
+- SetSkinTonePreset(int32)
+- SetSkinDetails(int32, float, float, float, float)
+- SetSkinUndertone(FLinearColor)
+- SetEyeColor(FLinearColor)
+- SetHairStyle(int32)
+- SetHairColor(FLinearColor)
+- SetBrowStyle(int32)
+- SetBrowColor(FLinearColor)
+- SetFacialHairStyle(int32)
+- SetFacialHairColor(FLinearColor)
+- SetMakeup(int32, float)
+- ConfirmAppearance()
+
+The UI should use `SetFaceControl` and `SetBodyControl` for normal sliders. `FaceMorphBindings` and `BodyMorphBindings` translate those controls to the actual morph target names available on the current character mesh.
 
 **Inputs:**
 - ApplyPreset(int32 Index)

@@ -24,7 +24,8 @@ public class NiceInk : ModuleRules
 		{
 			"RenderCore",
 			"RHI",
-			"ImageWrapper"
+			"ImageWrapper",
+			"ImageCore"
 		});
 	}
 }

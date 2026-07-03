@@ -70,3 +70,7 @@ $RECYCLE.BIN/
 *.iso
 *.dmg
 
+
+# purchased vendor asset packs (11GB rars + extracts) - keep out of git,
+# pending relocation to SourceAssets/ (see nice_ink_face_pipeline/AVATAR_PIPELINE.md)
+/Content/DreamWorld Studio/

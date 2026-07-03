@@ -129,25 +129,66 @@ With VibeUE + UnrealClaude MCP connected:
 
 ### Phase 5: Character Customization
 
-**Goal:** Player can adjust face/body via morph target sliders.
+**Goal:** Player can adjust many face/body details through our own runtime sliders. MetaHuman is only the realistic character base; the player-facing runtime UI, presets, save/load, facial marks, and multiplayer sync are built by us.
+
+**Current C++ status:**
+- `FCharacterAppearance` stores face controls, body controls, direct morphs, colors, skin detail, hair/brow/facial hair/makeup style indexes, and body preset data.
+- `UCharacterCustomizer` exposes `SetFaceControl(ENiceInkFaceControl, float)` and `SetBodyControl(ENiceInkBodyControl, float)` for normal UI sliders.
+- `FaceMorphBindings` and `BodyMorphBindings` translate player-facing controls to actual morph target names. Default bindings are one-to-one placeholders; MetaHuman integration replaces them with real FACS/morph names.
+- Face controls currently cover 35 details: head, brow, eyes, nose, cheeks, mouth, jaw/chin, ears/neck, aging/asymmetry.
+- Body controls currently cover 12 details: height, shoulder/chest/waist/hip, limb proportions, fat, muscle, posture.
+- Missing: real character mesh/profile, gender presentation/body base fields, height cm mapping, facial mark placement data, preset blend data, UMG customization screen, save/load, and PlayerState replication hookup.
 
 **Steps:**
-1. Via Python: query all available morph targets on the character mesh (GetAllMorphTargetNames)
-2. Write C++ `UCharacterCustomizer` component:
-   - Maps display names ("Jaw Width") to combinations of FACS morph targets
-   - Exposes SetFaceMorph(FName, float) and SetBodyType(EBodyType) to Blueprint
-   - Serializes all settings into FCharacterAppearance struct
-3. Via Python: test morph targets by setting values and capturing viewport
-4. Verify visual changes through viewport capture at different morph values
+1. Asset foundation:
+   - Enable/verify MetaHuman plugin availability, but do not depend on MetaHuman Creator at runtime.
+   - Import or create a real character base: MetaHuman preferred; otherwise use a test skeletal mesh with real morph targets.
+   - Via Python/MCP: query all available morph targets on the face/body mesh.
+2. Add `UNiceInkCharacterProfile`:
+   - Records face mesh, body mesh, skin material slots, eye material slots, hair/brow/facial hair options, available morph names, and preset data.
+   - Stores morph binding tables so UI controls do not depend on asset-specific morph names.
+3. Expand `FCharacterAppearance`:
+   - Add gender presentation/body base field.
+   - Add height in cm or explicit scale mapping.
+   - Add body archetype/body preset.
+   - Add facial mark array: type, face UV, size, color, opacity, rotation, layer order.
+   - Add preset blend data: preset A, preset B, blend ratio.
+4. Update `UCharacterCustomizer`:
+   - Maps display names ("Jaw Width") to combinations of actual morph targets.
+   - Applies face/body morphs with `SetMorphTarget`.
+   - Applies skin/eye/hair colors through Dynamic Material Instance parameters.
+   - Applies hair/brow/facial hair through profile option swaps.
+   - Applies facial marks through a face overlay texture/render target layer.
+5. Build UMG customization screen grouped by Presets, Head, Eyes, Nose, Mouth, Jaw, Skin, Hair, Body, Marks.
+6. Build starting appearance presets:
+   - East Asian, Southeast Asian, South Asian / Indian, Black / African diaspora, White / European, Latino / Latin American, Middle Eastern / North African, Indigenous / Native American, Pacific Islander.
+   - These are editable starting values, not locked identity classes.
+   - Do not create a vague "mixed" preset. If blending is included, let the player choose two explicit presets and a ratio.
+7. Save/load and replication:
+   - Save `FCharacterAppearance` locally.
+   - Confirm appearance through Server RPC.
+   - Replicate confirmed appearance through PlayerState RepNotify.
+   - Late joiners apply the replicated appearance on spawn.
+8. Via Python/MCP: test morph targets, materials, marks, presets, save/load, and 2-player PIE replication with viewport captures.
 
 **Known pitfalls:**
 - MetaHuman FACS names are not intuitive → C++ mapping layer translates to user-friendly names
 - Morph targets may not exist on non-MetaHuman mannequin → test with GetAllMorphTargetNames first
 - LOD switching may break morphs → force LOD0 during customization
 
-**If using mannequin (no morph targets available):** Skip this phase until MetaHuman is integrated. Provide placeholder UI structure.
+Additional pitfalls:
+- MetaHuman Creator is editor/developer tooling, not a shippable in-game customization screen.
+- Appearance presets can become stereotypes if treated as fixed categories; keep them editable starting points.
+- A UI slider with no bound morph must be marked unbound, not counted as complete.
 
-**Verification:** Viewport capture shows character face/body changing with different morph values.
+**If using mannequin (no morph targets available):** Keep the full UI and data model active, but only visual controls with real morph targets will move the mesh. Colors/material parameters can still be verified immediately.
+
+**MVP verification:**
+- Viewport capture shows real face/body change for every MVP slider, or the slider is marked unbound.
+- Front and side screenshots exist for each starting preset.
+- Skin tone, eye color, hair color, body type, and height round-trip through save/load.
+- 2-player PIE shows confirmed appearance replicated to the other client.
+- MetaHuman integration is not accepted until these same tests pass on an imported MetaHuman asset.
 
 ---
 
@@ -238,7 +279,7 @@ With VibeUE + UnrealClaude MCP connected:
 
 **Steps:**
 1. Via Python: check if MetaHuman plugin is available and functional
-2. Download/create a MetaHuman preset using MetaHuman Creator (built into UE 5.7)
+2. Create/import a MetaHuman base in the Unreal Editor using MetaHuman Creator / MetaHuman Character Editor; this is editor-only and is not the player-facing runtime customization UI.
 3. Fork MetaHuman skin material → add TattooBlend layer
 4. Attach TattooComponent to MetaHuman character
 5. Adjust Physics Asset for accurate tattoo placement

@@ -8,6 +8,7 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UStaticMeshComponent;
 class UTattooComponent;
+class APlayerController;
 
 UCLASS()
 class NICEINK_API ATattooPrototypeActor : public AActor
@@ -38,11 +39,30 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo|Prototype")
 	bool bEnableMousePaintingInPIE = true;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo|Prototype")
+	bool bEnablePrototypeHotkeys = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo|Palette")
+	TArray<FLinearColor> PrototypePalette;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tattoo|Palette")
+	int32 SelectedPaletteIndex = 0;
+
+	UFUNCTION(BlueprintCallable, Category = "Tattoo|Palette")
+	bool SelectPaletteColor(int32 PaletteIndex);
+
+	UFUNCTION(BlueprintPure, Category = "Tattoo|Palette")
+	FLinearColor GetSelectedPaletteColor() const;
+
+	UFUNCTION(BlueprintPure, Category = "Tattoo|Palette")
+	TArray<FLinearColor> GetPaletteColors() const { return PrototypePalette; }
+
 private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> DynamicPlaneMaterial;
 
 	bool bMousePainting = false;
 
+	void HandlePrototypeHotkeys(APlayerController* PlayerController);
 	bool ResolveMousePaintUV(FVector2D& OutUV) const;
 };
