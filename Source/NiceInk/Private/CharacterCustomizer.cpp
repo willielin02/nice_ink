@@ -2,7 +2,6 @@
 
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/Texture2D.h"
-#include "HairStyleDatabase.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Net/UnrealNetwork.h"
 
@@ -156,11 +155,6 @@ void UCharacterCustomizer::ApplyPreset(int32 Index)
 	}
 
 	SetSkinTonePreset(Index % 6);
-	Appearance.HairStyleIndex = FMath::Abs(Index) % 6;
-	Appearance.BrowStyleIndex = FMath::Abs(Index + 1) % 5;
-	Appearance.FacialHairStyleIndex = FMath::Abs(Index + 2) % 4;
-	Appearance.MakeupStyleIndex = FMath::Abs(Index + 3) % 4;
-	Appearance.MakeupIntensity = FMath::Clamp(0.1f * static_cast<float>(FMath::Abs(Index) % 5), 0.0f, 1.0f);
 	RebuildMorphTargetsFromControls();
 	BroadcastAndApply();
 }
@@ -271,49 +265,6 @@ void UCharacterCustomizer::SetEyeColor(FLinearColor EyeColor)
 	BroadcastAndApply();
 }
 
-void UCharacterCustomizer::SetHairStyle(int32 HairStyleIndex)
-{
-	Appearance.HairStyleIndex = FMath::Max(0, HairStyleIndex);
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetHairColor(FLinearColor HairColor)
-{
-	Appearance.HairColor = HairColor;
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetBrowStyle(int32 BrowStyleIndex)
-{
-	Appearance.BrowStyleIndex = FMath::Max(0, BrowStyleIndex);
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetBrowColor(FLinearColor BrowColor)
-{
-	Appearance.BrowColor = BrowColor;
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetFacialHairStyle(int32 FacialHairStyleIndex)
-{
-	Appearance.FacialHairStyleIndex = FMath::Max(0, FacialHairStyleIndex);
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetFacialHairColor(FLinearColor FacialHairColor)
-{
-	Appearance.FacialHairColor = FacialHairColor;
-	BroadcastAndApply();
-}
-
-void UCharacterCustomizer::SetMakeup(int32 MakeupStyleIndex, float MakeupIntensity)
-{
-	Appearance.MakeupStyleIndex = FMath::Max(0, MakeupStyleIndex);
-	Appearance.MakeupIntensity = FMath::Clamp(MakeupIntensity, 0.0f, 1.0f);
-	BroadcastAndApply();
-}
-
 void UCharacterCustomizer::ConfirmAppearance()
 {
 	RebuildMorphTargetsFromControls();
@@ -348,14 +299,10 @@ void UCharacterCustomizer::ApplyAppearanceToMesh(USkeletalMeshComponent* MeshCom
 			DynamicMaterial->SetVectorParameterValue(TEXT("SkinTone"), Appearance.SkinTone);
 			DynamicMaterial->SetVectorParameterValue(TEXT("SkinUndertone"), Appearance.SkinUndertone);
 			DynamicMaterial->SetVectorParameterValue(TEXT("EyeColor"), Appearance.EyeColor);
-			DynamicMaterial->SetVectorParameterValue(TEXT("HairColor"), Appearance.HairColor);
-			DynamicMaterial->SetVectorParameterValue(TEXT("BrowColor"), Appearance.BrowColor);
-			DynamicMaterial->SetVectorParameterValue(TEXT("FacialHairColor"), Appearance.FacialHairColor);
 			DynamicMaterial->SetScalarParameterValue(TEXT("FreckleIntensity"), Appearance.FreckleIntensity);
 			DynamicMaterial->SetScalarParameterValue(TEXT("BlemishIntensity"), Appearance.BlemishIntensity);
 			DynamicMaterial->SetScalarParameterValue(TEXT("ScarIntensity"), Appearance.ScarIntensity);
 			DynamicMaterial->SetScalarParameterValue(TEXT("AgeDetail"), Appearance.AgeDetail);
-			DynamicMaterial->SetScalarParameterValue(TEXT("MakeupIntensity"), Appearance.MakeupIntensity);
 			DynamicMaterial->SetScalarParameterValue(TEXT("SkinRoughness"), Appearance.SkinRoughness);
 		}
 	}
@@ -585,16 +532,6 @@ void UCharacterCustomizer::ApplySelfieResult(const FSelfieResult& SelfieResult)
 		ApplyFaceTexture(SelfieResult.FaceTexture);
 	}
 
-	if (SelfieResult.bHairDetected)
-	{
-		ApplyHairColor(SelfieResult.HairColor);
-
-		if (SelfieResult.MatchedHairStyleIndex >= 0)
-		{
-			ApplyHairStyle(SelfieResult.MatchedHairStyleIndex);
-		}
-	}
-
 	BroadcastAndApply();
 }
 
@@ -619,78 +556,6 @@ void UCharacterCustomizer::ApplyFaceTexture(UTexture2D* FaceTexture)
 		{
 			DynMat->SetTextureParameterValue(FaceTextureParam, FaceTexture);
 		}
-	}
-}
-
-void UCharacterCustomizer::ApplyHairColor(const FNiceInkHairColorData& HairColorData)
-{
-	CurrentHairColor = HairColorData;
-	Appearance.HairColor = HairColorData.BaseColor;
-
-	// Groom material parameters are set on the groom component's material, not the body mesh.
-	// The groom material needs these parameters:
-	//   HairBaseColor, HairRootColor, HairTipColor, HairRootAmount,
-	//   HairHighlightColor, HairHighlightRatio, HairColorMode
-	// For now, also set on body mesh materials for any hair-accepting material slots.
-
-	USkeletalMeshComponent* MeshComponent = GetOwner() ? GetOwner()->FindComponentByClass<USkeletalMeshComponent>() : nullptr;
-	if (!MeshComponent)
-	{
-		return;
-	}
-
-	for (int32 Index = 0; Index < MeshComponent->GetNumMaterials(); ++Index)
-	{
-		UMaterialInstanceDynamic* DynMat = Cast<UMaterialInstanceDynamic>(MeshComponent->GetMaterial(Index));
-		if (!DynMat)
-		{
-			DynMat = MeshComponent->CreateAndSetMaterialInstanceDynamic(Index);
-		}
-		if (!DynMat)
-		{
-			continue;
-		}
-
-		DynMat->SetVectorParameterValue(HairBaseColorParam, HairColorData.BaseColor);
-		DynMat->SetScalarParameterValue(HairColorModeParam, static_cast<float>(HairColorData.Mode));
-
-		switch (HairColorData.Mode)
-		{
-		case ENiceInkHairColorMode::Ombre:
-			DynMat->SetVectorParameterValue(HairRootColorParam, HairColorData.RootColor);
-			DynMat->SetVectorParameterValue(HairTipColorParam, HairColorData.TipColor);
-			DynMat->SetScalarParameterValue(HairRootAmountParam, HairColorData.RootAmount);
-			break;
-		case ENiceInkHairColorMode::Highlights:
-			DynMat->SetVectorParameterValue(HairHighlightColorParam, HairColorData.HighlightColor);
-			DynMat->SetScalarParameterValue(HairHighlightRatioParam, HairColorData.HighlightRatio);
-			break;
-		default:
-			break;
-		}
-	}
-}
-
-void UCharacterCustomizer::ApplyHairStyle(int32 HairStyleIndex)
-{
-	CurrentHairStyleIndex = HairStyleIndex;
-	Appearance.HairStyleIndex = HairStyleIndex;
-
-	const FHairStyleEntry* Entry = UHairStyleDatabase::FindByIndex(HairStyleIndex);
-	if (!Entry)
-	{
-		return;
-	}
-
-	// Groom attachment: load the groom asset and attach to the head bone.
-	// The GroomAssetPath on HairStyleEntry must be configured per-project.
-	if (!Entry->GroomAssetPath.IsNull())
-	{
-		UE_LOG(LogTemp, Log, TEXT("CharacterCustomizer: Selected hair style %d (%s), groom: %s"), HairStyleIndex, *Entry->DisplayName, *Entry->GroomAssetPath.ToString());
-	}
-	else
-	{
-		UE_LOG(LogTemp, Log, TEXT("CharacterCustomizer: Selected hair style %d (%s), no groom asset assigned"), HairStyleIndex, *Entry->DisplayName);
 	}
 }
 

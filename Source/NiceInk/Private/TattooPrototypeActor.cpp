@@ -139,19 +139,15 @@ void ATattooPrototypeActor::HandlePrototypeHotkeys(APlayerController* PlayerCont
 
 	if (PlayerController->WasInputKeyJustPressed(EKeys::One))
 	{
-		TattooComponent->SelectNeedle(ENiceInkNeedleType::RoundLiner);
+		TattooComponent->SelectMarker(ENiceInkMarkerType::FineMarker);
 	}
 	else if (PlayerController->WasInputKeyJustPressed(EKeys::Two))
 	{
-		TattooComponent->SelectNeedle(ENiceInkNeedleType::RoundShader);
+		TattooComponent->SelectMarker(ENiceInkMarkerType::ThickMarker);
 	}
 	else if (PlayerController->WasInputKeyJustPressed(EKeys::Three))
 	{
-		TattooComponent->SelectNeedle(ENiceInkNeedleType::Magnum);
-	}
-	else if (PlayerController->WasInputKeyJustPressed(EKeys::Four))
-	{
-		TattooComponent->SelectNeedle(ENiceInkNeedleType::CurvedMagnum);
+		TattooComponent->SelectMarker(ENiceInkMarkerType::BrushTip);
 	}
 
 	if (PlayerController->WasInputKeyJustPressed(EKeys::Five))

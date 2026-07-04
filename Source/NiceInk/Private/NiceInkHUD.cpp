@@ -8,18 +8,16 @@
 
 namespace
 {
-FString GetNeedleLabel(ENiceInkNeedleType NeedleType)
+FString GetMarkerLabel(ENiceInkMarkerType MarkerType)
 {
-	switch (NeedleType)
+	switch (MarkerType)
 	{
-	case ENiceInkNeedleType::RoundLiner:
-		return TEXT("Round Liner");
-	case ENiceInkNeedleType::RoundShader:
-		return TEXT("Round Shader");
-	case ENiceInkNeedleType::Magnum:
-		return TEXT("Magnum");
-	case ENiceInkNeedleType::CurvedMagnum:
-		return TEXT("Curved Magnum");
+	case ENiceInkMarkerType::FineMarker:
+		return TEXT("Fine Marker");
+	case ENiceInkMarkerType::ThickMarker:
+		return TEXT("Thick Marker");
+	case ENiceInkMarkerType::BrushTip:
+		return TEXT("Brush Tip");
 	default:
 		return TEXT("Unknown");
 	}
@@ -53,7 +51,7 @@ void ANiceInkHUD::DrawHUD()
 			NIState->CurrentRound + 1);
 		DrawText(PhaseText, FLinearColor(0.86f, 0.94f, 1.0f, 1.0f), Padding, Padding + LineHeight * 1.35f, nullptr, 0.95f, false);
 
-		const FString RoleText = FString::Printf(TEXT("Victim: %d    Hidden Artist: %d"), NIState->VictimPlayerId, NIState->ArtistPlayerId);
+		const FString RoleText = FString::Printf(TEXT("Victim: %d    All others draw"), NIState->VictimPlayerId);
 		DrawText(RoleText, FLinearColor(1.0f, 0.83f, 0.62f, 1.0f), Padding, Padding + LineHeight * 2.45f, nullptr, 0.9f, false);
 	}
 	else
@@ -75,12 +73,12 @@ void ANiceInkHUD::DrawHUD()
 	{
 		const FString ToolText = FString::Printf(
 			TEXT("Current: %s    Color Slot: %d"),
-			*GetNeedleLabel(TattooPrototype->TattooComponent->CurrentNeedleType),
+			*GetMarkerLabel(TattooPrototype->TattooComponent->CurrentMarkerType),
 			TattooPrototype->SelectedPaletteIndex + 1);
 		DrawText(ToolText, FLinearColor(0.92f, 0.98f, 1.0f, 1.0f), Padding, Padding + LineHeight * 3.75f, nullptr, 0.82f, false);
 	}
 
-	DrawText(TEXT("Needles: 1 RL  2 RS  3 Magnum  4 Curved"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 4.75f, nullptr, 0.82f, false);
+	DrawText(TEXT("Markers: 1 Fine  2 Thick  3 Brush"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 4.75f, nullptr, 0.82f, false);
 	DrawText(TEXT("Colors: 5 Black  6 BlueBlack  7 Red  8 Green  9 Blue"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 5.75f, nullptr, 0.78f, false);
 	DrawText(TEXT("Paint: hold Left Mouse on the tattoo surface"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 6.75f, nullptr, 0.82f, false);
 	DrawText(TEXT("Guess panel placeholder: players 1-6"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 7.75f, nullptr, 0.82f, false);
@@ -94,12 +92,12 @@ FString ANiceInkHUD::GetPhaseLabel(ENiceInkPhase Phase) const
 		return TEXT("Lobby");
 	case ENiceInkPhase::SelectingVictim:
 		return TEXT("Selecting Victim");
-	case ENiceInkPhase::Binding:
-		return TEXT("Binding");
+	case ENiceInkPhase::Drinking:
+		return TEXT("Drinking");
 	case ENiceInkPhase::Tattooing:
 		return TEXT("Tattooing");
-	case ENiceInkPhase::SoulGuessing:
-		return TEXT("Soul Guessing");
+	case ENiceInkPhase::Accusation:
+		return TEXT("Accusation");
 	case ENiceInkPhase::Reveal:
 		return TEXT("Reveal");
 	case ENiceInkPhase::Celebration:

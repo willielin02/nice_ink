@@ -19,13 +19,13 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Timing")
-	float BindingDuration = 3.0f;
+	float DrinkingDuration = 3.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Timing")
 	float TattooDuration = 18.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Timing")
-	float SoulGuessDuration = 12.0f;
+	float AccusationDuration = 12.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Timing")
 	float RevealDuration = 5.0f;
@@ -50,6 +50,6 @@ private:
 
 	ANiceInkGameState* GetNiceInkGameState() const;
 	void SetPhase(ENiceInkPhase NewPhase, float Duration);
-	void ChooseVictimAndArtist();
+	void ChooseVictim();
 	void ApplyPrototypeCamera();
 };

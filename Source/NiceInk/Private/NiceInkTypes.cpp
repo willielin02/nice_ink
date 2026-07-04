@@ -9,11 +9,11 @@ bool FTattooStroke::NetSerialize(FArchive& Ar, UPackageMap* Map, bool& bOutSucce
 	Ar << Color.B;
 	Ar << Color.A;
 
-	uint8 NeedleValue = static_cast<uint8>(NeedleType);
-	Ar << NeedleValue;
+	uint8 MarkerValue = static_cast<uint8>(MarkerType);
+	Ar << MarkerValue;
 	if (Ar.IsLoading())
 	{
-		NeedleType = static_cast<ENiceInkNeedleType>(NeedleValue);
+		MarkerType = static_cast<ENiceInkMarkerType>(MarkerValue);
 	}
 
 	Ar << Pressure;
@@ -30,7 +30,7 @@ bool FTattooStroke::operator==(const FTattooStroke& Other) const
 {
 	return UV.Equals(Other.UV)
 		&& Color.Equals(Other.Color)
-		&& NeedleType == Other.NeedleType
+		&& MarkerType == Other.MarkerType
 		&& FMath::IsNearlyEqual(Pressure, Other.Pressure)
 		&& FMath::IsNearlyEqual(Radius, Other.Radius)
 		&& FMath::IsNearlyEqual(Timestamp, Other.Timestamp)

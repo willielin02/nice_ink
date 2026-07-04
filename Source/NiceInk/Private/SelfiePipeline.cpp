@@ -1,7 +1,6 @@
 #include "SelfiePipeline.h"
 
 #include "Engine/Texture2D.h"
-#include "HairStyleDatabase.h"
 #include "SelfieImageUtils.h"
 
 USelfiePipeline::USelfiePipeline()
@@ -84,11 +83,9 @@ bool USelfiePipeline::LoadModels(const FString& ModelDirectory)
 	// Expected files in ModelDirectory:
 	//   3ddfa_v2.onnx     (~12MB)  - face detection + 3DMM + UV mapping
 	//   bisenet.onnx      (~50MB)  - face semantic segmentation
-	//   clip_visual.onnx  (~350MB) - CLIP image encoder
 
 	const FString FaceModelPath = FPaths::Combine(ModelDirectory, TEXT("3ddfa_v2.onnx"));
 	const FString ParseModelPath = FPaths::Combine(ModelDirectory, TEXT("bisenet.onnx"));
-	const FString ClipModelPath = FPaths::Combine(ModelDirectory, TEXT("clip_visual.onnx"));
 
 	if (!FPaths::FileExists(FaceModelPath))
 	{
@@ -97,10 +94,6 @@ bool USelfiePipeline::LoadModels(const FString& ModelDirectory)
 	if (!FPaths::FileExists(ParseModelPath))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("SelfiePipeline: BiSeNet model not found at %s"), *ParseModelPath);
-	}
-	if (!FPaths::FileExists(ClipModelPath))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("SelfiePipeline: CLIP model not found at %s"), *ClipModelPath);
 	}
 
 	// NNE model loading would go here:
@@ -153,7 +146,8 @@ FSelfieResult USelfiePipeline::ProcessSelfie(UTexture2D* SelfiePhoto)
 	Result.HeadYaw = Yaw;
 	Result.FaceLandmarks = Landmarks;
 
-	if (FMath::Abs(Yaw) > MaxHeadYaw)
+	constexpr float MaxAllowedYaw = 25.0f;
+	if (FMath::Abs(Yaw) > MaxAllowedYaw)
 	{
 		Result.ErrorMessage = FString::Printf(TEXT("Head angle too large (%.1f deg). Please face the camera directly."), Yaw);
 		OnSelfieError.Broadcast(Result.ErrorMessage);
@@ -161,7 +155,7 @@ FSelfieResult USelfiePipeline::ProcessSelfie(UTexture2D* SelfiePhoto)
 		return Result;
 	}
 
-	// ② BiSeNet: face parsing (skin mask + hair mask)
+	// ② BiSeNet: face parsing (skin mask)
 	TArray<uint8> Segmentation;
 	if (!InferFaceParsing(Pixels, Width, Height, Segmentation))
 	{
@@ -172,19 +166,13 @@ FSelfieResult USelfiePipeline::ProcessSelfie(UTexture2D* SelfiePhoto)
 	}
 
 	TArray<uint8> SkinMask;
-	TArray<uint8> HairMask;
 	SkinMask.SetNumZeroed(Width * Height);
-	HairMask.SetNumZeroed(Width * Height);
 
 	for (int32 I = 0; I < Segmentation.Num() && I < Width * Height; ++I)
 	{
 		if (Segmentation[I] == BISENET_SKIN || Segmentation[I] == BISENET_NOSE)
 		{
 			SkinMask[I] = 255;
-		}
-		if (Segmentation[I] == BISENET_HAIR)
-		{
-			HairMask[I] = 255;
 		}
 	}
 
@@ -196,78 +184,6 @@ FSelfieResult USelfiePipeline::ProcessSelfie(UTexture2D* SelfiePhoto)
 
 	// ④ Skin color: median LAB from skin-masked pixels
 	Result.DetectedSkinTone = FSelfieImageUtils::ExtractSkinTone(Pixels, SkinMask, Width, Height);
-
-	// ⑤ Hair color analysis
-	const float HairArea = FSelfieImageUtils::GetMaskAreaRatio(HairMask);
-	Result.bHairDetected = HairArea > BaldAreaThreshold;
-
-	if (Result.bHairDetected)
-	{
-		Result.HairColor = FSelfieImageUtils::AnalyzeHairColor(Pixels, HairMask, Width, Height, OmbreThreshold);
-
-		// Check for bundled/tied-up hair
-		Result.bBundledHair = FSelfieImageUtils::IsBundledHair(HairMask, Width, Height, BundledHairAreaThreshold);
-
-		// ⑥ Hair style classification via CLIP
-		if (Result.bBundledHair)
-		{
-			Result.CandidateHairStyles = UHairStyleDatabase::GetBundledHairCandidates(true);
-			Result.MatchedHairStyleIndex = -1;
-			Result.MatchedHairStyleName = TEXT("Bundled - manual selection required");
-		}
-		else
-		{
-			// Crop hair region for CLIP
-			const FIntRect HairBBox = FSelfieImageUtils::GetMaskBoundingBox(HairMask, Width, Height);
-			const int32 Pad = FMath::Max(Width, Height) / 10;
-			const int32 CropX0 = FMath::Max(0, HairBBox.Min.X - Pad);
-			const int32 CropY0 = FMath::Max(0, HairBBox.Min.Y - Pad);
-			const int32 CropX1 = FMath::Min(Width, HairBBox.Max.X + Pad);
-			const int32 CropY1 = FMath::Min(Height, HairBBox.Max.Y + Pad);
-			const int32 CropW = CropX1 - CropX0;
-			const int32 CropH = CropY1 - CropY0;
-
-			if (CropW > 0 && CropH > 0)
-			{
-				TArray<FColor> CroppedPixels;
-				CroppedPixels.SetNum(CropW * CropH);
-				for (int32 Y = 0; Y < CropH; ++Y)
-				{
-					for (int32 X = 0; X < CropW; ++X)
-					{
-						CroppedPixels[Y * CropW + X] = Pixels[(CropY0 + Y) * Width + (CropX0 + X)];
-					}
-				}
-
-				EnsureTextEmbeddings();
-
-				TArray<float> ImageEmbedding;
-				if (InferClipImageEncode(CroppedPixels, CropW, CropH, ImageEmbedding))
-				{
-					const TArray<TPair<int32, float>> TopMatches = UHairStyleDatabase::FindTopMatches(ImageEmbedding, CachedTextEmbeddings, 5);
-
-					if (TopMatches.Num() > 0)
-					{
-						Result.MatchedHairStyleIndex = TopMatches[0].Key;
-						if (const FHairStyleEntry* Entry = UHairStyleDatabase::FindByIndex(TopMatches[0].Key))
-						{
-							Result.MatchedHairStyleName = Entry->DisplayName;
-						}
-
-						for (const TPair<int32, float>& Match : TopMatches)
-						{
-							Result.CandidateHairStyles.Add(Match.Key);
-						}
-					}
-				}
-			}
-		}
-	}
-	else
-	{
-		Result.MatchedHairStyleIndex = UHairStyleDatabase::GetBaldStyleIndex(true);
-		Result.MatchedHairStyleName = TEXT("Bald");
-	}
 
 	Result.bSuccess = true;
 	LastResult = Result;
@@ -306,7 +222,7 @@ bool USelfiePipeline::RunFaceDetection(UTexture2D* SelfiePhoto, TArray<FVector2D
 	return true;
 }
 
-bool USelfiePipeline::RunFaceParsing(UTexture2D* SelfiePhoto, TArray<uint8>& OutSkinMask, TArray<uint8>& OutHairMask)
+bool USelfiePipeline::RunFaceParsing(UTexture2D* SelfiePhoto, TArray<uint8>& OutSkinMask)
 {
 	TArray<FColor> Pixels;
 	int32 W = 0, H = 0;
@@ -322,16 +238,11 @@ bool USelfiePipeline::RunFaceParsing(UTexture2D* SelfiePhoto, TArray<uint8>& Out
 	}
 
 	OutSkinMask.SetNumZeroed(W * H);
-	OutHairMask.SetNumZeroed(W * H);
 	for (int32 I = 0; I < Segmentation.Num() && I < W * H; ++I)
 	{
 		if (Segmentation[I] == BISENET_SKIN || Segmentation[I] == BISENET_NOSE)
 		{
 			OutSkinMask[I] = 255;
-		}
-		if (Segmentation[I] == BISENET_HAIR)
-		{
-			OutHairMask[I] = 255;
 		}
 	}
 
@@ -347,46 +258,6 @@ FLinearColor USelfiePipeline::RunSkinColorExtraction(UTexture2D* SelfiePhoto, co
 		return FLinearColor(0.75f, 0.55f, 0.42f, 1.0f);
 	}
 	return FSelfieImageUtils::ExtractSkinTone(Pixels, SkinMask, W, H);
-}
-
-FNiceInkHairColorData USelfiePipeline::RunHairColorAnalysis(UTexture2D* SelfiePhoto, const TArray<uint8>& HairMask)
-{
-	TArray<FColor> Pixels;
-	int32 W = 0, H = 0;
-	if (!ExtractPixels(SelfiePhoto, Pixels, W, H))
-	{
-		return FNiceInkHairColorData();
-	}
-	return FSelfieImageUtils::AnalyzeHairColor(Pixels, HairMask, W, H, OmbreThreshold);
-}
-
-int32 USelfiePipeline::RunHairStyleClassification(UTexture2D* SelfiePhoto, const TArray<uint8>& HairMask)
-{
-	TArray<FColor> Pixels;
-	int32 W = 0, H = 0;
-	if (!ExtractPixels(SelfiePhoto, Pixels, W, H))
-	{
-		return -1;
-	}
-
-	EnsureTextEmbeddings();
-
-	TArray<float> ImageEmbedding;
-	if (!InferClipImageEncode(Pixels, W, H, ImageEmbedding))
-	{
-		return -1;
-	}
-
-	return UHairStyleDatabase::FindBestMatch(ImageEmbedding, CachedTextEmbeddings);
-}
-
-void USelfiePipeline::OverrideHairStyle(int32 HairStyleIndex)
-{
-	LastResult.MatchedHairStyleIndex = HairStyleIndex;
-	if (const FHairStyleEntry* Entry = UHairStyleDatabase::FindByIndex(HairStyleIndex))
-	{
-		LastResult.MatchedHairStyleName = Entry->DisplayName;
-	}
 }
 
 bool USelfiePipeline::ExtractPixels(UTexture2D* Texture, TArray<FColor>& OutPixels, int32& OutWidth, int32& OutHeight)
@@ -412,24 +283,6 @@ bool USelfiePipeline::ExtractPixels(UTexture2D* Texture, TArray<FColor>& OutPixe
 	BulkData.Unlock();
 
 	return true;
-}
-
-void USelfiePipeline::EnsureTextEmbeddings()
-{
-	if (bTextEmbeddingsCached)
-	{
-		return;
-	}
-
-	const TArray<FHairStyleEntry>& Styles = UHairStyleDatabase::GetAllStyles();
-	CachedTextEmbeddings.SetNum(Styles.Num());
-
-	for (int32 I = 0; I < Styles.Num(); ++I)
-	{
-		InferClipTextEncode(Styles[I].ClipPrompt, CachedTextEmbeddings[I]);
-	}
-
-	bTextEmbeddingsCached = true;
 }
 
 // ===== NNE Model Inference Stubs =====
@@ -516,74 +369,9 @@ bool USelfiePipeline::InferFaceParsing(const TArray<FColor>& Pixels, int32 Width
 			{
 				OutSegmentation[Idx] = BISENET_SKIN;
 			}
-			else if (DY < -FaceRadius * 0.1f && Dist < FaceRadius * 1.3f)
-			{
-				OutSegmentation[Idx] = BISENET_HAIR;
-			}
 		}
 	}
 
 	return true;
 }
 
-bool USelfiePipeline::InferClipImageEncode(const TArray<FColor>& Pixels, int32 Width, int32 Height, TArray<float>& OutEmbedding)
-{
-	// Stub: generate a deterministic pseudo-embedding from pixel statistics
-	OutEmbedding.SetNum(512);
-
-	float MeanR = 0.0f, MeanG = 0.0f, MeanB = 0.0f;
-	for (const FColor& P : Pixels)
-	{
-		MeanR += P.R;
-		MeanG += P.G;
-		MeanB += P.B;
-	}
-	const float N = FMath::Max(1.0f, static_cast<float>(Pixels.Num()));
-	MeanR /= N * 255.0f;
-	MeanG /= N * 255.0f;
-	MeanB /= N * 255.0f;
-
-	for (int32 I = 0; I < 512; ++I)
-	{
-		OutEmbedding[I] = FMath::Sin(I * 0.1f + MeanR * 10.0f) * 0.5f + FMath::Cos(I * 0.07f + MeanG * 8.0f) * 0.3f + FMath::Sin(I * 0.13f + MeanB * 6.0f) * 0.2f;
-	}
-
-	// Normalize
-	float Norm = 0.0f;
-	for (const float V : OutEmbedding)
-	{
-		Norm += V * V;
-	}
-	Norm = FMath::Sqrt(FMath::Max(Norm, SMALL_NUMBER));
-	for (float& V : OutEmbedding)
-	{
-		V /= Norm;
-	}
-
-	return true;
-}
-
-bool USelfiePipeline::InferClipTextEncode(const FString& Text, TArray<float>& OutEmbedding)
-{
-	// Stub: generate a deterministic pseudo-embedding from text hash
-	OutEmbedding.SetNum(512);
-
-	const uint32 Hash = GetTypeHash(Text);
-	for (int32 I = 0; I < 512; ++I)
-	{
-		OutEmbedding[I] = FMath::Sin(I * 0.1f + (Hash >> (I % 16)) * 0.001f) * 0.5f + FMath::Cos(I * 0.07f + (Hash >> ((I + 7) % 16)) * 0.002f) * 0.5f;
-	}
-
-	float Norm = 0.0f;
-	for (const float V : OutEmbedding)
-	{
-		Norm += V * V;
-	}
-	Norm = FMath::Sqrt(FMath::Max(Norm, SMALL_NUMBER));
-	for (float& V : OutEmbedding)
-	{
-		V /= Norm;
-	}
-
-	return true;
-}

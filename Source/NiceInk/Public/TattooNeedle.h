@@ -6,17 +6,17 @@
 #include "TattooNeedle.generated.h"
 
 UCLASS(BlueprintType)
-class NICEINK_API UTattooNeedle : public UDataAsset
+class NICEINK_API UTattooMarker : public UDataAsset
 {
 	GENERATED_BODY()
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tattoo")
-	FNeedleConfig Config;
+	FMarkerConfig Config;
 
 	UFUNCTION(BlueprintPure, Category = "Tattoo")
-	FNeedleConfig GetConfig() const { return Config; }
+	FMarkerConfig GetConfig() const { return Config; }
 
 	UFUNCTION(BlueprintPure, Category = "Tattoo")
-	static FNeedleConfig MakeDefaultConfig(ENiceInkNeedleType Type);
+	static FMarkerConfig MakeDefaultConfig(ENiceInkMarkerType Type);
 };

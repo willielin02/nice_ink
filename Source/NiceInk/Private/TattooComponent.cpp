@@ -83,10 +83,10 @@ void UTattooComponent::ClearTattoo()
 	}
 }
 
-void UTattooComponent::SelectNeedle(ENiceInkNeedleType NeedleType)
+void UTattooComponent::SelectMarker(ENiceInkMarkerType MarkerType)
 {
-	CurrentNeedleType = NeedleType;
-	OnNeedleChanged.Broadcast(CurrentNeedleType);
+	CurrentMarkerType = MarkerType;
+	OnMarkerChanged.Broadcast(CurrentMarkerType);
 }
 
 void UTattooComponent::SelectColor(FLinearColor InkColor)
@@ -122,7 +122,7 @@ void UTattooComponent::SubmitStrokeAtUV(FVector2D UV, float Pressure)
 
 	if (bIsTattooing && bHasLastStrokeUV)
 	{
-		const FNeedleConfig Config = GetCurrentNeedleConfig();
+		const FMarkerConfig Config = GetCurrentMarkerConfig();
 		const float Distance = FVector2D::Distance(LastStrokeUV, ClampedUV);
 		const float StepSize = FMath::Max(Config.UvRadius * 1.25f, 0.002f);
 		const int32 StepCount = FMath::Clamp(FMath::CeilToInt(Distance / StepSize), 1, 64);
@@ -341,20 +341,20 @@ void UTattooComponent::MulticastApplyStrokes_Implementation(const TArray<FTattoo
 	ApplyStrokeBatchLocal(Strokes);
 }
 
-FNeedleConfig UTattooComponent::GetCurrentNeedleConfig() const
+FMarkerConfig UTattooComponent::GetCurrentMarkerConfig() const
 {
-	return UTattooNeedle::MakeDefaultConfig(CurrentNeedleType);
+	return UTattooMarker::MakeDefaultConfig(CurrentMarkerType);
 }
 
 FTattooStroke UTattooComponent::MakeStroke(FVector2D UV, float Pressure) const
 {
-	const FNeedleConfig Config = GetCurrentNeedleConfig();
+	const FMarkerConfig Config = GetCurrentMarkerConfig();
 
 	FTattooStroke Stroke;
 	Stroke.UV = FVector2D(FMath::Clamp(UV.X, 0.0f, 1.0f), FMath::Clamp(UV.Y, 0.0f, 1.0f));
 	Stroke.Color = CurrentColor;
 	Stroke.Color.A = Config.Opacity;
-	Stroke.NeedleType = CurrentNeedleType;
+	Stroke.MarkerType = CurrentMarkerType;
 	Stroke.Pressure = FMath::Clamp(Pressure, 0.0f, 1.0f);
 	Stroke.Radius = Config.UvRadius;
 	Stroke.Timestamp = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
@@ -363,8 +363,8 @@ FTattooStroke UTattooComponent::MakeStroke(FVector2D UV, float Pressure) const
 
 void UTattooComponent::DrawStroke(UCanvas* Canvas, const FVector2D& CanvasSize, const FTattooStroke& Stroke) const
 {
-	const FNeedleConfig Config = UTattooNeedle::MakeDefaultConfig(Stroke.NeedleType);
-	const int32 DotCount = FMath::Max(1, Config.DotsPerStrike);
+	const FMarkerConfig Config = UTattooMarker::MakeDefaultConfig(Stroke.MarkerType);
+	const int32 DotCount = FMath::Max(1, Config.DotsPerStroke);
 	const float PixelRadius = FMath::Max(1.0f, Stroke.Radius * CanvasSize.X * Stroke.Pressure);
 	const FVector2D Center(Stroke.UV.X * CanvasSize.X, Stroke.UV.Y * CanvasSize.Y);
 
@@ -377,11 +377,10 @@ void UTattooComponent::DrawStroke(UCanvas* Canvas, const FVector2D& CanvasSize, 
 			const float Angle = T * TWO_PI;
 			const float Spread = PixelRadius * 0.65f;
 
-			if (Stroke.NeedleType == ENiceInkNeedleType::Magnum || Stroke.NeedleType == ENiceInkNeedleType::CurvedMagnum)
+			if (Stroke.MarkerType == ENiceInkMarkerType::BrushTip)
 			{
 				const float Linear = (T - 0.5f) * 2.0f;
-				const float Curve = Stroke.NeedleType == ENiceInkNeedleType::CurvedMagnum ? FMath::Sin(T * PI) * 0.55f : 0.0f;
-				Offset = FVector2D(Linear * Spread * Config.PatternScale.X, Curve * Spread * Config.PatternScale.Y);
+				Offset = FVector2D(Linear * Spread * Config.PatternScale.X, 0.0f);
 			}
 			else
 			{
@@ -389,7 +388,7 @@ void UTattooComponent::DrawStroke(UCanvas* Canvas, const FVector2D& CanvasSize, 
 			}
 		}
 
-		const float DotSize = PixelRadius * (Stroke.NeedleType == ENiceInkNeedleType::RoundLiner ? 1.0f : 0.8f);
+		const float DotSize = PixelRadius * (Stroke.MarkerType == ENiceInkMarkerType::FineMarker ? 1.0f : 0.8f);
 		const FVector2D Position = Center + Offset - FVector2D(DotSize * 0.5f, DotSize * 0.5f);
 		FCanvasTileItem TileItem(Position, GWhiteTexture, FVector2D(DotSize, DotSize), Stroke.Color);
 		TileItem.BlendMode = SE_BLEND_Opaque;
@@ -399,8 +398,8 @@ void UTattooComponent::DrawStroke(UCanvas* Canvas, const FVector2D& CanvasSize, 
 
 void UTattooComponent::GenerateDemoStrokes(float DeltaTime)
 {
-	const FNeedleConfig Config = GetCurrentNeedleConfig();
-	StrikeAccumulator += DeltaTime * Config.StrikesPerSecond;
+	const FMarkerConfig Config = GetCurrentMarkerConfig();
+	StrikeAccumulator += DeltaTime * Config.StrokesPerSecond;
 	DemoTime += DeltaTime * DemoAngularSpeed;
 
 	TArray<FTattooStroke> Strokes;

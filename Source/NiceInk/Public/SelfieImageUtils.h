@@ -22,24 +22,6 @@ struct NICEINK_API FSelfieImageUtils
 	// Mask: per-pixel uint8 where nonzero = skin.
 	static FLinearColor ExtractSkinTone(const TArray<FColor>& Pixels, const TArray<uint8>& SkinMask, int32 Width, int32 Height);
 
-	// --- K-means clustering ---
-	// Runs K-means on masked pixels in LAB space.
-	// Returns K clusters sorted by pixel count descending.
-	static TArray<FColorCluster> KMeansClustering(const TArray<FLabColor>& LabPixels, const TArray<uint8>& Mask, int32 Width, int32 Height, int32 K, int32 MaxIterations = 20);
-
-	// K-means on a vertical sub-region of the mask (YStart inclusive, YEnd exclusive).
-	static TArray<FColorCluster> KMeansClusterRegion(const TArray<FLabColor>& LabPixels, const TArray<uint8>& Mask, int32 Width, int32 Height, int32 YStart, int32 YEnd, int32 K, int32 MaxIterations = 20);
-
-	// --- Hair color analysis ---
-	// Full hair color pipeline: splits into root/tip zones, runs K-means, classifies mode.
-	static FNiceInkHairColorData AnalyzeHairColor(const TArray<FColor>& Pixels, const TArray<uint8>& HairMask, int32 Width, int32 Height, float OmbreThreshold = 15.0f);
-
-	// --- Mask utilities ---
-
-	static FIntRect GetMaskBoundingBox(const TArray<uint8>& Mask, int32 Width, int32 Height);
-	static float GetMaskAreaRatio(const TArray<uint8>& Mask);
-	static bool IsBundledHair(const TArray<uint8>& HairMask, int32 Width, int32 Height, float AreaThreshold = 0.08f);
-
 	// --- Face texture generation ---
 	// Generates a UV-space face texture from selfie pixels + landmarks.
 	// SourceLandmarks: 68-point face landmarks in pixel coords on the selfie.

@@ -30,9 +30,6 @@ public:
 	int32 VictimPlayerId = INDEX_NONE;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category = "Nice Ink")
-	int32 ArtistPlayerId = INDEX_NONE;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	float PhaseEndServerTime = 0.0f;
 
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink")

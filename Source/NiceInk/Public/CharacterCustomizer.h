@@ -7,7 +7,6 @@
 #include "CharacterCustomizer.generated.h"
 
 class USkeletalMeshComponent;
-class UGroomComponent;
 class UTexture2D;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnAppearanceChanged);
@@ -71,27 +70,6 @@ public:
 	void SetEyeColor(FLinearColor EyeColor);
 
 	UFUNCTION(BlueprintCallable, Category = "Appearance")
-	void SetHairStyle(int32 HairStyleIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance")
-	void SetHairColor(FLinearColor HairColor);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Face")
-	void SetBrowStyle(int32 BrowStyleIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Face")
-	void SetBrowColor(FLinearColor BrowColor);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Face")
-	void SetFacialHairStyle(int32 FacialHairStyleIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Face")
-	void SetFacialHairColor(FLinearColor FacialHairColor);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Face")
-	void SetMakeup(int32 MakeupStyleIndex, float MakeupIntensity);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance")
 	void ConfirmAppearance();
 
 	UFUNCTION(BlueprintCallable, Category = "Appearance")
@@ -121,19 +99,7 @@ public:
 	void ApplyFaceTexture(UTexture2D* FaceTexture);
 
 	UFUNCTION(BlueprintCallable, Category = "Appearance|Selfie")
-	void ApplyHairColor(const FNiceInkHairColorData& HairColorData);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Selfie")
-	void ApplyHairStyle(int32 HairStyleIndex);
-
-	UFUNCTION(BlueprintCallable, Category = "Appearance|Selfie")
 	void ApplyDetectedSkinTone(FLinearColor SkinTone);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie")
-	FNiceInkHairColorData CurrentHairColor;
-
-	UPROPERTY(BlueprintReadOnly, Category = "Appearance|Selfie")
-	int32 CurrentHairStyleIndex = -1;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Appearance|Selfie")
 	TObjectPtr<UTexture2D> CurrentFaceTexture;
@@ -141,27 +107,6 @@ public:
 	// Material parameter names for selfie-driven appearance
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
 	FName FaceTextureParam = TEXT("FaceTexture");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairBaseColorParam = TEXT("HairBaseColor");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairRootColorParam = TEXT("HairRootColor");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairTipColorParam = TEXT("HairTipColor");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairRootAmountParam = TEXT("HairRootAmount");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairHighlightColorParam = TEXT("HairHighlightColor");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairHighlightRatioParam = TEXT("HairHighlightRatio");
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance|Selfie|Params")
-	FName HairColorModeParam = TEXT("HairColorMode");
 
 private:
 	UFUNCTION()

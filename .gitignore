@@ -71,6 +71,16 @@ $RECYCLE.BIN/
 *.dmg
 
 
-# purchased vendor asset packs (11GB rars + extracts) - keep out of git,
-# pending relocation to SourceAssets/ (see nice_ink_face_pipeline/AVATAR_PIPELINE.md)
+# Purchased vendor asset packs (shelved from v1 hair era)
 /Content/DreamWorld Studio/
+
+# Face pipeline - large ML models and Python venv
+Tools/FacePipeline/models/lama_fp32.onnx
+Tools/FacePipeline/models/79999_iter.pth
+Tools/FacePipeline/venv/
+
+# Face pipeline - per-run artifacts (regenerable)
+Tools/FacePipeline/face_texture*.png
+Tools/FacePipeline/debug_*.jpg
+Tools/FacePipeline/debug_*.png
+Tools/FacePipeline/__pycache__/

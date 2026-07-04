@@ -9,21 +9,20 @@ enum class ENiceInkPhase : uint8
 {
 	Lobby,
 	SelectingVictim,
-	Binding,
+	Drinking,
 	Tattooing,
-	SoulGuessing,
+	Accusation,
 	Reveal,
 	Celebration,
 	NextRound
 };
 
 UENUM(BlueprintType)
-enum class ENiceInkNeedleType : uint8
+enum class ENiceInkMarkerType : uint8
 {
-	RoundLiner,
-	RoundShader,
-	Magnum,
-	CurvedMagnum
+	FineMarker,
+	ThickMarker,
+	BrushTip
 };
 
 UENUM(BlueprintType)
@@ -93,26 +92,26 @@ enum class ENiceInkBodyControl : uint8
 };
 
 USTRUCT(BlueprintType)
-struct FNeedleConfig
+struct FMarkerConfig
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle")
-	ENiceInkNeedleType Type = ENiceInkNeedleType::RoundLiner;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker")
+	ENiceInkMarkerType Type = ENiceInkMarkerType::FineMarker;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle", meta = (ClampMin = "1.0", ClampMax = "240.0"))
-	float StrikesPerSecond = 120.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker", meta = (ClampMin = "1.0", ClampMax = "240.0"))
+	float StrokesPerSecond = 120.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle", meta = (ClampMin = "0.001", ClampMax = "0.1"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker", meta = (ClampMin = "0.001", ClampMax = "0.1"))
 	float UvRadius = 0.008f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle", meta = (ClampMin = "1", ClampMax = "24"))
-	int32 DotsPerStrike = 1;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker", meta = (ClampMin = "1", ClampMax = "24"))
+	int32 DotsPerStroke = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float Opacity = 0.9f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Needle")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Marker")
 	FVector2D PatternScale = FVector2D(1.0f, 1.0f);
 };
 
@@ -128,7 +127,7 @@ struct FTattooStroke
 	FLinearColor Color = FLinearColor::Black;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo")
-	ENiceInkNeedleType NeedleType = ENiceInkNeedleType::RoundLiner;
+	ENiceInkMarkerType MarkerType = ENiceInkMarkerType::FineMarker;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float Pressure = 1.0f;
@@ -253,15 +252,6 @@ struct FCharacterAppearance
 	FLinearColor EyeColor = FLinearColor(0.18f, 0.12f, 0.08f, 1.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	FLinearColor HairColor = FLinearColor(0.04f, 0.025f, 0.015f, 1.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	FLinearColor BrowColor = FLinearColor(0.04f, 0.025f, 0.015f, 1.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	FLinearColor FacialHairColor = FLinearColor(0.04f, 0.025f, 0.015f, 1.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	ENiceInkBodyType BodyType = ENiceInkBodyType::Average;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
@@ -272,18 +262,6 @@ struct FCharacterAppearance
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	int32 SkinDetailIndex = 0;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	int32 HairStyleIndex = 0;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	int32 BrowStyleIndex = 0;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	int32 FacialHairStyleIndex = 0;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
-	int32 MakeupStyleIndex = 0;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (ClampMin = "0.75", ClampMax = "1.25"))
 	float HeightScale = 1.0f;
@@ -299,9 +277,6 @@ struct FCharacterAppearance
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float AgeDetail = 0.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float MakeupIntensity = 0.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float SkinRoughness = 0.45f;

@@ -8,10 +8,10 @@
 class UCanvas;
 class UTexture2D;
 class UTextureRenderTarget2D;
-class UTattooNeedle;
+class UTattooMarker;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTattooStrokeApplied, const FTattooStroke&, Stroke);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTattooNeedleChanged, ENiceInkNeedleType, NeedleType);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTattooMarkerChanged, ENiceInkMarkerType, MarkerType);
 
 UCLASS(ClassGroup = (NiceInk), Blueprintable, meta = (BlueprintSpawnableComponent))
 class NICEINK_API UTattooComponent : public UActorComponent
@@ -29,7 +29,7 @@ public:
 	FOnTattooStrokeApplied OnStrokeApplied;
 
 	UPROPERTY(BlueprintAssignable, Category = "Tattoo")
-	FOnTattooNeedleChanged OnNeedleChanged;
+	FOnTattooMarkerChanged OnMarkerChanged;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Tattoo")
 	int32 RenderTargetResolution = 1024;
@@ -38,7 +38,7 @@ public:
 	FLinearColor CurrentColor = FLinearColor::Black;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo")
-	ENiceInkNeedleType CurrentNeedleType = ENiceInkNeedleType::RoundLiner;
+	ENiceInkMarkerType CurrentMarkerType = ENiceInkMarkerType::FineMarker;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Tattoo|Prototype")
 	bool bAutoDemoDrawing = false;
@@ -59,7 +59,7 @@ public:
 	void ClearTattoo();
 
 	UFUNCTION(BlueprintCallable, Category = "Tattoo")
-	void SelectNeedle(ENiceInkNeedleType NeedleType);
+	void SelectMarker(ENiceInkMarkerType MarkerType);
 
 	UFUNCTION(BlueprintCallable, Category = "Tattoo")
 	void SelectColor(FLinearColor InkColor);
@@ -114,7 +114,7 @@ private:
 	FVector2D LastStrokeUV = FVector2D::ZeroVector;
 	FVector2D LastDemoUV = FVector2D::ZeroVector;
 
-	FNeedleConfig GetCurrentNeedleConfig() const;
+	FMarkerConfig GetCurrentMarkerConfig() const;
 	FTattooStroke MakeStroke(FVector2D UV, float Pressure) const;
 	void DrawStroke(UCanvas* Canvas, const FVector2D& CanvasSize, const FTattooStroke& Stroke) const;
 	void GenerateDemoStrokes(float DeltaTime);

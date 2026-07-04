@@ -13,7 +13,6 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, CurrentPhase);
 	DOREPLIFETIME(ANiceInkGameState, CurrentRound);
 	DOREPLIFETIME(ANiceInkGameState, VictimPlayerId);
-	DOREPLIFETIME(ANiceInkGameState, ArtistPlayerId);
 	DOREPLIFETIME(ANiceInkGameState, PhaseEndServerTime);
 }
 

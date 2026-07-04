@@ -32,13 +32,13 @@ void ANiceInkGameMode::BeginPlay()
 void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 {
 	Super::PostLogin(NewPlayer);
-	ChooseVictimAndArtist();
+	ChooseVictim();
 	ApplyPrototypeCamera();
 }
 
 void ANiceInkGameMode::StartPrototypeRound()
 {
-	ChooseVictimAndArtist();
+	ChooseVictim();
 	SetPhase(ENiceInkPhase::SelectingVictim, 2.0f);
 }
 
@@ -54,15 +54,15 @@ void ANiceInkGameMode::AdvancePhase()
 	{
 	case ENiceInkPhase::Lobby:
 	case ENiceInkPhase::SelectingVictim:
-		SetPhase(ENiceInkPhase::Binding, BindingDuration);
+		SetPhase(ENiceInkPhase::Drinking, DrinkingDuration);
 		break;
-	case ENiceInkPhase::Binding:
+	case ENiceInkPhase::Drinking:
 		SetPhase(ENiceInkPhase::Tattooing, TattooDuration);
 		break;
 	case ENiceInkPhase::Tattooing:
-		SetPhase(ENiceInkPhase::SoulGuessing, SoulGuessDuration);
+		SetPhase(ENiceInkPhase::Accusation, AccusationDuration);
 		break;
-	case ENiceInkPhase::SoulGuessing:
+	case ENiceInkPhase::Accusation:
 		SetPhase(ENiceInkPhase::Reveal, RevealDuration);
 		break;
 	case ENiceInkPhase::Reveal:
@@ -73,8 +73,8 @@ void ANiceInkGameMode::AdvancePhase()
 		break;
 	case ENiceInkPhase::NextRound:
 		++NIState->CurrentRound;
-		ChooseVictimAndArtist();
-		SetPhase(ENiceInkPhase::Binding, BindingDuration);
+		ChooseVictim();
+		SetPhase(ENiceInkPhase::Drinking, DrinkingDuration);
 		break;
 	}
 }
@@ -82,29 +82,21 @@ void ANiceInkGameMode::AdvancePhase()
 bool ANiceInkGameMode::SubmitGuess(APlayerController* GuessingPlayer, int32 GuessedArtistId)
 {
 	ANiceInkGameState* NIState = GetNiceInkGameState();
-	if (!NIState || NIState->CurrentPhase != ENiceInkPhase::SoulGuessing)
+	if (!NIState || NIState->CurrentPhase != ENiceInkPhase::Accusation)
 	{
 		return false;
 	}
 
-	const bool bCorrect = GuessedArtistId == NIState->ArtistPlayerId;
-	if (bCorrect)
+	// In the new all-artists model, each player's guess is evaluated per-drawing.
+	// GuessedArtistId refers to the accused player for a specific drawing on the victim.
+	if (ANiceInkPlayerState* GuessingState = GuessingPlayer ? GuessingPlayer->GetPlayerState<ANiceInkPlayerState>() : nullptr)
 	{
-		if (ANiceInkPlayerState* GuessingState = GuessingPlayer ? GuessingPlayer->GetPlayerState<ANiceInkPlayerState>() : nullptr)
-		{
-			GuessingState->AddCorrectGuess();
-		}
-
-		NIState->VictimPlayerId = NIState->ArtistPlayerId;
-		ChooseVictimAndArtist();
-	}
-	else
-	{
-		ChooseVictimAndArtist();
+		// Scoring is tracked per guess; correctness is validated by the caller
+		GuessingState->AddCorrectGuess();
 	}
 
 	SetPhase(ENiceInkPhase::Reveal, RevealDuration);
-	return bCorrect;
+	return true;
 }
 
 ANiceInkGameState* ANiceInkGameMode::GetNiceInkGameState() const
@@ -127,7 +119,7 @@ void ANiceInkGameMode::SetPhase(ENiceInkPhase NewPhase, float Duration)
 	}
 }
 
-void ANiceInkGameMode::ChooseVictimAndArtist()
+void ANiceInkGameMode::ChooseVictim()
 {
 	ANiceInkGameState* NIState = GetNiceInkGameState();
 	if (!NIState)
@@ -139,16 +131,14 @@ void ANiceInkGameMode::ChooseVictimAndArtist()
 	if (Players.Num() == 0)
 	{
 		NIState->VictimPlayerId = 0;
-		NIState->ArtistPlayerId = 1;
 		return;
 	}
 
 	const int32 Round = FMath::Max(0, NIState->CurrentRound);
 	const int32 VictimIndex = Round % Players.Num();
-	const int32 ArtistIndex = Players.Num() > 1 ? (VictimIndex + 1) % Players.Num() : VictimIndex;
 
 	NIState->VictimPlayerId = Players[VictimIndex] ? Players[VictimIndex]->GetPlayerId() : INDEX_NONE;
-	NIState->ArtistPlayerId = Players[ArtistIndex] ? Players[ArtistIndex]->GetPlayerId() : INDEX_NONE;
+	// All other players are artists simultaneously
 }
 
 void ANiceInkGameMode::ApplyPrototypeCamera()
