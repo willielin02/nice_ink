@@ -80,6 +80,8 @@ Tools/FacePipeline/models/79999_iter.pth
 Tools/FacePipeline/venv/
 
 # Face pipeline - per-run artifacts (regenerable)
+Tools/FacePipeline/out/
+Tools/FacePipeline/avatar_previews/
 Tools/FacePipeline/face_texture*.png
 Tools/FacePipeline/debug_*.jpg
 Tools/FacePipeline/debug_*.png

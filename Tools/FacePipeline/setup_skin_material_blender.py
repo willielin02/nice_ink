@@ -20,13 +20,15 @@ import json
 import numpy as np
 from pathlib import Path
 
-PIPE = Path(r"C:\games\Unreal Engine\nice_ink_face_pipeline")
-FACE_TEXTURE = PIPE / "face_texture.png"
-SKIN_JSON = PIPE / "skin_color.json"
-TILE_ALBEDO = PIPE / "skin_tile_albedo_detail.png"
-ZONE_TINT = PIPE / "skin_zone_tint.png"
-TILE_NORMAL = PIPE / "skin_tile_normal.png"
-TILE_ROUGH = PIPE / "skin_tile_rough.png"
+PIPE = Path(__file__).resolve().parent
+DATA = PIPE / "data"    # pipeline constants (FaceUV masks, skin tiles)
+OUT = PIPE / "out"      # per-player pipeline outputs
+FACE_TEXTURE = OUT / "face_texture.png"
+SKIN_JSON = OUT / "skin_color.json"
+TILE_ALBEDO = DATA / "skin_tile_albedo_detail.png"
+ZONE_TINT = DATA / "skin_zone_tint.png"
+TILE_NORMAL = DATA / "skin_tile_normal.png"
+TILE_ROUGH = DATA / "skin_tile_rough.png"
 
 MESH_NAME = "PlusSize_Male_Body_01"
 # Frequency plan: zone tint 1x (20-50cm), mottle 8x (2-8cm, the band that is
@@ -80,8 +82,8 @@ def build_face_mask(obj):
     me = obj.data
 
     # FaceUV region: the expanded coverage mask when present, else the legacy oval
-    cov = PIPE / "faceuv_mask_coverage.png"
-    mask_path = cov if cov.exists() else PIPE / "faceuv_mask.png"
+    cov = DATA / "faceuv_mask_coverage.png"
+    mask_path = cov if cov.exists() else DATA / "faceuv_mask.png"
     mimg = bpy.data.images.load(str(mask_path), check_existing=True)
     mimg.reload()
     mw, mh = mimg.size

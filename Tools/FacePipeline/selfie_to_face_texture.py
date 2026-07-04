@@ -32,25 +32,29 @@ from mediapipe.tasks.python import vision as mp_vision
 from face_parsing.model import BiSeNet
 from pathlib import Path
 
-BASE = Path(r"C:\games\Unreal Engine\nice_ink_face_pipeline")
-DEFAULT_SELFIE = BASE / "3DDFA_V2" / "examples" / "inputs" / "d74dbdfef4c65c8271c42b882054311d.jpg"
-FACEUV_MASK_PATH = BASE / "faceuv_mask.png"
+BASE = Path(__file__).resolve().parent
+DATA = BASE / "data"        # pipeline constants (FaceUV mapping, skin tiles)
+MODELS = BASE / "models"    # ML weights (not in git)
+OUT = BASE / "out"          # per-run outputs, overwritten by the next player
+OUT.mkdir(parents=True, exist_ok=True)
+DEFAULT_SELFIE = BASE / "test_selfies" / "d74dbdfef4c65c8271c42b882054311d.jpg"
+FACEUV_MASK_PATH = DATA / "faceuv_mask.png"
 # expanded-island mode (see make_faceuv_expansion.py): coverage mask defines
 # alpha/fades, the JSON holds W-mapped TPS constants that freeze the feature
 # layout of the old island while extending sampling into the new ring
-COVERAGE_MASK_PATH = BASE / "faceuv_mask_coverage.png"
-EXPANSION_DATA_PATH = BASE / "faceuv_expansion_data.json"
-FACE_LANDMARKER_PATH = BASE / "face_landmarker.task"
-BISENET_PATH = BASE / "79999_iter.pth"
-OUTPUT_PATH = BASE / "face_texture.png"
-SKIN_COLOR_PATH = BASE / "skin_color.json"
-HAIR_COLOR_PATH = BASE / "hair_color.json"
-BEARD_COLOR_PATH = BASE / "beard_color.json"
-DEBUG_PATH = BASE / "face_texture_debug.png"
-DEBUG_SELFIE_CONTOUR = BASE / "debug_selfie_contour.jpg"
-DEBUG_FACEUV_CONTOUR = BASE / "debug_faceuv_contour.jpg"
-DEBUG_BISENET_OVERLAY = BASE / "debug_bisenet_overlay.jpg"
-DEBUG_SKINFILL = BASE / "debug_skinfill.jpg"
+COVERAGE_MASK_PATH = DATA / "faceuv_mask_coverage.png"
+EXPANSION_DATA_PATH = DATA / "faceuv_expansion_data.json"
+FACE_LANDMARKER_PATH = MODELS / "face_landmarker.task"
+BISENET_PATH = MODELS / "79999_iter.pth"
+OUTPUT_PATH = OUT / "face_texture.png"
+SKIN_COLOR_PATH = OUT / "skin_color.json"
+HAIR_COLOR_PATH = OUT / "hair_color.json"
+BEARD_COLOR_PATH = OUT / "beard_color.json"
+DEBUG_PATH = OUT / "face_texture_debug.png"
+DEBUG_SELFIE_CONTOUR = OUT / "debug_selfie_contour.jpg"
+DEBUG_FACEUV_CONTOUR = OUT / "debug_faceuv_contour.jpg"
+DEBUG_BISENET_OVERLAY = OUT / "debug_bisenet_overlay.jpg"
+DEBUG_SKINFILL = OUT / "debug_skinfill.jpg"
 
 TEX_SIZE = 2048
 MAX_SELFIE_SIDE = 1600          # keeps canvas margin > max inflate + safety, so TPS never samples off-canvas
@@ -88,13 +92,65 @@ LIP_LABELS = [11, 12, 13]
 EAR_LABELS = [7, 8]
 NECK_LABEL = 14
 
+# --- same-signal seam (v5): from the feature core outward, the texture's
+# low-frequency tone ramps to the exact SkinColor constant the body renders
+# and photo high frequencies ramp to zero, so at the content boundary both
+# sides of the face/body blend are the SAME signal (skin detail there comes
+# from the material's shared tile chain). Fill-only island pixels (no selfie
+# content: crown, temple ring) are written as the exact constant - kills the
+# island footprint step and every fill artifact at once. RAMP_PX = 0 disables.
+FLATTEN_RAMP_PX = 0         # DISABLED 2026-07-04 (user verdict): the ramp bleached
+                            # the regenerated stubble field, bearded players lost
+                            # their beard read entirely - identity cost > seam gain.
+                            # 90 was the shipped v5 value; a beard-aware variant
+                            # must exempt the beard territory before re-enabling.
+FLATTEN_LP_SIGMA = 48       # low-frequency field scale (shading/blotches, not pores)
+FLATTEN_CORE_MARGIN = 70    # protection margin around the frozen anchor grid
+FLATTEN_CORE_FEATHER = 40   # feather of the protection core edge
+FLATTEN_SEAM_BAND = 15      # within this of the boundary the texture IS the constant
+FLATTEN_GUARD_RAMP = 40     # mandatory convergence ramp that overrides the core:
+                            # the anchor-grid rectangle can poke above a low
+                            # hairline (CaseOh content top y631 vs core top y596),
+                            # and an unguarded core paints full photo tone right
+                            # up to the boundary - a hard step, worse than v4.8
+
+# --- v7 (2026-07-04): bald-game contract fixes ---------------------------
+# 1) EXPOSURE NORM: overexposed studio shots (Ibai: skin gray median 174,
+#    hex #de9aa9) poison the skin median and every downstream tone target.
+#    Linear-gain the photo so the skin median lands in a standard band
+#    BEFORE anything samples it.
+EXPOSURE_TARGET_GRAY = 132.0
+EXPOSURE_BAND = (115.0, 152.0)      # inside this band: leave the photo alone
+EXPOSURE_GAIN_CLAMP = (0.55, 2.0)
+# 2) BEARD KEPT IN TEXTURE: the bald yakuza game has NO beard mesh - the
+#    jaw/cheek beard stays in the texture and diffuses outward through the
+#    fill ring (the v4 'mesh-borne' removal contract is dead).
+BEARD_KEEP_IN_TEXTURE = True
+# 3) FILL SMOOTHING (texture space): the fill ring is 45% of the island and
+#    carries TPS-magnified photo junk (arcs/speckle, 4-8x on small faces) -
+#    low-pass it; skin detail there comes from the material tile chain.
+FILLSMOOTH_SIGMA = 8.0
+FILLSMOOTH_RAMP_PX = 16.0
+# 4) SKIN-PROBE FLAT-FIELD (delighting-lite, cf. Make-A-Character/MeInGame
+#    neural delighting): divide out the photo's smooth lighting field
+#    measured on skin-labeled pixels, target = the body constant.
+#    MULTIPLICATIVE and smooth -> local ratios (beard vs skin, brow vs skin)
+#    are untouched by construction; only the panel-scale tone equalizes.
+FLATFIELD_K = 0.9                   # 1.0 = fully flat studio skin
+FLATFIELD_SIGMA = 64.0              # lighting field scale (texture px)
+FLATFIELD_RATIO_CLAMP = (0.55, 1.9)
+FLATFIELD_SMOOTH = 12.0
+
 BEARD_REMOVE_MIN_COVERAGE = 0.10  # below this it is stubble/shadow: keep it in the texture
 BEARD_DILATE_RATIO = 0.012        # eat mixed boundary pixels around the removed beard
 PHILTRUM_X_MARGIN_RATIO = 0.08    # mustache protection extends this far past the mouth corners
 LIP_GUARD_RATIO = 0.05            # fill sampling and beard removal keep this margin off the lips
 BROW_COVER_FRACTION = 0.5         # hair over this share of a brow band = that brow is covered
-FACE_FLAGS_PATH = BASE / "face_flags.json"
-DEBUG_BEARD_REMOVAL = BASE / "debug_beard_removal.jpg"
+BROW_MIRROR_MIN = 0.25            # recipient occlusion that triggers symmetry completion
+                                  # (LaMa's brow continuation is too weak past this)
+BROW_MIRROR_MARGIN = 0.10         # donor must be at least this much cleaner
+FACE_FLAGS_PATH = OUT / "face_flags.json"
+DEBUG_BEARD_REMOVAL = OUT / "debug_beard_removal.jpg"
 
 # MediaPipe brow landmark chains (upper edge), used for the brow-cover bands
 BROW_L_LM = [70, 63, 105, 66, 107]
@@ -301,6 +357,22 @@ def brow_cover_status(parsing, all_lm, w, h, face_width):
     # ANY covered brow triggers the safety lock: partial brows must not bake
     out["covered"] = bool(out["L"]["covered"] or out["R"]["covered"])
     return out
+
+
+def beard_territory_mask(all_lm, w, h, face_width):
+    """Anatomical beard territory polygon: ear-bottom -> mouth-corner lines,
+    flanks +0.15fw, down to the frame bottom."""
+    ear_l, ear_r = all_lm[132], all_lm[361]
+    mouth_l, mouth_r = all_lm[61], all_lm[291]
+    poly = np.array([
+        [ear_l[0], ear_l[1]], [mouth_l[0], mouth_l[1]],
+        [mouth_r[0], mouth_r[1]], [ear_r[0], ear_r[1]],
+        [min(ear_r[0] + 0.15 * face_width, w - 1), h - 1],
+        [max(ear_l[0] - 0.15 * face_width, 0), h - 1],
+    ], dtype=np.int32)
+    t = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(t, [poly], 255)
+    return t > 0
 
 
 def philtrum_mask(all_lm, w, h, face_width):
@@ -577,9 +649,11 @@ def align_symmetry(dst_all, src_all, lm_canvas, island_center_x):
 
 
 def _warp_extra(tps, extra):
-    """Send a single-channel mask through the SAME tps as the image."""
+    """Send single-channel mask(s) through the SAME tps as the image."""
     if extra is None:
         return None
+    if isinstance(extra, (list, tuple)):
+        return [_warp_extra(tps, e) for e in extra]
     h, w = extra.shape[:2]
     ec = np.zeros((TEX_SIZE, TEX_SIZE, 3), dtype=np.uint8)
     oy, ox = (TEX_SIZE - h) // 2, (TEX_SIZE - w) // 2
@@ -632,9 +706,197 @@ def tps_warp_expanded(image, src_pts, exp, fill_color, lm_pts, island_center_x,
     return tps.warpImage(canvas), _warp_extra(tps, extra)
 
 
-SEAM_QA_PNG = BASE / "seam_qa.png"
-SEAM_QA_JSON = BASE / "seam_qa.json"
-CONTENT_MASK_PNG = BASE / "content_mask.png"
+def flatten_to_skin(warped, content_mask, skin_color, expansion):
+    """Same-signal seam: ramp low-freq tone to SkinColor / photo detail to zero
+    toward the content boundary; fill-only pixels become the exact constant.
+
+    The feature core (frozen anchor grid + margin) keeps photo tone at 100% -
+    it also shields brows on low-hairline players whose content edge passes
+    close above the brow band, where a pure distance ramp would bleach them."""
+    if FLATTEN_RAMP_PX <= 0:
+        return warped
+    content = content_mask > 127
+    T = np.array(skin_color, dtype=np.float32)
+
+    def smoothstep(t):
+        t = np.clip(t, 0.0, 1.0)
+        return t * t * (3.0 - 2.0 * t)
+
+    dist_in = cv2.distanceTransform(content.astype(np.uint8), cv2.DIST_L2, 5)
+    w = smoothstep((dist_in - FLATTEN_SEAM_BAND) / FLATTEN_RAMP_PX)
+
+    if expansion is not None:
+        a = np.asarray(expansion['anchor_new_px'], dtype=np.float32)
+        x0, y0 = (a.min(axis=0) - FLATTEN_CORE_MARGIN).astype(int)
+        x1, y1 = (a.max(axis=0) + FLATTEN_CORE_MARGIN).astype(int)
+        core = np.zeros((TEX_SIZE, TEX_SIZE), np.float32)
+        core[max(y0, 0):y1, max(x0, 0):x1] = 1.0
+        core = cv2.GaussianBlur(core, (0, 0), FLATTEN_CORE_FEATHER)
+        w = np.maximum(w, core)
+
+    # boundary guard: no protection wins inside the seam band - the outermost
+    # content ring MUST reach the constant or the line comes back
+    w = np.minimum(w, smoothstep((dist_in - FLATTEN_SEAM_BAND) / FLATTEN_GUARD_RAMP))
+
+    img = warped.astype(np.float32)
+    lo = cv2.GaussianBlur(img, (0, 0), FLATTEN_LP_SIGMA)
+    hi = img - lo
+    w3 = w[..., None]
+    out = T * (1.0 - w3) + lo * w3 + hi * w3
+    out[~content] = T                                # fill zone = exact constant
+    n_fill = int((~content).sum())
+    n_ramp = int(((w < 0.999) & content).sum())
+    print(f"   same-signal seam: {n_fill} fill px -> exact SkinColor, "
+          f"{n_ramp} content px in tone ramp")
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def skin_flatfield(warped, uv_mask, content_mask, skin_tex, skin_color):
+    """Step 8d: delighting-lite. Estimate the photo's smooth lighting field
+    from SKIN-labeled probe pixels only, and divide it out toward the body
+    constant (linear space, exponent FLATFIELD_K). The field is smooth and
+    multiplicative, so local ratios - beard vs skin, brow vs skin, pores -
+    are preserved by construction; only the panel-scale tone equalizes.
+    This is the classical stand-in for the neural delighting step used by
+    MeInGame / Make-A-Character."""
+    inside = uv_mask > 0
+    content = content_mask > 127
+    probe = (skin_tex > 127) & content
+    lab_img = cv2.cvtColor(warped, cv2.COLOR_BGR2LAB).astype(np.float32)
+    T_u8 = np.array(skin_color, np.uint8).reshape(1, 1, 3)
+    lab_T = cv2.cvtColor(T_u8, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+    core_before = (float(np.linalg.norm(lab_img[probe].mean(axis=0) - lab_T))
+                   if probe.any() else 0.0)
+    if probe.sum() < 5000:
+        return warped, {"skipped": True, "core_dE_before": round(core_before, 1),
+                        "core_dE_after": round(core_before, 1)}
+
+    lin = (warped.astype(np.float32) / 255.0) ** 2.2
+    T_lin = (np.array(skin_color, np.float32) / 255.0) ** 2.2
+    m = probe.astype(np.float32)
+    num = cv2.GaussianBlur(lin * m[..., None], (0, 0), FLATFIELD_SIGMA)
+    den = cv2.GaussianBlur(m, (0, 0), FLATFIELD_SIGMA)
+    L = num / np.maximum(den, 1e-5)[..., None]
+    weak = den < 0.02                      # fill zone / far from any probe:
+    num2 = cv2.GaussianBlur(num, (0, 0), FLATFIELD_SIGMA * 2)   # wider spread
+    den2 = cv2.GaussianBlur(den, (0, 0), FLATFIELD_SIGMA * 2)
+    L2 = num2 / np.maximum(den2, 1e-5)[..., None]
+    L[weak] = L2[weak]
+
+    ratio = (T_lin[None, None, :] / np.maximum(L, 1e-4)) ** FLATFIELD_K
+    ratio = np.clip(ratio, FLATFIELD_RATIO_CLAMP[0], FLATFIELD_RATIO_CLAMP[1])
+    ratio = cv2.GaussianBlur(ratio, (0, 0), FLATFIELD_SMOOTH)
+    # re-center: the probe field is a Gaussian MEAN while T is the skin
+    # MEDIAN - highlights skew mean above median, so the raw ratio darkens
+    # everything by a few percent (measured: core dE 3.8 -> 7.1 on Ibai).
+    # Scale per channel so the probe-mean lands exactly on T.
+    applied = (lin * ratio)[probe]
+    corr = np.clip(T_lin / np.maximum(applied.mean(axis=0), 1e-5), 0.8, 1.25)
+    ratio = ratio * corr[None, None, :]
+    out_lin = lin * np.where(inside[..., None], ratio, 1.0)
+    out = (np.clip(out_lin, 0, 1) ** (1 / 2.2) * 255).astype(np.uint8)
+
+    lab_out = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+    core_after = float(np.linalg.norm(lab_out[probe].mean(axis=0) - lab_T))
+    return out, {"skipped": False,
+                 "core_dE_before": round(core_before, 1),
+                 "core_dE_after": round(core_after, 1),
+                 "ratio_p95": round(float(np.percentile(
+                     np.abs(np.log(ratio[inside])), 95)), 3)}
+
+
+POISSON_SOLVE_RES = 256     # membrane is harmonic (pure low-freq) - solving
+                            # coarse and upsampling is mathematically lossless
+POISSON_EDGE_ERODE = 2      # boundary ring thickness at full res
+EDGE_SNAP_PX = 5            # outermost island band snaps exactly to the constant
+                            # (fill/neck-fade territory only - no visible content)
+
+
+def poisson_membrane_to_skin(warped, uv_mask, content_mask, skin_color):
+    """Step 10b: harmonic membrane offset (Poisson / seamless-clone with a
+    flat target, Perez et al. 2003) so the island boundary lands EXACTLY on
+    the SkinColor constant the body material renders. Interior gradients are
+    untouched - beard fields, brows and pores keep full contrast (the v5
+    flatten failure: lerping the lowpass destroyed the stubble field; a
+    membrane only ADDS a smooth offset, it never removes content).
+
+    Boundary values come from FILL ring segments only: at the island bottom
+    the chin/neck CONTENT reaches the edge (alpha=0 there, invisible), and
+    'T - dark neck' injected offsets of ~25 that rippled a steep membrane
+    through the visible jaw area."""
+    inside_full = uv_mask > 0
+    T = np.array(skin_color, dtype=np.float32)
+    er = cv2.erode(inside_full.astype(np.uint8), np.ones((3, 3), np.uint8),
+                   iterations=POISSON_EDGE_ERODE)
+    ring_full = inside_full & (er == 0) & (content_mask <= 127)
+    off_full = np.zeros((TEX_SIZE, TEX_SIZE, 3), np.float32)
+    off_full[ring_full] = T[None, :] - warped[ring_full].astype(np.float32)
+
+    M = None
+    for s in (32, 64, 128, POISSON_SOLVE_RES):
+        inside = cv2.resize(inside_full.astype(np.uint8), (s, s),
+                            interpolation=cv2.INTER_NEAREST) > 0
+        ring = inside & (cv2.erode(inside.astype(np.uint8),
+                                   np.ones((3, 3), np.uint8)) == 0)
+        # Dirichlet values: block-average the full-res ring offsets; spread
+        # until every coarse ring cell has a value (content-crossing segments
+        # inherit from their nearest fill neighbors along the ring)
+        num = cv2.resize(off_full * ring_full[..., None].astype(np.float32),
+                         (s, s), interpolation=cv2.INTER_AREA)
+        den = cv2.resize(ring_full.astype(np.float32), (s, s),
+                         interpolation=cv2.INTER_AREA)
+        for _ in range(12):
+            if den[ring].min() > 1e-4:
+                break
+            num = cv2.GaussianBlur(num, (0, 0), 2.0)
+            den = cv2.GaussianBlur(den, (0, 0), 2.0)
+        bval = num / np.maximum(den, 1e-6)[..., None]
+        M = (np.zeros((s, s, 3), np.float32) if M is None
+             else cv2.resize(M, (s, s), interpolation=cv2.INTER_LINEAR))
+        interior = inside & ~ring
+        outside3 = ~inside[..., None].repeat(3, axis=2)
+        for _ in range(600 if s <= 64 else 400):
+            avg = (np.roll(M, 1, 0) + np.roll(M, -1, 0)
+                   + np.roll(M, 1, 1) + np.roll(M, -1, 1)) * 0.25
+            M[interior] = avg[interior]
+            M[ring] = bval[ring]
+        # extend M past the island edge (nearest-inside values) so the next
+        # upsample never interpolates ring values against outside zeros -
+        # that dilution was measured as edge dE p95 13.6 instead of ~0
+        for _ in range(6):
+            Mn = cv2.GaussianBlur(M * inside[..., None], (0, 0), 2.0)
+            Wn = cv2.GaussianBlur(inside.astype(np.float32), (0, 0), 2.0)
+            Mext = Mn / np.maximum(Wn, 1e-6)[..., None]
+            M = np.where(outside3, Mext, M)
+
+    M_full = cv2.resize(M, (TEX_SIZE, TEX_SIZE), interpolation=cv2.INTER_LINEAR)
+    out = warped.astype(np.float32) + M_full * inside_full[..., None]
+
+    # exact snap on the outermost band: same-signal at the alpha crossing
+    dist_in = cv2.distanceTransform(inside_full.astype(np.uint8), cv2.DIST_L2, 5)
+    sw = np.clip(1.0 - dist_in / EDGE_SNAP_PX, 0.0, 1.0)[..., None]
+    sw = sw * inside_full[..., None]
+    out = out * (1.0 - sw) + T[None, None, :] * sw
+    out = np.clip(out, 0, 255).astype(np.uint8)
+
+    # island-edge QA: THE metric for the user-visible face/body line (the
+    # content-boundary seam QA cannot see it - lesson: a QA metric must be
+    # able to see the artifact the user reports)
+    band = inside_full & (dist_in <= 4)
+    lab_img = cv2.cvtColor(out, cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab_T = cv2.cvtColor(T.reshape(1, 1, 3).astype(np.uint8),
+                         cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+    dE = np.linalg.norm(lab_img[band] - lab_T, axis=1)
+    stats = {"edge_dE_mean": round(float(dE.mean()), 2),
+             "edge_dE_p95": round(float(np.percentile(dE, 95)), 2),
+             "edge_dE_max": round(float(dE.max()), 2),
+             "membrane_absmax": round(float(np.abs(M_full).max()), 1)}
+    return out, stats
+
+
+SEAM_QA_PNG = OUT / "seam_qa.png"
+SEAM_QA_JSON = OUT / "seam_qa.json"
+CONTENT_MASK_PNG = OUT / "content_mask.png"
 DIRECT_MODE = False   # set by --direct: A/B variant replacing LaMa with direct fills
 
 
@@ -660,7 +922,7 @@ def direct_extend_fill(img, hole, sigma_avg=6.0, blur=4.0, feather=3.0):
     return np.clip(img.astype(np.float32) * (1 - f) + ext * f, 0, 255).astype(np.uint8)
 
 
-def seam_qa(warped, content_mask, uv_mask):
+def seam_qa(warped, content_mask, uv_mask, skin_tex=None):
     """Detect boundary color mismatch: per boundary pixel of the CONTENT
     region (selfie content vs fill), dE between the local mean color sampled
     a few px INSIDE vs a few px OUTSIDE. Overlay: green <5, yellow 5-10,
@@ -699,9 +961,25 @@ def seam_qa(warped, content_mask, uv_mask):
     dev = np.linalg.norm(lab_img - mid, axis=2) - half   # >0: outside the blend range
     dev = np.maximum(dev, 0)
 
+    # feature-crossing exemption: where the boundary crosses identity content
+    # (a completed brow tail, the KEPT beard rim), the inner side legitimately
+    # differs from the fill - only skin-vs-skin mismatches belong in the side
+    # stats. Primary signal: warped skin-label fraction on the inner ring;
+    # fallback: inner ring much darker than outer.
+    feature = boundary & (fin[..., 0] < 0.90 * fout[..., 0])
+    if skin_tex is not None:
+        sm = (skin_tex > 127).astype(np.float32)
+        skin_num = cv2.GaussianBlur(sm * in_ring.astype(np.float32), (0, 0), SIGMA)
+        skin_den = cv2.GaussianBlur(in_ring.astype(np.float32), (0, 0), SIGMA)
+        skin_frac = skin_num / np.maximum(skin_den, 1e-6)
+        feature |= boundary & (skin_frac < 0.5)
+    n_feature = int(feature.sum())
+    boundary = boundary & ~feature
+
     vals = dE[boundary]
     line_vals = dev[seam_band]
     stats = {
+        "feature_crossing_px": n_feature,
         "boundary_px": int(boundary.sum()),
         "dE_mean": round(float(vals.mean()), 2),
         "dE_p95": round(float(np.percentile(vals, 95)), 2),
@@ -841,6 +1119,37 @@ def main():
 
     print("4. BiSeNet head segmentation...")
     parsing = parse_selfie(bisenet, selfie)
+
+    # v7 exposure normalization: correct washed/dark photos BEFORE any color
+    # or tone sampling (linear-space gain preserves chroma ratios)
+    skin512e = (parsing == SKIN_LABEL).astype(np.uint8) * 255
+    skin_e = cv2.resize(skin512e, (w, h), interpolation=cv2.INTER_NEAREST) > 0
+    if skin_e.any():
+        gains = np.ones(3, np.float32)          # BGR channel gains, linear
+        med = np.median(selfie[skin_e], axis=0).astype(np.float32)
+        # white-balance guard on a skin-physics invariant: real skin always
+        # has G > B (warm bias). B >= G on the skin median = magenta cast
+        # from the shoot's lighting (Ibai: B138 G125 -> pink-purple avatar).
+        if med[0] > 0.95 * med[1]:
+            wb = float(np.clip((0.93 * med[1] / max(med[0], 1.0)) ** 2.2,
+                               0.5, 1.0))
+            gains[0] = wb
+            print(f"   white-balance guard: skin B{med[0]:.0f} > G{med[1]:.0f}"
+                  f" (magenta cast), B gain {wb:.2f}")
+        gray_med = float(np.median(
+            cv2.cvtColor(selfie, cv2.COLOR_BGR2GRAY)[skin_e]))
+        if not (EXPOSURE_BAND[0] <= gray_med <= EXPOSURE_BAND[1]):
+            g_lin = ((EXPOSURE_TARGET_GRAY / 255.0) ** 2.2
+                     / max((gray_med / 255.0) ** 2.2, 1e-4))
+            g_lin = float(np.clip(g_lin, *EXPOSURE_GAIN_CLAMP))
+            gains *= g_lin
+            print(f"   exposure normalized: skin gray {gray_med:.0f} -> "
+                  f"{EXPOSURE_TARGET_GRAY:.0f} (linear gain {g_lin:.2f})")
+        if np.any(np.abs(gains - 1.0) > 0.02):
+            lin = (selfie.astype(np.float32) / 255.0) ** 2.2 * gains[None, None, :]
+            selfie = (np.clip(lin, 0, 1) ** (1 / 2.2) * 255).astype(np.uint8)
+            parsing = parse_selfie(bisenet, selfie)
+
     head_mask = build_head_mask(parsing, w, h, deflate_px, selfie_contour)
     head_area = np.count_nonzero(head_mask)
     if head_area < 0.01 * h * w:
@@ -877,12 +1186,26 @@ def main():
         px = selfie[skin_full & ~beard_det]
         if len(px):
             skin_color = np.median(px, axis=0).astype(np.uint8)
+        if BEARD_KEEP_IN_TEXTURE:
+            # the beard lives in the texture now (no beard mesh in the bald
+            # game): BiSeNet labels dense beards HAIR, which HEAD_LABELS
+            # drops - graft those pixels back into the head mask so the
+            # beard is content, not fill
+            hair512k = (parsing == HAIR_LABEL).astype(np.uint8) * 255
+            hair_k = cv2.resize(hair512k, (w, h),
+                                interpolation=cv2.INTER_NEAREST) > 0
+            graft = beard_det & hair_k
+            head_mask = np.where(graft, np.uint8(255), head_mask)
+            print(f"   beard kept in texture: {int(graft.sum())} hair-labeled "
+                  f"beard px grafted into head mask")
+    beard_removed = bearded and not BEARD_KEEP_IN_TEXTURE
     print(f"   beard coverage {beard_meta['coverage']:.2f} "
-          f"({'mesh-borne, zone regenerated below' if bearded else 'kept in texture'})")
+          f"({'mesh-borne, zone regenerated below' if beard_removed else 'kept in texture'})")
     print(f"   brows covered: L={brows['L']['covered']} R={brows['R']['covered']}"
           f" (hair frac L={brows['L']['hair_fraction']} R={brows['R']['hair_fraction']})")
     with open(FACE_FLAGS_PATH, "w", encoding="utf-8") as f:
-        json.dump({"brows": brows, "beard_mesh_borne": bool(bearded),
+        json.dump({"brows": brows, "beard_mesh_borne": bool(beard_removed),
+                   "beard_in_texture": bool(bearded and BEARD_KEEP_IN_TEXTURE),
                    "beard_coverage": round(float(beard_meta["coverage"]), 3)}, f, indent=2)
     print(f"   -> {FACE_FLAGS_PATH}")
     write_beard_color(beard_meta, bearded)
@@ -890,8 +1213,10 @@ def main():
 
     print("5. Natural skin fill outside head mask...")
     sample_ex = lips_guard.copy()
-    if beard_det is not None:
+    if beard_det is not None and not BEARD_KEEP_IN_TEXTURE:
         sample_ex |= beard_det   # jaw fill must sample cheek skin, not beard
+        # (kept-in-texture mode WANTS the fill ring to sample the beard rim:
+        # that sampling is exactly how the beard diffuses outward)
     selfie_filled = natural_skin_fill(selfie, head_mask, skin_color, face_width,
                                       sample_exclude=sample_ex)
 
@@ -903,7 +1228,7 @@ def main():
     dbg = selfie_filled.copy()
 
     beard_zone = None
-    if bearded:
+    if beard_removed:
         deflate_iters = max(int(round(deflate_px)), 1)
         in_oval = lower_face_zone(all_lm, w, h, face_width, deflate_iters)
         philtrum = philtrum_mask(all_lm, w, h, face_width)
@@ -917,17 +1242,8 @@ def main():
         # line, hanging beard below a too-short chin strip) is context LaMa
         # continues right back into the zone. The mustache is inside the mask
         # too and pasted back from the pre-LaMa image afterwards.
-        ear_l, ear_r = all_lm[132], all_lm[361]
-        mouth_l, mouth_r = all_lm[61], all_lm[291]
-        poly = np.array([
-            [ear_l[0], ear_l[1]], [mouth_l[0], mouth_l[1]],
-            [mouth_r[0], mouth_r[1]], [ear_r[0], ear_r[1]],
-            [min(ear_r[0] + 0.15 * face_width, w - 1), h - 1],
-            [max(ear_l[0] - 0.15 * face_width, 0), h - 1],
-        ], dtype=np.int32)
-        territory = np.zeros((h, w), np.uint8)
-        cv2.fillPoly(territory, [poly], 255)
-        zone_lama = (territory > 0) & ~lips_keep
+        territory = beard_territory_mask(all_lm, w, h, face_width)
+        zone_lama = territory & ~lips_keep
 
         keep = philtrum & ~lips_keep
         beard_zone = in_oval & ~keep
@@ -1025,6 +1341,67 @@ def main():
         print(f"   brow repair: {int(brow_holes.sum())} px regenerated "
               f"(ex-fringe streaks + shadow, skin_lum {skin_lum:.0f})")
 
+    # brow completion by symmetry (MeInGame-style): when one brow was
+    # substantially under the fringe, LaMa continues the stroke too weakly
+    # (7AF4's 41%-occluded brow came back as a faint smudge and read as
+    # "cut"). Mirror the cleaner brow through the landmark correspondence -
+    # cv2.estimateAffine2D on the 5-point chains carries the reflection.
+    # Bald game note: there is no hairstyle pool to cover brows anymore, so
+    # completion is the only path to a full brow.
+    fl = brows["L"]["hair_fraction"]
+    fr = brows["R"]["hair_fraction"]
+    donor = None
+    if not brows["covered"]:
+        if fr >= BROW_MIRROR_MIN and fl <= fr - BROW_MIRROR_MARGIN:
+            donor, recip = "L", "R"
+        elif fl >= BROW_MIRROR_MIN and fr <= fl - BROW_MIRROR_MARGIN:
+            donor, recip = "R", "L"
+    if donor is not None:
+        # the two MediaPipe brow chains run in OPPOSITE directions (L chain
+        # temporal->nasal, R chain nasal->temporal): index-wise pairing maps
+        # outer end to inner end and the affine turns into a garbled flip
+        # (first attempt painted a detached check-mark under the brow).
+        # Reverse one chain, and add the eye corners - five near-collinear
+        # brow points leave the perpendicular direction ill-conditioned.
+        d_idx = (BROW_L_LM if donor == "L" else BROW_R_LM)
+        r_idx = list(reversed(BROW_L_LM if recip == "L" else BROW_R_LM))
+        d_eyes = [33, 133] if donor == "L" else [263, 362]   # outer, inner
+        r_eyes = [33, 133] if recip == "L" else [263, 362]
+        src = np.vstack([all_lm[d_idx], all_lm[d_eyes]]).astype(np.float32)
+        dst = np.vstack([all_lm[r_idx], all_lm[r_eyes]]).astype(np.float32)
+        A, _ = cv2.estimateAffine2D(src, dst)
+        bx0, by0, bx1, by1 = brows[donor]["box"]
+        by1e = min(by1 + int(0.05 * face_width), h - 1)   # box tracks the UPPER
+        box = np.zeros((h, w), bool)                      # edge chain; the brow
+        box[by0:by1e + 1, bx0:bx1 + 1] = True             # body hangs below it
+        # transplant the brow STROKE only (darker-than-skin pixels), never the
+        # surrounding skin: whole-rectangle pasting carried the donor side's
+        # shading across the face midline and left a tone patch (side-vs-side
+        # QA p95 jumped 7.9 -> 26)
+        g = cv2.cvtColor(selfie_filled, cv2.COLOR_BGR2GRAY)
+        stroke = (box & (g < 0.85 * skin_lum)).astype(np.uint8)
+        stroke = cv2.morphologyEx(stroke, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+        stroke = cv2.dilate(stroke, np.ones((3, 3), np.uint8),
+                            iterations=max(1, int(0.006 * face_width)))
+        if int(stroke.sum()) < 100:
+            print(f"   brow mirror skipped: donor stroke too faint "
+                  f"({int(stroke.sum())} px, occlusion {fl:.2f}/{fr:.2f})")
+        else:
+            dm = cv2.GaussianBlur(stroke.astype(np.float32), (0, 0),
+                                  0.008 * face_width)
+            donor_img = cv2.warpAffine(selfie_filled, A, (w, h),
+                                       flags=cv2.INTER_LINEAR)
+            donor_m = np.clip(cv2.warpAffine(dm, A, (w, h)), 0.0, 1.0)
+            selfie_filled = (donor_img * donor_m[..., None]
+                             + selfie_filled * (1.0 - donor_m[..., None])
+                             ).astype(np.uint8)
+            melt = (donor_m > 0.05) & (donor_m < 0.6)
+            if not DIRECT_MODE:
+                selfie_filled = lama_inpaint(selfie_filled, melt)
+            print(f"   brow mirrored {donor}->{recip} stroke only "
+                  f"(occlusion {fl:.2f}/{fr:.2f}, {int(stroke.sum())} px, "
+                  f"melt {int(melt.sum())} px)")
+
     # seam-ring regeneration: the selfie's own silhouette shading (a darker
     # band hugging the face edge) is real content, so masks/feathering leave
     # it as a dirty rim between face and fill (seam QA flagged the whole
@@ -1034,6 +1411,15 @@ def main():
     hb = (head_mask > 0).astype(np.uint8)
     k3 = np.ones((3, 3), np.uint8)
     ring = (cv2.dilate(hb, k3, iterations=rr) - cv2.erode(hb, k3, iterations=rr)) > 0
+    if bearded and BEARD_KEEP_IN_TEXTURE:
+        # the ring kills silhouette shading, but in the beard territory the
+        # "shading rim" IS the beard's own edge - regenerating it would cut
+        # the beard-to-fill diffusion
+        terr_ex = beard_territory_mask(all_lm, w, h, face_width)
+        n_before = int(ring.sum())
+        ring &= ~terr_ex
+        print(f"   seam ring exempts beard territory "
+              f"({n_before - int(ring.sum())} px spared)")
     selfie_filled = (direct_extend_fill(selfie_filled, ring) if DIRECT_MODE
                      else lama_inpaint(selfie_filled, ring))
     print(f"   seam ring regenerated: {int(ring.sum())} px (±{rr}px of the content edge)")
@@ -1076,15 +1462,42 @@ def main():
     lm_pts = all_lm[lm_idx]
     xs_mask = np.where(uv_mask > 0)[1]
     island_center_x = float((xs_mask.min() + xs_mask.max()) / 2)
+    skin512w = (parsing == SKIN_LABEL).astype(np.uint8) * 255
+    skin_src = cv2.resize(skin512w, (w, h), interpolation=cv2.INTER_NEAREST)
+    if beard_det is not None:
+        skin_src[beard_det] = 0     # beard px are not lighting probes
     if expansion is not None:
-        warped, content_mask = tps_warp_expanded(selfie_filled, src_inflated, expansion,
-                                                 skin_color, lm_pts, island_center_x,
-                                                 extra=head_mask)
+        warped, extras = tps_warp_expanded(selfie_filled, src_inflated, expansion,
+                                           skin_color, lm_pts, island_center_x,
+                                           extra=[head_mask, skin_src])
     else:
         uv_target = uv_sampled.copy()
         uv_target[:, 1] += FACEUV_Y_OFFSET
-        warped, content_mask = tps_warp(selfie_filled, src_inflated, uv_target, skin_color,
-                                        lm_pts, island_center_x, extra=head_mask)
+        warped, extras = tps_warp(selfie_filled, src_inflated, uv_target, skin_color,
+                                  lm_pts, island_center_x, extra=[head_mask, skin_src])
+    content_mask, skin_tex = extras
+
+    print("8b. Same-signal seam (tone flatten to SkinColor)...")
+    warped = flatten_to_skin(warped, content_mask, skin_color, expansion)
+
+    print("8c. Fill-zone smoothing (photo junk out, material tiles carry detail)...")
+    content_b = content_mask > 127
+    sm = cv2.GaussianBlur(warped.astype(np.float32), (0, 0), FILLSMOOTH_SIGMA)
+    dout = cv2.distanceTransform((~content_b).astype(np.uint8), cv2.DIST_L2, 5)
+    t_sm = np.clip(dout / FILLSMOOTH_RAMP_PX, 0.0, 1.0)
+    w_sm = (t_sm * t_sm * (3.0 - 2.0 * t_sm))[..., None]
+    warped = np.clip(warped.astype(np.float32) * (1.0 - w_sm) + sm * w_sm,
+                     0, 255).astype(np.uint8)
+    fillz = (~content_b) & (uv_mask > 0)
+    hfE = float(np.abs(warped.astype(np.float32)
+                       - cv2.GaussianBlur(warped.astype(np.float32), (0, 0), 4)
+                       )[fillz].mean()) if fillz.any() else 0.0
+    print(f"   fill-zone high-freq energy: {hfE:.2f} (was up to ~2.5; clean < 0.8)")
+
+    print("8d. Skin-probe flat-field toward the body constant (delighting-lite)...")
+    warped, ff = skin_flatfield(warped, uv_mask, content_mask, skin_tex, skin_color)
+    print(f"   face-core dE vs body: {ff['core_dE_before']} -> {ff['core_dE_after']}"
+          + ("" if ff.get("skipped") else f" | lighting |log-ratio| p95 {ff['ratio_p95']}"))
 
     print("9. Alpha from feathered FaceUV mask...")
     mask_f = cv2.GaussianBlur(uv_mask.astype(np.float32), (0, 0), sigmaX=5)
@@ -1128,10 +1541,21 @@ def main():
     filled = np.count_nonzero(alpha)
     print(f"   coverage: {filled} px ({100 * filled / TEX_SIZE ** 2:.1f}%)")
 
+    print("10b. Poisson membrane to SkinColor (island edge = body constant)...")
+    warped, edge_stats = poisson_membrane_to_skin(warped, uv_mask, content_mask,
+                                                  skin_color)
+    print(f"   island-edge dE vs body: mean {edge_stats['edge_dE_mean']} "
+          f"p95 {edge_stats['edge_dE_p95']} max {edge_stats['edge_dE_max']} "
+          f"| membrane |max| {edge_stats['membrane_absmax']}")
+
     print("11. Seam QA (content-boundary dE detector)...")
     if content_mask is not None:
         cv2.imwrite(str(CONTENT_MASK_PNG), content_mask)
-        qa_overlay, qa = seam_qa(warped, content_mask, uv_mask)
+        qa_overlay, qa = seam_qa(warped, content_mask, uv_mask, skin_tex=skin_tex)
+        if qa is not None:
+            qa.update(edge_stats)
+            qa["fill_hf_energy"] = round(hfE, 2)
+            qa["face_core_dE"] = ff["core_dE_after"]
         if qa_overlay is not None:
             cv2.imwrite(str(SEAM_QA_PNG), qa_overlay)
             with open(SEAM_QA_JSON, "w", encoding="utf-8") as f:
