@@ -24,8 +24,9 @@ blender --background avatar_previews/<name>.blend --python render_avatar_preview
   （torch / mediapipe / onnxruntime / face_parsing 都裝在那裡；未來要嘛建本地
   requirements，要嘛等 UE NNE 移植後淘汰）。
 - Blender：`C:\Program Files\Blender Foundation\Blender 5.1\blender.exe`。
-- 角色源：`Content/玩家/nice_ink_player_character16.blend`（全專案唯一角色源；
-  未來換黑道體型時 FaceUV 島 + FaceMask 邏輯保留）。
+- 角色源：`Content/玩家/nice_ink_player_character17.blend`（全專案唯一角色源，
+  = char16 + 屁股 mesh 修形 2026-07-05；未來換黑道體型時 FaceUV 島 +
+  FaceMask 邏輯保留）。
 
 ## 目錄
 

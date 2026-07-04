@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-CHAR_BLEND = r"C:\games\Unreal Engine\nice_ink\Content\玩家\nice_ink_player_character16.blend"
+CHAR_BLEND = r"C:\games\Unreal Engine\nice_ink\Content\玩家\nice_ink_player_character17.blend"
 
 argv = sys.argv[sys.argv.index("--") + 1:]
 OUT_BLEND = Path(argv[0])
