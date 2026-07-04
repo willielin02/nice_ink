@@ -86,3 +86,6 @@ Tools/FacePipeline/face_texture*.png
 Tools/FacePipeline/debug_*.jpg
 Tools/FacePipeline/debug_*.png
 Tools/FacePipeline/__pycache__/
+
+# Blender auto-backups (previous-save copies)
+Content/**/*.blend1
