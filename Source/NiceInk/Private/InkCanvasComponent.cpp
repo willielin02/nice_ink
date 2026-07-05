@@ -258,6 +258,45 @@ void UInkCanvasComponent::WashAllMarker()
 	RebuildRenderTargets();
 }
 
+void UInkCanvasComponent::AddEvidenceMark(EInkEvidenceType Type, FVector2D UV, int32 Seed)
+{
+	UV = ClampUV(UV);
+	FRandomStream Rand(Seed);
+
+	FLinearColor Color;
+	int32 DotCount;
+	float ScatterRadius;
+	switch (Type)
+	{
+	case EInkEvidenceType::Sneeze:
+		Color = FLinearColor(0.55f, 0.68f, 0.35f); DotCount = 14; ScatterRadius = 0.045f; break;
+	case EInkEvidenceType::Piss:
+		Color = FLinearColor(0.85f, 0.72f, 0.12f); DotCount = 16; ScatterRadius = 0.05f; break;
+	case EInkEvidenceType::Shit:
+		Color = FLinearColor(0.27f, 0.15f, 0.05f); DotCount = 18; ScatterRadius = 0.05f; break;
+	default: // Bruise
+		Color = FLinearColor(0.28f, 0.12f, 0.38f); DotCount = 10; ScatterRadius = 0.02f; break;
+	}
+
+	const int32 AuthorId = InkEvidence::AuthorIdFor(Type);
+	FInkWork& Work = GetOrCreateActiveWork(AuthorId);
+
+	// 濺射：中心一點＋周圍隨機散點；每點一筆（單點筆劃＝純圓點，不連線）
+	for (int32 Dot = 0; Dot < DotCount; ++Dot)
+	{
+		const float Angle = Rand.FRandRange(0.0f, 2.0f * PI);
+		const float Dist = Dot == 0 ? 0.0f : ScatterRadius * FMath::Sqrt(Rand.FRand());
+		FInkStroke Stroke;
+		Stroke.Color = Color;
+		Stroke.Points.Add(ClampUV(UV + FVector2D(FMath::Cos(Angle), FMath::Sin(Angle)) * Dist));
+		Stroke.StartTimestamp = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+		Work.Strokes.Add(Stroke);
+		StampSegmentIntoMarkerRT(Stroke.Points[0], Stroke.Points[0], Color, /*bDotOnly=*/true);
+	}
+
+	OnCanvasChanged.Broadcast();
+}
+
 void UInkCanvasComponent::SetRoundIndex(int32 NewRoundIndex)
 {
 	RoundIndex = FMath::Max(0, NewRoundIndex);

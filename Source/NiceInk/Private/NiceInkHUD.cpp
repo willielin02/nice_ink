@@ -30,6 +30,27 @@ void ANiceInkHUD::DrawHUD()
 		return;
 	}
 
+	// 被噴致盲（該回合內）：大面積色漬遮擋視線，指認結算時解除
+	if (MyChar && MyChar->bBlinded)
+	{
+		FLinearColor Splat;
+		switch (MyChar->BlindType)
+		{
+		case EInkEvidenceType::Sneeze: Splat = FLinearColor(0.5f, 0.62f, 0.3f, 0.93f); break;
+		case EInkEvidenceType::Piss:   Splat = FLinearColor(0.8f, 0.68f, 0.1f, 0.93f); break;
+		default:                       Splat = FLinearColor(0.24f, 0.13f, 0.04f, 0.95f); break;
+		}
+		const float W = Canvas->ClipX;
+		const float H = Canvas->ClipY;
+		// 不規則遮蔽：幾塊交疊大色塊，留小縫（部分致盲）
+		DrawRect(Splat, 0.0f, 0.0f, W * 0.62f, H * 0.75f);
+		DrawRect(Splat, W * 0.45f, H * 0.18f, W * 0.55f, H * 0.62f);
+		DrawRect(Splat, W * 0.12f, H * 0.55f, W * 0.72f, H * 0.45f);
+		DrawRect(Splat, W * 0.3f, 0.0f, W * 0.5f, H * 0.3f);
+		DrawText(TEXT("SPLAT! You can barely see. Washes off at the accusation."),
+			FLinearColor::White, 40.0f, H * 0.5f, nullptr, 1.1f, false);
+	}
+
 	const float Padding = 18.0f;
 	const float LineHeight = 21.0f;
 	float Y = Padding;
@@ -183,10 +204,14 @@ void ANiceInkHUD::DrawVictimSleepUI(const ANiceInkCharacter* MyChar, const ANice
 	Canvas->K2_DrawLine(FVector2D(BodyCX - 8.0f, BodyCY + 18.0f), FVector2D(BodyCX - 30.0f, BodyCY + 58.0f), 5.0f, BodyColor);   // 左腿
 	Canvas->K2_DrawLine(FVector2D(BodyCX + 8.0f, BodyCY + 18.0f), FVector2D(BodyCX + 30.0f, BodyCY + 58.0f), 5.0f, BodyColor);   // 右腿
 
-	// 工具庫存（右下）
-	const float ToolY = H - 120.0f;
+	// 工具庫存與操作（右下）
+	const float ToolY = H - 140.0f;
+	static const TCHAR* OriginNames[] = { TEXT("NOSE"), TEXT("CROTCH"), TEXT("BUTT") };
+	const int32 OriginIdx = FMath::Clamp(static_cast<int32>(MyChar->SelectedSprayOrigin), 0, 2);
 	DrawText(FString::Printf(TEXT("SPRAY x%d   KICK x%d   (expire when you wake)"), MyChar->SprayCharges, MyChar->KickCharges),
-		FLinearColor(0.85f, 0.8f, 0.6f, 1.0f), W - 480.0f, ToolY, nullptr, 0.9f, false);
+		FLinearColor(0.85f, 0.8f, 0.6f, 1.0f), W - 520.0f, ToolY, nullptr, 0.9f, false);
+	DrawText(FString::Printf(TEXT("Q spray from %s (1/2/3 pick origin)   E kick   aim = mouse"), OriginNames[OriginIdx]),
+		FLinearColor(0.7f, 0.7f, 0.6f, 1.0f), W - 520.0f, ToolY + 22.0f, nullptr, 0.85f, false);
 
 	// 聽覺開放提示
 	DrawText(TEXT("You hear the whole room. Voices have no direction. They may be lying."),

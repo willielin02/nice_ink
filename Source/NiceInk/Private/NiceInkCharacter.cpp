@@ -7,8 +7,10 @@
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/ProjectileMovementComponent.h"
 #include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
+#include "InkSprayProjectile.h"
 #include "InputCoreTypes.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -50,9 +52,12 @@ ANiceInkCharacter::ANiceInkCharacter()
 	Body->SetRelativeLocation(BodyStandRelLoc);
 	Body->SetRelativeRotation(BodyStandRelRot);
 	Body->SetOwnerNoSee(true); // 第一人稱看不見自己身體的全貌（SPEC 視角規則）
-	Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	Body->SetCollisionResponseToAllChannels(ECR_Ignore);
 	Body->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	// 噴射投射物直接打在身體網格上（精準命中點→UV）；膠囊放行
+	Body->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyMeshAsset(TEXT("/Game/Characters/SM_Char17.SM_Char17"));
 	if (BodyMeshAsset.Succeeded())
@@ -95,6 +100,8 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkCharacter, MinigameHits);
 	DOREPLIFETIME(ANiceInkCharacter, SprayCharges);
 	DOREPLIFETIME(ANiceInkCharacter, KickCharges);
+	DOREPLIFETIME(ANiceInkCharacter, bBlinded);
+	DOREPLIFETIME(ANiceInkCharacter, BlindType);
 }
 
 void ANiceInkCharacter::Tick(float DeltaSeconds)
@@ -112,8 +119,33 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollLook(PC, DeltaSeconds);
 	PollMove(PC);
 	PollMinigame(PC);
+	PollCounterplay(PC);
 	PollPalette(PC);
 	PollPaint(PC, DeltaSeconds);
+}
+
+void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
+{
+	// 沉睡者限定：噴射／拳腳。瞄準＝頭部視野方向（聽聲推理、盲瞄）。
+	if (!bAsleep)
+	{
+		return;
+	}
+
+	// 出發點選擇：1 鼻／2 陰部／3 肛門
+	if (PC->WasInputKeyJustPressed(EKeys::One)) { SelectedSprayOrigin = EInkEvidenceType::Sneeze; }
+	if (PC->WasInputKeyJustPressed(EKeys::Two)) { SelectedSprayOrigin = EInkEvidenceType::Piss; }
+	if (PC->WasInputKeyJustPressed(EKeys::Three)) { SelectedSprayOrigin = EInkEvidenceType::Shit; }
+
+	const float AimYawWorld = FirstPersonCamera->GetComponentRotation().Yaw;
+	if (PC->WasInputKeyJustPressed(EKeys::Q) && SprayCharges > 0)
+	{
+		ServerSpray(SelectedSprayOrigin, AimYawWorld);
+	}
+	if (PC->WasInputKeyJustPressed(EKeys::E) && KickCharges > 0)
+	{
+		ServerKick(AimYawWorld);
+	}
 }
 
 void ANiceInkCharacter::EnsureAvatarApplied()
@@ -404,6 +436,122 @@ void ANiceInkCharacter::ServerMinigameHit_Implementation()
 		break;
 	default: break;
 	}
+}
+
+void ANiceInkCharacter::ServerSpray_Implementation(EInkEvidenceType Origin, float AimYawWorld)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const APlayerState* PS = GetPlayerState();
+	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || bEyesOpen ||
+		SprayCharges <= 0 || Origin == EInkEvidenceType::Bruise)
+	{
+		return;
+	}
+	--SprayCharges;
+
+	// 出發點（身體本地座標；躺姿下由元件變換帶到世界）：鼻／陰部／肛門
+	FVector LocalOrigin;
+	switch (Origin)
+	{
+	case EInkEvidenceType::Sneeze: LocalOrigin = FVector(0.0f, 20.0f, 158.0f); break;
+	case EInkEvidenceType::Piss:   LocalOrigin = FVector(0.0f, 14.0f, 88.0f); break;
+	default:                       LocalOrigin = FVector(0.0f, -16.0f, 88.0f); break;
+	}
+	const FVector WorldOrigin = Body->GetComponentTransform().TransformPosition(LocalOrigin) + FVector(0, 0, 6.0f);
+
+	// 拋物線：自選 yaw、固定仰角
+	const FRotator AimRot(38.0f, AimYawWorld, 0.0f);
+
+	FActorSpawnParameters Params;
+	Params.Instigator = this;
+	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	if (AInkSprayProjectile* Proj = GetWorld()->SpawnActor<AInkSprayProjectile>(
+		AInkSprayProjectile::StaticClass(), WorldOrigin, AimRot, Params))
+	{
+		Proj->SprayType = Origin;
+		Proj->Movement->Velocity = AimRot.Vector() * Proj->Movement->InitialSpeed;
+	}
+}
+
+void ANiceInkCharacter::ServerKick_Implementation(float AimYawWorld)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const APlayerState* PS = GetPlayerState();
+	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || bEyesOpen || KickCharges <= 0)
+	{
+		return;
+	}
+	--KickCharges;
+
+	// 從身體中心朝瞄準方向掃掠 170cm
+	const FVector Start = Body->GetComponentTransform().TransformPosition(FVector(0.0f, 0.0f, 88.0f));
+	const FVector Dir = FRotator(0.0f, AimYawWorld, 0.0f).Vector();
+	const FVector End = Start + Dir * 170.0f;
+
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(NiceInkKick), false);
+	Params.AddIgnoredActor(this);
+	// 只掃 Pawn 物件（地板／長凳不會擋掉這一腳）
+	FHitResult Hit;
+	const bool bHit = GetWorld()->SweepSingleByObjectType(Hit, Start, End, FQuat::Identity,
+		FCollisionObjectQueryParams(ECC_Pawn), FCollisionShape::MakeSphere(45.0f), Params);
+	if (!bHit)
+	{
+		return;
+	}
+
+	ANiceInkCharacter* Target = Cast<ANiceInkCharacter>(Hit.GetActor());
+	if (!Target || Target == this)
+	{
+		return;
+	}
+
+	// 瘀青標記（命中部位）＋彈飛。無命中回饋給沉睡者。
+	// 膠囊命中點離網格有段距離——容差放寬
+	FVector2D UV;
+	if (Target->Body && Target->Body->ResolveBodyUV(Hit.ImpactPoint, UV, 45.0f))
+	{
+		Target->MulticastAddEvidence(EInkEvidenceType::Bruise, UV, FMath::Rand());
+	}
+	Target->LaunchCharacter(Dir * 900.0f + FVector(0, 0, 380.0f), true, true);
+}
+
+void ANiceInkCharacter::MulticastAddEvidence_Implementation(EInkEvidenceType Type, FVector2D UV, int32 Seed)
+{
+	if (InkCanvas)
+	{
+		InkCanvas->AddEvidenceMark(Type, UV, Seed);
+	}
+}
+
+void ANiceInkCharacter::ServerApplyBlind(EInkEvidenceType Type)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	bBlinded = true;
+	BlindType = Type;
+	OnRep_Blinded();
+}
+
+void ANiceInkCharacter::MulticastRoundCleanup_Implementation()
+{
+	if (InkCanvas)
+	{
+		InkCanvas->WashAllMarker();
+	}
+	if (HasAuthority())
+	{
+		bBlinded = false;
+		OnRep_Blinded();
+	}
+}
+
+void ANiceInkCharacter::OnRep_Blinded()
+{
+	// HUD 直接讀 bBlinded 畫致盲遮罩；這裡不需額外處理（保留鉤子）
 }
 
 void ANiceInkCharacter::OnRep_Asleep()

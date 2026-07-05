@@ -93,8 +93,14 @@ public:
 	bool ApplyLaserToWork(int32 WorkId);
 
 	// 回合結算：所有麥克筆傑作洗掉（碳黑／永久不受影響）。
+	// 證據標記（保留作者 ID）也是 Marker 態，隨之一同洗掉（SPEC：僅該回合有效）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void WashAllMarker();
+
+	// 證據標記：以 Seed 決定的濺射圖案蓋在 UV 附近（跨端同種子＝同圖案）。
+	// 噴漬＝大片不規則濺點；瘀青＝緊密圓斑。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void AddEvidenceMark(EInkEvidenceType Type, FVector2D UV, int32 Seed);
 
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void SetRoundIndex(int32 NewRoundIndex);

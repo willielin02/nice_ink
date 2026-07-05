@@ -1,6 +1,7 @@
 #include "NiceInkGameMode.h"
 
 #include "Engine/World.h"
+#include "EngineUtils.h"
 #include "GameFramework/PlayerController.h"
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
@@ -250,7 +251,8 @@ void ANiceInkGameMode::EnterTour()
 	{
 		for (const FInkWork& Work : Victim->InkCanvas->GetWorks())
 		{
-			if (Work.State == EInkWorkState::Marker && Work.Strokes.Num() > 0)
+			// AuthorId < 0 ＝證據標記（噴漬／瘀青）：全房可見但不是傑作，不進巡禮
+			if (Work.State == EInkWorkState::Marker && Work.Strokes.Num() > 0 && Work.AuthorId >= 0)
 			{
 				TourWorkIds.Add(Work.WorkId);
 			}
@@ -339,7 +341,6 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 		GS->LastAccusationResult = ENiceInkAccusationResult::Correct;
 		VictimPS->PenaltyCups = 0; // 猜對離座，罰酒計數歸零
 		PendingNextVictimId = AccusedPlayerId;
-		Victim->MulticastWashAllMarker(); // 麥克筆與標記全洗
 	}
 	else
 	{
@@ -348,9 +349,11 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 		PendingNextVictimId = GS->VictimPlayerId; // 繼續畫他
 		// 被選中那幅由真作者轉碳黑（M4 加上親手刷的演出；規則先行）
 		Victim->MulticastConvertWorkToCarbon(WorkId);
-		Victim->MulticastWashAllMarker(); // 其餘同時洗掉
 		bPendingFinale = VictimPS->PenaltyCups >= PenaltyCupsToFinale;
 	}
+
+	// 麥克筆與證據標記全洗（全員，含作畫者身上的噴漬／瘀青）＋解除致盲
+	RoundCleanupAllCharacters();
 
 	GS->SetPhase(ENiceInkPhase::Resolution, ResolutionSeconds);
 	SetPhaseTimer(ResolutionSeconds, &ANiceInkGameMode::OnResolutionDone);
@@ -425,9 +428,10 @@ void ANiceInkGameMode::OnFinaleDone()
 				Loser->MulticastLockWorkPermanent(CarbonId);
 			}
 		}
-		// 遊戲結束：所有麥克筆塗鴉（含羞辱塗鴉）洗掉
-		Loser->MulticastWashAllMarker();
 	}
+
+	// 遊戲結束：所有麥克筆塗鴉（含羞辱塗鴉）與殘留證據洗掉
+	RoundCleanupAllCharacters();
 
 	GS->SetPhase(ENiceInkPhase::PostGame, 0.0f);
 	SetPhaseTimer(0.0f, nullptr);
@@ -520,6 +524,38 @@ void ANiceInkGameMode::DebugRoboAccuse(bool bCorrect)
 			}
 		}
 		HandleAccusation(Victim, WorkId, AccusedId);
+	}), 0.1f, false);
+}
+
+void ANiceInkGameMode::RoundCleanupAllCharacters()
+{
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		It->MulticastRoundCleanup();
+	}
+}
+
+void ANiceInkGameMode::DebugRoboSpray(float AimYawWorld, uint8 OriginType)
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, AimYawWorld, OriginType]()
+	{
+		if (ANiceInkCharacter* Victim = GetVictimCharacter())
+		{
+			Victim->ServerSpray(static_cast<EInkEvidenceType>(OriginType), AimYawWorld);
+		}
+	}), 0.1f, false);
+}
+
+void ANiceInkGameMode::DebugRoboKick(float AimYawWorld)
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, AimYawWorld]()
+	{
+		if (ANiceInkCharacter* Victim = GetVictimCharacter())
+		{
+			Victim->ServerKick(AimYawWorld);
+		}
 	}), 0.1f, false);
 }
 

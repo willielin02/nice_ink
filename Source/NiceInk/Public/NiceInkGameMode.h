@@ -114,6 +114,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboAccuse(bool bCorrect);
 
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboSpray(float AimYawWorld, uint8 OriginType);
+
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboKick(float AimYawWorld);
+
 	// robo 測試：指定開場受害者的席位（-1＝隨機，正式行為）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedVictimSeat = -1;
@@ -149,6 +155,9 @@ private:
 	void OnResolutionDone();
 	void EnterFinale();
 	void OnFinaleDone();
+
+	// 回合結算清場：全員洗麥克筆與證據標記、解除致盲（SPEC：指認結算時一同洗掉）
+	void RoundCleanupAllCharacters();
 
 	void SetPhaseTimer(float Seconds, void (ANiceInkGameMode::*Handler)());
 };

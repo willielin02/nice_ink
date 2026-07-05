@@ -79,8 +79,9 @@ public:
 
 	// 世界座標 -> 身體 UV（最近三角形 + 重心插值，直讀網格 CPU 資料。
 	// 不用 FindCollisionUV——它的 FaceIndex->UV 對應在本網格上損壞，回傳亂 UV）。
+	// MaxDistance：命中點離網格的容許距離（麥克筆 10cm；膠囊命中的噴射／拳腳放寬）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
-	bool ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV);
+	bool ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance = 10.0f);
 
 	// 診斷：回報快取三角形數、最近距離與 UV（robo 測試用）
 	UFUNCTION(BlueprintCallable, Category = "Ink")

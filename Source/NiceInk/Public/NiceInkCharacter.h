@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "InkTypes.h"
 #include "NiceInkCharacter.generated.h"
 
 class UCameraComponent;
@@ -76,6 +77,17 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 KickCharges = 0;
 
+	// 沉睡者選定的噴射出發點（1=鼻／2=陰部／3=肛門；SPEC 定案 #6）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink")
+	EInkEvidenceType SelectedSprayOrigin = EInkEvidenceType::Sneeze;
+
+	// 被噴致盲（該回合內；指認結算時清除）。致盲色＝噴射物種類。
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Blinded, Category = "Nice Ink")
+	bool bBlinded = false;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	EInkEvidenceType BlindType = EInkEvidenceType::Sneeze;
+
 	UFUNCTION(BlueprintPure, Category = "Nice Ink")
 	FLinearColor GetCurrentColor() const;
 
@@ -135,6 +147,27 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerMinigameHit();
 
+	// --- 沉睡者反制（SPEC 定案 #6/#7） ---
+
+	// 噴射：以選定出發點朝世界 yaw 方向丟出投射物（醒來前任意時刻；無命中回饋）
+	UFUNCTION(Server, Reliable)
+	void ServerSpray(EInkEvidenceType Origin, float AimYawWorld);
+
+	// 拳腳：朝世界 yaw 方向掃掠；命中＝瘀青＋彈飛
+	UFUNCTION(Server, Reliable)
+	void ServerKick(float AimYawWorld);
+
+	// 命中者身上留證據標記（所有端重播進畫布）
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastAddEvidence(EInkEvidenceType Type, FVector2D UV, int32 Seed);
+
+	// server 端套用致盲（僅屬性複寫；HUD 讀 bBlinded 蓋致盲遮罩）
+	void ServerApplyBlind(EInkEvidenceType Type);
+
+	// 回合結算清場：洗麥克筆與證據、解除致盲（GameMode 對全員廣播）
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastRoundCleanup();
+
 	// --- 甦醒小遊戲（共用數學：輸入判定與 HUD 渲染都用它） ---
 
 	// 指標位置 0..1（以 server 同步時鐘驅動的往復運動）
@@ -187,6 +220,10 @@ private:
 	UFUNCTION()
 	void OnRep_EyesOpen();
 
+	UFUNCTION()
+	void OnRep_Blinded();
+
+	void PollCounterplay(APlayerController* PC);
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);

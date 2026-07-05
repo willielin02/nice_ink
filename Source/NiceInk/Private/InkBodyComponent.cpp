@@ -160,7 +160,7 @@ FString UInkBodyComponent::DebugResolveBodyUV(const FVector& WorldPosition)
 		CachedTris.Num() > 0 ? FMath::Sqrt(BestDistSq) : -1.0f, BestUV.X, BestUV.Y);
 }
 
-bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV)
+bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance)
 {
 	if (!bTriCacheBuilt && !BuildTriCache())
 	{
@@ -183,8 +183,8 @@ bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& O
 		}
 	}
 
-	// 命中點離網格太遠（>10cm）視為無效——通常代表打到別的東西
-	if (BestDistSq > FMath::Square(10.0f))
+	// 命中點離網格太遠視為無效——通常代表打到別的東西
+	if (BestDistSq > FMath::Square(MaxDistance))
 	{
 		return false;
 	}
