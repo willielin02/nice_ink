@@ -89,3 +89,9 @@ Tools/FacePipeline/__pycache__/
 
 # Blender auto-backups (previous-save copies)
 Content/**/*.blend1
+
+# Sauna 資產：只入庫管線正本（2k glb + textures + repaired fbx）；重複下載格式留本地
+SourceAssets/Sauna_localyany/sauna.zip
+SourceAssets/Sauna_localyany/sauna (1).zip
+SourceAssets/Sauna_localyany/sauna_1k.glb
+SourceAssets/Sauna_localyany/sauna.usdz

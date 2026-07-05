@@ -33,8 +33,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Prototype")
 	bool bAutoRunPrototypeFlow = true;
 
+	// 舊平面 demo 的固定相機。麥克筆系統改用 AInkTestPawn 第一人稱，預設關閉。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Prototype")
-	bool bUsePrototypeCameraInPIE = true;
+	bool bUsePrototypeCameraInPIE = false;
 
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink")
 	void StartPrototypeRound();

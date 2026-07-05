@@ -16,4 +16,5 @@ public:
 
 private:
 	FString GetPhaseLabel(ENiceInkPhase Phase) const;
+	void DrawInkCrosshair();
 };

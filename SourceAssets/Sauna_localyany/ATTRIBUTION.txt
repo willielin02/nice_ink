@@ -1,0 +1,9 @@
+Asset: "sauna" by local.yany
+Source: https://sketchfab.com/3d-models/sauna-88e05eb4ad1640a19c10e8c5e708a794
+License: CC Attribution (CC BY 4.0) - https://creativecommons.org/licenses/by/4.0/
+Downloaded: 2026-07-05
+
+REQUIRED CREDIT (must appear in game credits before any public release):
+  "Sauna" by local.yany, licensed under CC BY 4.0
+
+Files: sauna.zip (fbx original), sauna (1).zip (gltf), sauna_1k.glb, sauna_2k.glb, sauna.usdz

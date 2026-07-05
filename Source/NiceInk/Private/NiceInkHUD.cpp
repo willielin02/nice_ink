@@ -2,6 +2,7 @@
 
 #include "Engine/Canvas.h"
 #include "EngineUtils.h"
+#include "InkTestPawn.h"
 #include "NiceInkGameState.h"
 #include "TattooComponent.h"
 #include "TattooPrototypeActor.h"
@@ -78,10 +79,38 @@ void ANiceInkHUD::DrawHUD()
 		DrawText(ToolText, FLinearColor(0.92f, 0.98f, 1.0f, 1.0f), Padding, Padding + LineHeight * 3.75f, nullptr, 0.82f, false);
 	}
 
-	DrawText(TEXT("Markers: 1 Fine  2 Thick  3 Brush"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 4.75f, nullptr, 0.82f, false);
-	DrawText(TEXT("Colors: 5 Black  6 BlueBlack  7 Red  8 Green  9 Blue"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 5.75f, nullptr, 0.78f, false);
-	DrawText(TEXT("Paint: hold Left Mouse on the tattoo surface"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 6.75f, nullptr, 0.82f, false);
-	DrawText(TEXT("Guess panel placeholder: players 1-6"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 7.75f, nullptr, 0.82f, false);
+	DrawText(TEXT("Move: WASD/QE (Shift fast)   Look: mouse   Draw: hold LMB"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 4.75f, nullptr, 0.82f, false);
+	DrawText(TEXT("Palette: 1-9,0   X wash marker   C my work -> carbon"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 5.75f, nullptr, 0.82f, false);
+	DrawText(TEXT("L laser first carbon   P lock permanent   R next round   F10 export QA"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 6.75f, nullptr, 0.82f, false);
+
+	DrawInkCrosshair();
+}
+
+void ANiceInkHUD::DrawInkCrosshair()
+{
+	if (!Canvas)
+	{
+		return;
+	}
+
+	FLinearColor CrosshairColor = FLinearColor::White;
+	if (const AInkTestPawn* InkPawn = PlayerOwner ? Cast<AInkTestPawn>(PlayerOwner->GetPawn()) : nullptr)
+	{
+		CrosshairColor = InkPawn->GetCurrentColor();
+		CrosshairColor.A = 1.0f;
+	}
+
+	const float CenterX = Canvas->ClipX * 0.5f;
+	const float CenterY = Canvas->ClipY * 0.5f;
+	const float Arm = 7.0f;
+	const float Thickness = 2.0f;
+
+	DrawRect(CrosshairColor, CenterX - Arm, CenterY - Thickness * 0.5f, Arm * 2.0f, Thickness);
+	DrawRect(CrosshairColor, CenterX - Thickness * 0.5f, CenterY - Arm, Thickness, Arm * 2.0f);
+
+	// 目前選色色塊（準星右下）
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), CenterX + 14.0f, CenterY + 14.0f, 26.0f, 26.0f);
+	DrawRect(CrosshairColor, CenterX + 17.0f, CenterY + 17.0f, 20.0f, 20.0f);
 }
 
 FString ANiceInkHUD::GetPhaseLabel(ENiceInkPhase Phase) const
