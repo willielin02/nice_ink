@@ -731,8 +731,10 @@ bool ANiceInkGameMode::CanPaintOn(const ANiceInkCharacter* Painter, const ANiceI
 
 	if (GS->CurrentPhase == ENiceInkPhase::Drawing)
 	{
-		// 作畫階段：畫沉睡的受害者（誤傷開放是 M7）
-		return TargetPS->GetPlayerId() == GS->VictimPlayerId && PainterPS->GetPlayerId() != GS->VictimPlayerId;
+		// 作畫階段：畫沉睡的受害者；誤傷開放（SPEC 定案 #11）——
+		// 麥克筆可落在其他作畫者身上（被致盲後誤畫隊友＝內容）。
+		// 誤傷不進巡禮（巡禮只收受害者畫布）、結算時全洗＝零經濟污染。
+		return PainterPS->GetPlayerId() != GS->VictimPlayerId;
 	}
 	if (GS->CurrentPhase == ENiceInkPhase::Finale)
 	{
