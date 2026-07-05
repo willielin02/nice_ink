@@ -17,7 +17,9 @@ public class NiceInk : ModuleRules
 			"NetCore",
 			"UMG",
 			"Slate",
-			"SlateCore"
+			"SlateCore",
+			"OnlineSubsystem",
+			"OnlineSubsystemUtils"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new[]

@@ -12,6 +12,18 @@
 	],
 	"Plugins": [
 		{
+			"Name": "OnlineSubsystem",
+			"Enabled": true
+		},
+		{
+			"Name": "OnlineSubsystemUtils",
+			"Enabled": true
+		},
+		{
+			"Name": "OnlineSubsystemEOS",
+			"Enabled": true
+		},
+		{
 			"Name": "VibeUE",
 			"Enabled": true
 		},

@@ -212,6 +212,13 @@ public:
 	UFUNCTION(Exec)
 	void NiStart();
 
+	// 建房／搜房加入（NULL subsystem＝LAN；EOS 憑證填好後＝網路房）
+	UFUNCTION(Exec)
+	void NiHost();
+
+	UFUNCTION(Exec)
+	void NiJoin();
+
 	UFUNCTION(Exec)
 	void NiEmerge();
 

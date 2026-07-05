@@ -18,6 +18,7 @@
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkPlayerState.h"
+#include "NiceInkSessionSubsystem.h"
 #include "NiceInkTypes.h"
 #include "UObject/ConstructorHelpers.h"
 
@@ -1054,6 +1055,22 @@ void ANiceInkCharacter::ServerRequestStartMatch_Implementation()
 void ANiceInkCharacter::NiStart()
 {
 	ServerRequestStartMatch();
+}
+
+void ANiceInkCharacter::NiHost()
+{
+	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
+	{
+		Sessions->HostSession(/*bLan=*/true);
+	}
+}
+
+void ANiceInkCharacter::NiJoin()
+{
+	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
+	{
+		Sessions->JoinFirstFoundSession(/*bLan=*/true);
+	}
 }
 
 void ANiceInkCharacter::NiEmerge()
