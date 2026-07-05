@@ -17,6 +17,9 @@ for key in 7AF4 cvd caseoh ibai img1 img0; do
   "$PY" selfie_to_face_texture.py "test_selfies/${PLAYERS[$key]}" || { echo "FAILED: $key"; continue; }
   mkdir -p "out/players/$key"
   cp out/face_texture.png "out/players/$key/face_texture.png"
+  cp out/face_texture_eyes_closed.png "out/players/$key/face_texture_eyes_closed.png"
+  cp out/eye_mask.png "out/players/$key/eye_mask.png"
+  "$PY" bake_eye_ink_mask.py "out/players/$key/eye_mask.png" "out/players/$key/eye_mask_ink.png"
   cp out/skin_color.json "out/players/$key/skin_color.json"
   [ -f out/face_flags.json ] && cp out/face_flags.json "out/players/$key/face_flags.json"
   echo "=== [$key] done ==="

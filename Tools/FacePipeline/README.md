@@ -10,8 +10,17 @@
 ```bash
 # 1. 自拍 → 臉貼圖 + 膚色（v4.8 LaMa 路線；頭髮+落腮鬍移除 = 光頭素臉）
 <python> selfie_to_face_texture.py test_selfies/<selfie>.jpg
-#   輸出到 out/：face_texture.png (2048² RGBA)、skin_color.json、
-#   hair_color.json、beard_color.json、face_flags.json、seam_qa.*、debug_*
+#   輸出到 out/：face_texture.png (2048² RGBA)、face_texture_eyes_closed.png
+#   （閉眼睡臉變體：眼眶 inpaint 回眼瞼皮膚＋沿下眼瞼畫閉眼線；遊戲中昏睡
+#   狀態用，UE 端以 FaceTex 參數切換）、eye_mask.png（眼球開口區，FaceUV 空間）、
+#   skin_color.json、hair_color.json、beard_color.json、face_flags.json、
+#   seam_qa.*、debug_*
+
+# 1b. 禁畫眼球遮罩：FaceUV 空間 → 墨水圖集 UV0 空間（白=可畫、黑=眼球）
+#     M_InkBodyChar 以 InkEyeMask 參數把它乘入 marker/tattoo 層（膠帶語義）
+#     對應表 data/char17_ink_uv_map.json 由 export_ink_uv_map.py（Blender）產出，
+#     char17 網格不變就不用重跑
+<python> bake_eye_ink_mask.py out/eye_mask.png out/eye_mask_ink.png
 
 # 2. 組裝光頭 avatar（char16 + 臉貼圖 + 分層皮膚材質；圖像全打包）
 blender --background --python make_avatar_blend.py -- avatar_previews/<name>.blend

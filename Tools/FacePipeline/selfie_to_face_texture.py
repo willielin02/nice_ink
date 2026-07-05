@@ -156,6 +156,27 @@ DEBUG_BEARD_REMOVAL = OUT / "debug_beard_removal.jpg"
 BROW_L_LM = [70, 63, 105, 66, 107]
 BROW_R_LM = [336, 296, 334, 293, 300]
 
+# --- eyes-closed variant (sleeping face for the in-game passed-out state) --
+# MediaPipe eye-opening rings (ordered polygons). The variant inpaints the
+# eye opening with the surrounding lid skin and draws a closed-lash line
+# along the lower-lid arc: plain skin over the eyes reads as "no eyes";
+# the thin dark line is what makes the face read as asleep.
+EYE_L_RING = [33, 7, 163, 144, 145, 153, 154, 155, 133,
+              173, 157, 158, 159, 160, 161, 246]
+EYE_R_RING = [263, 249, 390, 373, 374, 380, 381, 382, 362,
+              398, 384, 385, 386, 387, 388, 466]
+EYES_CLOSED_PATH = OUT / "face_texture_eyes_closed.png"
+DEBUG_EYES_CLOSED = OUT / "face_texture_eyes_closed_debug.png"
+EYE_MASK_PATH = OUT / "eye_mask.png"   # 眼球開口區（FaceUV 空間）：禁畫遮罩的來源
+                                       # （bake_eye_ink_mask.py 轉到墨水圖集 UV0 空間）
+EYELID_DILATE_RATIO = 0.16      # inpaint margin around the eye opening (x eye width):
+                                # must swallow lashes/liner or their remnants ghost
+EYELID_LINE_W_RATIO = 0.05      # closed-lash line thickness (x eye width)
+EYELID_LINE_DARKEN = 0.45       # lash-line color = local lid skin * this
+EYELID_LINE_ALPHA = 0.85        # lash-line opacity at its core
+EYELID_SHADOW_ALPHA = 0.20      # soft crease shading around the line
+EYELID_SHADOW_SIGMA_RATIO = 0.10  # crease shadow blur (x eye width)
+
 FACE_OVAL_ORDER = [
     10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
     397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
@@ -922,6 +943,78 @@ def direct_extend_fill(img, hole, sigma_avg=6.0, blur=4.0, feather=3.0):
     return np.clip(img.astype(np.float32) * (1 - f) + ext * f, 0, 255).astype(np.uint8)
 
 
+# ------------------------------------------------- eyes-closed variant
+
+def eyes_closed_variant(warped, eye_masks):
+    """Bake the sleeping-face texture from the finished open-eye texture.
+
+    Per eye: TELEA-inpaint the (dilated) eye opening so the socket fills
+    with the LOCAL lid skin (keeps the socket's own shading, unlike a flat
+    skin-color paint), then draw the closed-lash line along the smoothed
+    lower contour of the eye opening - anatomically where the lashes rest
+    when the eye closes - plus a soft crease shadow so the lid reads as a
+    lid and not a decal. Line color derives from the local skin so it
+    adapts to every skin tone."""
+    out = warped.copy()
+    n_done = 0
+    for em in eye_masks:
+        m = (em > 127).astype(np.uint8)
+        if int(m.sum()) < 40:
+            print("   WARNING: eye mask too small after warp, eye skipped")
+            continue
+        ys, xs = np.nonzero(m)
+        x0, x1 = int(xs.min()), int(xs.max())
+        eye_w = max(x1 - x0, 8)
+        grow = max(2, int(round(eye_w * EYELID_DILATE_RATIO)))
+        md = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=grow)
+        filled = cv2.inpaint(out, md * 255, 5, cv2.INPAINT_TELEA)
+        # TELEA leaves directional streaks and a flat patch with a visible
+        # rim: low-pass the fill, feather the composite, and re-grain so the
+        # new lid melts into the socket instead of sitting on it as a decal
+        sm = cv2.GaussianBlur(filled.astype(np.float32), (0, 0),
+                              max(2.0, eye_w * 0.05))
+        a_f = np.clip(cv2.GaussianBlur(md.astype(np.float32), (0, 0),
+                                       max(2.0, eye_w * 0.06)), 0, 1)[..., None]
+        g = np.random.default_rng(7).normal(
+            0, 2.5, size=(m.shape[0], m.shape[1], 1)).astype(np.float32)
+        out = np.clip(out.astype(np.float32) * (1.0 - a_f)
+                      + (sm + np.repeat(g, 3, axis=2)) * a_f,
+                      0, 255).astype(np.uint8)
+
+        # closed-lash curve = quadratic fit of the opening's lower contour
+        sub = m[:, x0:x1 + 1] > 0
+        has = sub.any(axis=0)
+        rows = np.arange(m.shape[0])[:, None]
+        y_low = (sub * rows).max(axis=0).astype(np.float64)
+        cols = np.arange(x0, x1 + 1, dtype=np.float64)
+        coef = np.polyfit(cols[has], y_low[has], 2)
+        curve = np.polyval(coef, cols)
+        pts = np.stack([cols, curve], axis=1).astype(np.int32)
+
+        thick = max(2, int(round(eye_w * EYELID_LINE_W_RATIO)))
+        line_m = np.zeros(m.shape, np.float32)
+        cv2.polylines(line_m, [pts], False, 1.0, thickness=thick,
+                      lineType=cv2.LINE_AA)
+
+        # crease shadow first (wide + faint), then the crisp lash line
+        shadow = cv2.GaussianBlur(line_m, (0, 0),
+                                  max(2.0, eye_w * EYELID_SHADOW_SIGMA_RATIO))
+        shadow = (shadow / max(shadow.max(), 1e-6))[..., None]
+        out = np.clip(out.astype(np.float32)
+                      * (1.0 - EYELID_SHADOW_ALPHA * shadow), 0, 255)
+
+        ring = (cv2.dilate(md, np.ones((3, 3), np.uint8), iterations=3) > 0) & (md == 0)
+        lid_tone = (np.median(out[ring].reshape(-1, 3), axis=0)
+                    if ring.any() else np.array([120, 140, 170], np.float64))
+        line_col = lid_tone * EYELID_LINE_DARKEN
+        aa = cv2.GaussianBlur(line_m, (0, 0), 1.2)
+        a = np.clip(aa / max(aa.max(), 1e-6), 0, 1)[..., None] * EYELID_LINE_ALPHA
+        out = out * (1.0 - a) + line_col[None, None, :] * a
+        out = np.clip(out, 0, 255).astype(np.uint8)
+        n_done += 1
+    return out, n_done
+
+
 def seam_qa(warped, content_mask, uv_mask, skin_tex=None):
     """Detect boundary color mismatch: per boundary pixel of the CONTENT
     region (selfie content vs fill), dE between the local mean color sampled
@@ -1466,16 +1559,23 @@ def main():
     skin_src = cv2.resize(skin512w, (w, h), interpolation=cv2.INTER_NEAREST)
     if beard_det is not None:
         skin_src[beard_det] = 0     # beard px are not lighting probes
+    eye_l_src = np.zeros((h, w), np.uint8)
+    eye_r_src = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(eye_l_src, [np.round(all_lm[EYE_L_RING]).astype(np.int32)], 255)
+    cv2.fillPoly(eye_r_src, [np.round(all_lm[EYE_R_RING]).astype(np.int32)], 255)
     if expansion is not None:
         warped, extras = tps_warp_expanded(selfie_filled, src_inflated, expansion,
                                            skin_color, lm_pts, island_center_x,
-                                           extra=[head_mask, skin_src])
+                                           extra=[head_mask, skin_src,
+                                                  eye_l_src, eye_r_src])
     else:
         uv_target = uv_sampled.copy()
         uv_target[:, 1] += FACEUV_Y_OFFSET
         warped, extras = tps_warp(selfie_filled, src_inflated, uv_target, skin_color,
-                                  lm_pts, island_center_x, extra=[head_mask, skin_src])
-    content_mask, skin_tex = extras
+                                  lm_pts, island_center_x,
+                                  extra=[head_mask, skin_src,
+                                         eye_l_src, eye_r_src])
+    content_mask, skin_tex, eye_l_w, eye_r_w = extras
 
     print("8b. Same-signal seam (tone flatten to SkinColor)...")
     warped = flatten_to_skin(warped, content_mask, skin_color, expansion)
@@ -1567,6 +1667,12 @@ def main():
                   f" | line hotspots: {len(qa['line_hotspots_xy_dev'])}")
             print(f"   -> {SEAM_QA_PNG}")
 
+    print("11b. Eyes-closed variant (sleeping face)...")
+    closed, n_eyes = eyes_closed_variant(warped, [eye_l_w, eye_r_w])
+    print(f"   {n_eyes}/2 eyes closed")
+    cv2.imwrite(str(EYE_MASK_PATH), np.maximum(eye_l_w, eye_r_w))
+    print(f"   -> {EYE_MASK_PATH}")
+
     print("12. Saving outputs...")
     rgba = np.zeros((TEX_SIZE, TEX_SIZE, 4), dtype=np.uint8)
     rgba[:, :, :3] = warped
@@ -1574,10 +1680,21 @@ def main():
     cv2.imwrite(str(OUTPUT_PATH), rgba)
     print(f"   -> {OUTPUT_PATH}")
 
+    rgba_c = np.zeros((TEX_SIZE, TEX_SIZE, 4), dtype=np.uint8)
+    rgba_c[:, :, :3] = closed
+    rgba_c[:, :, 3] = alpha
+    cv2.imwrite(str(EYES_CLOSED_PATH), rgba_c)
+    print(f"   -> {EYES_CLOSED_PATH}")
+
     debug = warped.copy()
     debug[alpha == 0] = [40, 40, 40]
     cv2.imwrite(str(DEBUG_PATH), debug)
     print(f"   -> {DEBUG_PATH}")
+
+    debug_c = closed.copy()
+    debug_c[alpha == 0] = [40, 40, 40]
+    cv2.imwrite(str(DEBUG_EYES_CLOSED), debug_c)
+    print(f"   -> {DEBUG_EYES_CLOSED}")
 
     print("\nDone!")
 
