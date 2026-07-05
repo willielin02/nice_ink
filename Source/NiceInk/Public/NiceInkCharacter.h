@@ -39,6 +39,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UInkCanvasComponent> InkCanvas;
 
+	// 站姿／仰躺大字睡姿網格（同 UV 圖集，切換不影響墨水 RT）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
+	TObjectPtr<UStaticMesh> StandMesh;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
+	TObjectPtr<UStaticMesh> SleepMesh;
+
 	// 麥克筆觸及距離（公分）。刻意短——近臉作畫原則：要畫就得湊近。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "50", ClampMax = "500"))
 	float PaintReach = 140.0f;
@@ -49,9 +56,25 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
-	// 沉睡中（受害者入座～現身之間）。眼睛閉上、移動鎖定。
+	// 沉睡中（受害者入座～現身之間）。移動鎖定；閉眼與否看 bEyesOpen。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Asleep, Category = "Nice Ink")
 	bool bAsleep = false;
+
+	// 無聲甦醒（定案 #8）：第三次小遊戲成功後睜眼。零系統提示——
+	// 其他玩家能觀察到的破綻只有睜眼貼圖（頭部轉動待骨骼版身體）。
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_EyesOpen, Category = "Nice Ink")
+	bool bEyesOpen = false;
+
+	// 甦醒小遊戲累計成功數（server 權威；第 1 次＝噴射、第 2 次＝拳腳、第 3 次＝可甦醒）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 MinigameHits = 0;
+
+	// 反制工具庫存（小遊戲成功發放；睜眼即過期——SPEC 定案 #6/#7）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 SprayCharges = 0;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 KickCharges = 0;
 
 	UFUNCTION(BlueprintPure, Category = "Nice Ink")
 	FLinearColor GetCurrentColor() const;
@@ -103,9 +126,22 @@ public:
 
 	// --- 受害者流程 RPC ---
 
-	// 沉睡中按 WASD＝請求現身（M2 起由甦醒小遊戲第三次成功解鎖；M1 直接放行）
+	// 沉睡中按 WASD＝請求現身（server 驗證小遊戲已完成三次成功）
 	UFUNCTION(Server, Reliable)
 	void ServerRequestEmerge();
+
+	// 甦醒小遊戲：客端判定停進 zone 後回報一次成功。
+	// （信任客端 timing——party game 取捨；伺服器仍驗證身分/相位/次數上限）
+	UFUNCTION(Server, Reliable)
+	void ServerMinigameHit();
+
+	// --- 甦醒小遊戲（共用數學：輸入判定與 HUD 渲染都用它） ---
+
+	// 指標位置 0..1（以 server 同步時鐘驅動的往復運動）
+	static float MinigameIndicatorPos(float ServerTime, float Period);
+
+	// 失手冷卻結束時間（server time；僅本地受害者使用）
+	float MinigameCooldownUntil = 0.0f;
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
@@ -129,6 +165,7 @@ public:
 
 private:
 	float CameraPitch = 0.0f;
+	float SleepCameraYaw = 0.0f; // 沉睡時滑鼠只轉頭（相機），不轉身
 	int32 AppliedAvatarIndex = INDEX_NONE;
 
 	// 作畫中（本地端）
@@ -147,9 +184,13 @@ private:
 	UFUNCTION()
 	void OnRep_Asleep();
 
+	UFUNCTION()
+	void OnRep_EyesOpen();
+
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);
+	void PollMinigame(APlayerController* PC);
 	void PollPalette(APlayerController* PC);
 	void PollPaint(APlayerController* PC, float DeltaSeconds);
 	void StopPaintingLocal();

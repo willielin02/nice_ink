@@ -20,12 +20,13 @@
 
 namespace
 {
-	// char17 網格：腳底在原點；PIE 實測 yaw +90 時看到後腦勺 → 正確為 -90（臉對齊角色前方 +X）
+	// char17 網格：腳底在原點、臉朝本地 +Y（PIE 實測）；yaw -90 → 臉對齊角色前方 +X
 	const FVector BodyStandRelLoc(0.0f, 0.0f, -92.0f);
 	const FRotator BodyStandRelRot(0.0f, -90.0f, 0.0f);
-	// 仰躺大字（定案 #18）：臉朝上、頭朝 +X，pivot（腳底）偏移讓身體置中
-	const FVector BodyLieRelLoc(-87.0f, 0.0f, -74.0f);
-	const FRotator BodyLieRelRot(0.0f, -90.0f, -90.0f);
+	// 仰躺大字（定案 #18）：PIE 實測 (pitch 0, yaw +90, roll -90) ＝臉朝上、頭朝 +X；
+	// pivot（腳底）偏 -87 讓身體置中，z -60 貼地
+	const FVector BodyLieRelLoc(-87.0f, 0.0f, -60.0f);
+	const FRotator BodyLieRelRot(0.0f, 90.0f, -90.0f);
 
 	constexpr float PointFlushInterval = 0.05f;
 	constexpr int32 PointFlushMaxBatch = 10;
@@ -56,7 +57,8 @@ ANiceInkCharacter::ANiceInkCharacter()
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyMeshAsset(TEXT("/Game/Characters/SM_Char17.SM_Char17"));
 	if (BodyMeshAsset.Succeeded())
 	{
-		Body->SetStaticMesh(BodyMeshAsset.Object);
+		StandMesh = BodyMeshAsset.Object;
+		Body->SetStaticMesh(StandMesh);
 	}
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> BodyMaterialAsset(TEXT("/Game/Characters/M_InkBodyChar.M_InkBodyChar"));
 	if (BodyMaterialAsset.Succeeded())
@@ -89,6 +91,10 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkCharacter, bAsleep);
+	DOREPLIFETIME(ANiceInkCharacter, bEyesOpen);
+	DOREPLIFETIME(ANiceInkCharacter, MinigameHits);
+	DOREPLIFETIME(ANiceInkCharacter, SprayCharges);
+	DOREPLIFETIME(ANiceInkCharacter, KickCharges);
 }
 
 void ANiceInkCharacter::Tick(float DeltaSeconds)
@@ -105,6 +111,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	PollLook(PC, DeltaSeconds);
 	PollMove(PC);
+	PollMinigame(PC);
 	PollPalette(PC);
 	PollPaint(PC, DeltaSeconds);
 }
@@ -129,17 +136,24 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 	float MouseY = 0.0f;
 	PC->GetInputMouseDelta(MouseX, MouseY);
 
-	// 沉睡時滑鼠僅控制頭部視野（M2 接無聲甦醒的轉頭）；不轉身體
-	if (!bAsleep)
+	if (bAsleep)
 	{
-		FRotator Ctrl = PC->GetControlRotation();
-		Ctrl.Yaw += MouseX * LookSensitivity;
-		Ctrl.Pitch = 0.0f;
-		Ctrl.Roll = 0.0f;
-		PC->SetControlRotation(Ctrl);
+		// 沉睡：滑鼠僅控制頭部視野（單純轉頭，SPEC 定案 #8）；身體不動
+		SleepCameraYaw = FMath::Clamp(SleepCameraYaw + MouseX * LookSensitivity, -110.0f, 110.0f);
+		CameraPitch = FMath::Clamp(CameraPitch + MouseY * LookSensitivity, -89.0f, 89.0f);
+		FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, SleepCameraYaw, 0.0f));
+		return;
 	}
 
-	CameraPitch = FMath::Clamp(CameraPitch + MouseY * LookSensitivity, -89.0f, 89.0f);
+	// 俯仰也走 control rotation：滑鼠改的是控制器姿態，
+	// 相機每 tick 對齊 pitch（yaw 由 bUseControllerRotationYaw 轉動膠囊）
+	FRotator Ctrl = PC->GetControlRotation();
+	Ctrl.Yaw += MouseX * LookSensitivity;
+	Ctrl.Pitch = FMath::ClampAngle(Ctrl.Pitch + MouseY * LookSensitivity, -89.0f, 89.0f);
+	Ctrl.Roll = 0.0f;
+	PC->SetControlRotation(Ctrl);
+
+	CameraPitch = Ctrl.Pitch;
 	FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
 }
 
@@ -151,8 +165,8 @@ void ANiceInkCharacter::PollMove(APlayerController* PC)
 
 	if (bAsleep)
 	{
-		// 按 WASD＝請求現身（定案 #17）。M2 起由甦醒小遊戲第三次成功解鎖。
-		if (bAnyMoveKey && !bEmergeRequested)
+		// 按 WASD＝請求現身（定案 #17）；只有睜眼後才有意義（server 亦驗證）
+		if (bAnyMoveKey && bEyesOpen && !bEmergeRequested)
 		{
 			bEmergeRequested = true;
 			ServerRequestEmerge();
@@ -173,6 +187,50 @@ void ANiceInkCharacter::PollMove(APlayerController* PC)
 	if (PC->IsInputKeyDown(EKeys::S)) { AddMovementInput(Forward, -1.0f); }
 	if (PC->IsInputKeyDown(EKeys::D)) { AddMovementInput(Right, 1.0f); }
 	if (PC->IsInputKeyDown(EKeys::A)) { AddMovementInput(Right, -1.0f); }
+}
+
+float ANiceInkCharacter::MinigameIndicatorPos(float ServerTime, float Period)
+{
+	// 三角波往復：0 → 1 → 0，一趟 Period 秒
+	const float Cycle = FMath::Fmod(ServerTime, Period * 2.0f) / Period; // 0..2
+	return Cycle <= 1.0f ? Cycle : 2.0f - Cycle;
+}
+
+void ANiceInkCharacter::PollMinigame(APlayerController* PC)
+{
+	// 只有沉睡且尚未睜眼的受害者在玩小遊戲
+	if (!bAsleep || bEyesOpen || MinigameHits >= 3)
+	{
+		return;
+	}
+	if (!PC->WasInputKeyJustPressed(EKeys::SpaceBar))
+	{
+		return;
+	}
+
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS)
+	{
+		return;
+	}
+
+	const float Now = GS->GetServerWorldTimeSeconds();
+	if (Now < MinigameCooldownUntil)
+	{
+		return; // 冷卻中按下無效（不重置冷卻）
+	}
+
+	const float Pos = MinigameIndicatorPos(Now, GS->MinigamePeriod);
+	const float HalfZone = GS->MinigameZoneWidth * 0.5f;
+	if (FMath::Abs(Pos - 0.5f) <= HalfZone)
+	{
+		ServerMinigameHit();
+	}
+	else
+	{
+		// 失手：十秒冷卻（只鎖按鍵，不清成功數——SPEC 定案 #5）
+		MinigameCooldownUntil = Now + GS->MinigameMissCooldown;
+	}
 }
 
 void ANiceInkCharacter::PollPalette(APlayerController* PC)
@@ -304,6 +362,10 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 
 	if (bNewAsleep)
 	{
+		MinigameHits = 0;
+		bEyesOpen = false;
+		SprayCharges = 0;
+		KickCharges = 0;
 		SeatTransform = GetActorTransform();
 		SetActorTransform(LieTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->StopMovementImmediately();
@@ -311,11 +373,37 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 	}
 	else
 	{
+		// 睜眼即過期：未用完的噴射／拳腳作廢（SPEC 定案 #6/#7）
+		SprayCharges = 0;
+		KickCharges = 0;
 		SetActorTransform(SeatTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 	}
 
 	ApplySleepVisual();
+}
+
+void ANiceInkCharacter::ServerMinigameHit_Implementation()
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const APlayerState* PS = GetPlayerState();
+	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || bEyesOpen || MinigameHits >= 3)
+	{
+		return;
+	}
+
+	++MinigameHits;
+	switch (MinigameHits)
+	{
+	case 1: ++SprayCharges; break;   // 第 1 次＝噴射 ×1
+	case 2: ++KickCharges; break;    // 第 2 次＝拳腳 ×1
+	case 3:
+		bEyesOpen = true;            // 第 3 次＝無聲甦醒：睜眼、零提示
+		ApplySleepVisual();
+		break;
+	default: break;
+	}
 }
 
 void ANiceInkCharacter::OnRep_Asleep()
@@ -328,6 +416,12 @@ void ANiceInkCharacter::OnRep_Asleep()
 	}
 }
 
+void ANiceInkCharacter::OnRep_EyesOpen()
+{
+	// 睜眼貼圖切換＝其他玩家能觀察到的唯一破綻（不播音效、不通知）
+	ApplySleepVisual();
+}
+
 void ANiceInkCharacter::ApplySleepVisual()
 {
 	if (!Body)
@@ -335,7 +429,18 @@ void ANiceInkCharacter::ApplySleepVisual()
 		return;
 	}
 
-	Body->SetEyesClosed(bAsleep);
+	Body->SetEyesClosed(bAsleep && !bEyesOpen);
+
+	// 睡姿網格惰性載入（資產尚未匯入時退回站姿網格翻轉）
+	if (bAsleep && !SleepMesh)
+	{
+		SleepMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Characters/SM_Char17_Sleep.SM_Char17_Sleep"));
+	}
+	if (UStaticMesh* WantedMesh = bAsleep && SleepMesh ? SleepMesh.Get() : StandMesh.Get())
+	{
+		Body->SwapBodyMesh(WantedMesh);
+	}
+
 	Body->SetRelativeLocation(bAsleep ? BodyLieRelLoc : BodyStandRelLoc);
 	Body->SetRelativeRotation(bAsleep ? BodyLieRelRot : BodyStandRelRot);
 
@@ -343,9 +448,24 @@ void ANiceInkCharacter::ApplySleepVisual()
 	// 不受受害者入睡前的視角污染
 	bUseControllerRotationYaw = !bAsleep;
 
-	if (bAsleep && IsLocallyControlled())
+	if (IsLocallyControlled())
 	{
-		bEmergeRequested = false;
+		if (bAsleep)
+		{
+			bEmergeRequested = false;
+			// 相機移到躺姿頭部、預設仰望天花板；睜眼後就是實景視野
+			SleepCameraYaw = 0.0f;
+			CameraPitch = 55.0f;
+			FirstPersonCamera->SetRelativeLocation(BodyLieRelLoc + FVector(172.0f, 0.0f, 22.0f));
+			FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+		}
+		else
+		{
+			SleepCameraYaw = 0.0f;
+			CameraPitch = 0.0f;
+			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 62.0f));
+			FirstPersonCamera->SetRelativeRotation(FRotator::ZeroRotator);
+		}
 	}
 }
 

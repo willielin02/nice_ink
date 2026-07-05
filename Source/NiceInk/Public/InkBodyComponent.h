@@ -69,6 +69,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void SetEyesClosed(bool bClosed);
 
+	// 換身體網格（站姿↔睡姿）。兩個網格共用同一套 UV 圖集，
+	// 墨水 RT 原樣沿用；三角快取失效重建。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void SwapBodyMesh(UStaticMesh* NewMesh);
+
 	UFUNCTION(BlueprintPure, Category = "Ink")
 	bool AreEyesClosed() const { return bEyesClosed; }
 

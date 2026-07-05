@@ -64,19 +64,21 @@ float ANiceInkGameMode::ProbeFloorZ(const FVector& At) const
 
 FTransform ANiceInkGameMode::GetSeatTransform(int32 SeatIndex) const
 {
-	const float Angle = FMath::DegreesToRadians(SeatIndex * 60.0f);
-	FVector Location = RingCenter + FVector(FMath::Cos(Angle) * RingRadiusX, FMath::Sin(Angle) * RingRadiusY, 0.0f);
+	const FVector2D Spot = SeatSpots.Num() > 0 ? SeatSpots[SeatIndex % SeatSpots.Num()] : FVector2D::ZeroVector;
+	FVector Location(Spot.X, Spot.Y, 0.0f);
 	Location.Z = ProbeFloorZ(Location) + 94.0f;
 
-	const FVector ToCenter = (FVector(RingCenter.X, RingCenter.Y, Location.Z) - Location).GetSafeNormal2D();
-	return FTransform(ToCenter.Rotation(), Location);
+	// 面向躺位（房間的舞台中心）
+	const FVector Focus(VictimLieSpot.X, VictimLieSpot.Y, Location.Z);
+	const FVector ToFocus = (Focus - Location).GetSafeNormal2D();
+	return FTransform(ToFocus.Rotation(), Location);
 }
 
 FTransform ANiceInkGameMode::GetVictimLieTransform() const
 {
-	FVector Location = RingCenter;
-	Location.Z = ProbeFloorZ(RingCenter) + 94.0f;
-	return FTransform(FRotator::ZeroRotator, Location);
+	FVector Location(VictimLieSpot.X, VictimLieSpot.Y, 0.0f);
+	Location.Z = ProbeFloorZ(Location) + 94.0f;
+	return FTransform(FRotator(0.0f, VictimLieYaw, 0.0f), Location);
 }
 
 // --- 流程 ---
@@ -146,6 +148,20 @@ void ANiceInkGameMode::OnBottleSpinDone()
 		return;
 	}
 
+	// robo 測試可強制指定席位
+	if (DebugForcedVictimSeat >= 0)
+	{
+		for (APlayerState* PS : GS->PlayerArray)
+		{
+			const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
+			if (NIPS && NIPS->SeatIndex == DebugForcedVictimSeat)
+			{
+				EnterSeating(NIPS->GetPlayerId());
+				return;
+			}
+		}
+	}
+
 	// 轉酒瓶：純儀式，只在開場使用；此後受害者一律由猜對指認產生
 	const int32 Pick = FMath::RandRange(0, GS->PlayerArray.Num() - 1);
 	EnterSeating(GS->PlayerArray[Pick]->GetPlayerId());
@@ -174,6 +190,15 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	GS->TourWorkNumber = 0;
 	GS->TourWorkCount = 0;
 
+	// 小遊戲難度＝罰酒杯數（酒越深 zone 越窄）
+	const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
+	const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
+	GS->MinigamePeriod = MinigamePeriodSeconds;
+	GS->MinigameMissCooldown = MinigameMissCooldownSeconds;
+	GS->MinigameZoneWidth = MinigameZoneWidthByCup.Num() > 0
+		? MinigameZoneWidthByCup[FMath::Clamp(Cups, 0, MinigameZoneWidthByCup.Num() - 1)]
+		: 0.12f;
+
 	if (ANiceInkCharacter* Victim = GetVictimCharacter())
 	{
 		Victim->MulticastSetRoundIndex(GS->CurrentRound);
@@ -191,7 +216,7 @@ void ANiceInkGameMode::OnSeatingDone()
 	SetPhaseTimer(0.0f, nullptr);
 }
 
-void ANiceInkGameMode::HandleEmergeRequest(ANiceInkCharacter* Requester)
+void ANiceInkGameMode::HandleEmergeRequest(ANiceInkCharacter* Requester, bool bForce)
 {
 	ANiceInkGameState* GS = NIState();
 	if (!GS || GS->CurrentPhase != ENiceInkPhase::Drawing || !Requester)
@@ -205,7 +230,12 @@ void ANiceInkGameMode::HandleEmergeRequest(ANiceInkCharacter* Requester)
 		return;
 	}
 
-	// M2 起這裡要驗證甦醒小遊戲已完成第三次成功；M1 直接放行
+	// 現身的前提＝無聲甦醒（第三次小遊戲成功）；robo 測試可強制
+	if (!bForce && Requester->MinigameHits < 3)
+	{
+		return;
+	}
+
 	Requester->ServerSetAsleep(false, FTransform::Identity);
 	EnterTour();
 }
@@ -447,7 +477,7 @@ void ANiceInkGameMode::DebugRoboEmerge()
 	FTimerHandle Unused;
 	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
 	{
-		HandleEmergeRequest(GetVictimCharacter());
+		HandleEmergeRequest(GetVictimCharacter(), /*bForce=*/true);
 	}), 0.1f, false);
 }
 

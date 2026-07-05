@@ -23,6 +23,13 @@ void ANiceInkHUD::DrawHUD()
 	const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
 	const ANiceInkPlayerState* MyPS = PlayerOwner ? PlayerOwner->GetPlayerState<ANiceInkPlayerState>() : nullptr;
 
+	// 沉睡端：視覺全遮蔽——黑屏＋小遊戲＋姿勢面板，其他 HUD 一概不畫
+	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
+	{
+		DrawVictimSleepUI(MyChar, GS);
+		return;
+	}
+
 	const float Padding = 18.0f;
 	const float LineHeight = 21.0f;
 	float Y = Padding;
@@ -89,9 +96,10 @@ void ANiceInkHUD::DrawHUD()
 		Y += LineHeight;
 	}
 
-	if (MyChar && MyChar->bAsleep)
+	if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
 	{
-		DrawText(TEXT("You are ASLEEP. Press WASD to wake & emerge (minigame comes in M2)."),
+		// 無聲甦醒中：實景視野；提示只給受害者本人
+		DrawText(TEXT("Eyes open. Look around (mouse). WASD = stand up & end the drawing phase."),
 			FLinearColor(1.0f, 1.0f, 0.5f, 1.0f), Padding, Y, nullptr, 0.85f, false);
 		Y += LineHeight;
 	}
@@ -103,6 +111,86 @@ void ANiceInkHUD::DrawHUD()
 		FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Y, nullptr, 0.8f, false);
 
 	DrawInkCrosshair();
+}
+
+void ANiceInkHUD::DrawVictimSleepUI(const ANiceInkCharacter* MyChar, const ANiceInkGameState* GS)
+{
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+
+	// 視覺全遮蔽：看不到任何人、任何筆跡、自己身上任何刺青
+	DrawRect(FLinearColor(0.01f, 0.01f, 0.015f, 1.0f), 0.0f, 0.0f, W, H);
+
+	if (!GS)
+	{
+		return;
+	}
+
+	const float Now = GS->GetServerWorldTimeSeconds();
+	const float BarW = W * 0.5f;
+	const float BarH = 26.0f;
+	const float BarX = (W - BarW) * 0.5f;
+	const float BarY = H * 0.42f;
+
+	// 軸
+	DrawRect(FLinearColor(0.15f, 0.15f, 0.18f, 1.0f), BarX, BarY, BarW, BarH);
+	// zone（置中）
+	const float ZoneW = BarW * GS->MinigameZoneWidth;
+	DrawRect(FLinearColor(0.15f, 0.5f, 0.2f, 1.0f), BarX + (BarW - ZoneW) * 0.5f, BarY, ZoneW, BarH);
+	// 指標
+	const float Pos = ANiceInkCharacter::MinigameIndicatorPos(Now, GS->MinigamePeriod);
+	DrawRect(FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), BarX + BarW * Pos - 2.0f, BarY - 6.0f, 4.0f, BarH + 12.0f);
+
+	// 成功計數 pips ＋ 獎勵階梯標籤
+	static const TCHAR* PipLabels[3] = { TEXT("SPRAY"), TEXT("KICK"), TEXT("WAKE") };
+	for (int32 Pip = 0; Pip < 3; ++Pip)
+	{
+		const float PipX = BarX + Pip * 96.0f;
+		const bool bEarned = MyChar->MinigameHits > Pip;
+		DrawRect(bEarned ? FLinearColor(0.9f, 0.75f, 0.2f, 1.0f) : FLinearColor(0.2f, 0.2f, 0.24f, 1.0f),
+			PipX, BarY + BarH + 14.0f, 84.0f, 20.0f);
+		DrawText(PipLabels[Pip], bEarned ? FLinearColor::Black : FLinearColor(0.6f, 0.6f, 0.6f, 1.0f),
+			PipX + 8.0f, BarY + BarH + 16.0f, nullptr, 0.85f, false);
+	}
+
+	// 冷卻狀態
+	const float CooldownLeft = MyChar->MinigameCooldownUntil - Now;
+	if (CooldownLeft > 0.0f)
+	{
+		DrawText(FString::Printf(TEXT("MISS — locked %.1fs"), CooldownLeft),
+			FLinearColor(1.0f, 0.35f, 0.3f, 1.0f), BarX, BarY - 34.0f, nullptr, 1.1f, false);
+	}
+	else
+	{
+		DrawText(TEXT("SPACE = stop the needle in the zone (3 hits to wake)"),
+			FLinearColor(0.8f, 0.85f, 0.9f, 1.0f), BarX, BarY - 34.0f, nullptr, 1.0f, false);
+	}
+
+	// 姿勢面板（左下）：自己身體的示意——當前姿勢與朝向。
+	// 永不顯示身上墨跡的即時變化（SPEC 護欄）。
+	const float PanelX = 40.0f;
+	const float PanelY = H - 240.0f;
+	DrawRect(FLinearColor(0.06f, 0.06f, 0.08f, 1.0f), PanelX - 12.0f, PanelY - 12.0f, 220.0f, 200.0f);
+	DrawText(TEXT("POSE: FACE UP"), FLinearColor(0.7f, 0.8f, 0.9f, 1.0f), PanelX, PanelY, nullptr, 0.9f, false);
+	// 極簡人形俯視圖：頭（圓 → 方塊近似）＋軀幹＋四肢大字
+	const float BodyCX = PanelX + 98.0f;
+	const float BodyCY = PanelY + 106.0f;
+	const FLinearColor BodyColor(0.55f, 0.42f, 0.34f, 1.0f);
+	DrawRect(BodyColor, BodyCX - 9.0f, BodyCY - 64.0f, 18.0f, 18.0f);              // 頭
+	DrawRect(BodyColor, BodyCX - 14.0f, BodyCY - 44.0f, 28.0f, 62.0f);             // 軀幹
+	Canvas->K2_DrawLine(FVector2D(BodyCX - 12.0f, BodyCY - 38.0f), FVector2D(BodyCX - 44.0f, BodyCY - 10.0f), 5.0f, BodyColor);  // 左臂
+	Canvas->K2_DrawLine(FVector2D(BodyCX + 12.0f, BodyCY - 38.0f), FVector2D(BodyCX + 44.0f, BodyCY - 10.0f), 5.0f, BodyColor);  // 右臂
+	Canvas->K2_DrawLine(FVector2D(BodyCX - 8.0f, BodyCY + 18.0f), FVector2D(BodyCX - 30.0f, BodyCY + 58.0f), 5.0f, BodyColor);   // 左腿
+	Canvas->K2_DrawLine(FVector2D(BodyCX + 8.0f, BodyCY + 18.0f), FVector2D(BodyCX + 30.0f, BodyCY + 58.0f), 5.0f, BodyColor);   // 右腿
+
+	// 工具庫存（右下）
+	const float ToolY = H - 120.0f;
+	DrawText(FString::Printf(TEXT("SPRAY x%d   KICK x%d   (expire when you wake)"), MyChar->SprayCharges, MyChar->KickCharges),
+		FLinearColor(0.85f, 0.8f, 0.6f, 1.0f), W - 480.0f, ToolY, nullptr, 0.9f, false);
+
+	// 聽覺開放提示
+	DrawText(TEXT("You hear the whole room. Voices have no direction. They may be lying."),
+		FLinearColor(0.45f, 0.45f, 0.5f, 1.0f), BarX, H - 60.0f, nullptr, 0.85f, false);
 }
 
 void ANiceInkHUD::DrawInkCrosshair()

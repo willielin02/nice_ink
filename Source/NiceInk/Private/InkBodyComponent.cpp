@@ -56,6 +56,22 @@ void UInkBodyComponent::BindCanvas(UInkCanvasComponent* Canvas)
 	ApplyFaceTexture();
 }
 
+void UInkBodyComponent::SwapBodyMesh(UStaticMesh* NewMesh)
+{
+	if (!NewMesh || GetStaticMesh() == NewMesh)
+	{
+		return;
+	}
+	SetStaticMesh(NewMesh);
+	bTriCacheBuilt = false;
+	CachedTris.Reset();
+	// SetStaticMesh 會重設材質槽為新網格預設——把 MID 綁回去
+	if (DynamicBodyMaterial)
+	{
+		SetMaterial(0, DynamicBodyMaterial);
+	}
+}
+
 void UInkBodyComponent::SetEyesClosed(bool bClosed)
 {
 	bEyesClosed = bClosed;

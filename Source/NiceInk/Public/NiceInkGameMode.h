@@ -27,16 +27,25 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
-	// --- 場地配置（L_Sauna 的環形席位；沿用六人擺位橢圓） ---
+	// --- 場地配置（L_Sauna 實測：房間中央是火爐，淨空地板在北側與西側走道） ---
+
+	// 六個席位（2D；z 由地板探測決定）。實測避開火爐與牆外。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
+	TArray<FVector2D> SeatSpots = {
+		FVector2D(155.0f, -40.0f),   // 東長凳
+		FVector2D(100.0f, 150.0f),   // 東北地板
+		FVector2D(-100.0f, 150.0f),  // 西北地板
+		FVector2D(-235.0f, 60.0f),   // 西長凳
+		FVector2D(-300.0f, -150.0f), // 西南走道
+		FVector2D(100.0f, -250.0f),  // 南側地板
+	};
+
+	// 受害者仰躺位置（淨空地板；頭朝 +X）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
+	FVector2D VictimLieSpot = FVector2D(0.0f, 75.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
-	FVector RingCenter = FVector(-105.0f, -40.0f, 0.0f);
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
-	float RingRadiusX = 260.0f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
-	float RingRadiusY = 200.0f;
+	float VictimLieYaw = 0.0f;
 
 	// --- 流程參數 ---
 
@@ -70,10 +79,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Flow")
 	int32 PenaltyCupsToFinale = 3;
 
+	// --- 甦醒小遊戲參數（playtest 旋鈕；SPEC 待定 #2） ---
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
+	float MinigamePeriodSeconds = 1.6f;
+
+	// zone 佔軸比例，索引＝當前罰酒杯數（酒越深睡越久、被畫越滿）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
+	TArray<float> MinigameZoneWidthByCup = { 0.12f, 0.09f, 0.06f };
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
+	float MinigameMissCooldownSeconds = 10.0f;
+
 	// --- 玩家角色的入口 ---
 
 	void RequestStartMatch();
-	void HandleEmergeRequest(ANiceInkCharacter* Requester);
+	void HandleEmergeRequest(ANiceInkCharacter* Requester, bool bForce = false);
 	void HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId, int32 AccusedPlayerId);
 
 	// 作畫許可（server 權威）：作畫階段畫受害者；終局羞辱時間畫輸家。
@@ -92,6 +113,10 @@ public:
 
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboAccuse(bool bCorrect);
+
+	// robo 測試：指定開場受害者的席位（-1＝隨機，正式行為）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
+	int32 DebugForcedVictimSeat = -1;
 
 private:
 	FTimerHandle PhaseTimerHandle;
