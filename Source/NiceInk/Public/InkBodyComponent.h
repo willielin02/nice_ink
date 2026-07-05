@@ -87,6 +87,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	FString DebugResolveBodyUV(const FVector& WorldPosition);
 
+	// UV -> 世界座標（找包含該 UV 的三角形做重心插值）。
+	// 巡禮鏡頭用：從筆劃 UV 反推身體表面位置。UV 圖集有縫隙：找不到回傳 false。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	bool ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition);
+
 private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> DynamicBodyMaterial;

@@ -190,6 +190,8 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	GS->TourWorkId = INDEX_NONE;
 	GS->TourWorkNumber = 0;
 	GS->TourWorkCount = 0;
+	GS->TourWorkIdList.Reset();
+	GS->ResolutionWorkId = INDEX_NONE;
 
 	// 小遊戲難度＝罰酒杯數（酒越深 zone 越窄）
 	const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
@@ -270,6 +272,7 @@ void ANiceInkGameMode::EnterTour()
 
 	TourCursor = 0;
 	GS->TourWorkCount = TourWorkIds.Num();
+	GS->TourWorkIdList = TourWorkIds;
 	GS->SetPhase(ENiceInkPhase::Tour, TourSecondsPerWork * TourWorkIds.Num());
 	AdvanceTour();
 }
@@ -334,6 +337,7 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 
 	const bool bCorrect = PickedWork.AuthorId == AccusedPlayerId;
 	GS->RevealedAuthorId = PickedWork.AuthorId; // 猜對＝證實；猜錯＝真作者現身
+	GS->ResolutionWorkId = WorkId;              // 鏡頭聚焦被選那幅
 	bPendingFinale = false;
 
 	if (bCorrect)
@@ -347,16 +351,28 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 		GS->LastAccusationResult = ENiceInkAccusationResult::Wrong;
 		VictimPS->PenaltyCups++;
 		PendingNextVictimId = GS->VictimPlayerId; // 繼續畫他
-		// 被選中那幅由真作者轉碳黑（M4 加上親手刷的演出；規則先行）
-		Victim->MulticastConvertWorkToCarbon(WorkId);
 		bPendingFinale = VictimPS->PenaltyCups >= PenaltyCupsToFinale;
 	}
 
-	// 麥克筆與證據標記全洗（全員，含作畫者身上的噴漬／瘀青）＋解除致盲
-	RoundCleanupAllCharacters();
-
 	GS->SetPhase(ENiceInkPhase::Resolution, ResolutionSeconds);
 	SetPhaseTimer(ResolutionSeconds, &ANiceInkGameMode::OnResolutionDone);
+
+	// 上墨儀式：鏡頭就位後（+1.2s）當眾轉碳黑（猜錯）＋全場洗掉麥克筆與證據
+	const bool bWrongGuess = !bCorrect;
+	const int32 CeremonyWorkId = WorkId;
+	FTimerHandle CeremonyHandle;
+	GetWorldTimerManager().SetTimer(CeremonyHandle, FTimerDelegate::CreateWeakLambda(this,
+		[this, bWrongGuess, CeremonyWorkId]()
+	{
+		if (ANiceInkCharacter* V = GetVictimCharacter())
+		{
+			if (bWrongGuess)
+			{
+				V->MulticastConvertWorkToCarbon(CeremonyWorkId);
+			}
+		}
+		RoundCleanupAllCharacters();
+	}), FMath::Min(1.2f, ResolutionSeconds * 0.4f), false);
 }
 
 void ANiceInkGameMode::OnResolutionDone()

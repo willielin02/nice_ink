@@ -17,6 +17,8 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, TourWorkId);
 	DOREPLIFETIME(ANiceInkGameState, TourWorkNumber);
 	DOREPLIFETIME(ANiceInkGameState, TourWorkCount);
+	DOREPLIFETIME(ANiceInkGameState, TourWorkIdList);
+	DOREPLIFETIME(ANiceInkGameState, ResolutionWorkId);
 	DOREPLIFETIME(ANiceInkGameState, LastAccusationResult);
 	DOREPLIFETIME(ANiceInkGameState, RevealedAuthorId);
 	DOREPLIFETIME(ANiceInkGameState, LoserPlayerId);

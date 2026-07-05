@@ -39,6 +39,14 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 TourWorkCount = 0;
 
+	// 巡禮清單（tour 順序＝編號 1..N）；指認 UI 與鏡頭聚焦都靠它
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	TArray<int32> TourWorkIdList;
+
+	// 結算中被聚焦的傑作（被選那幅——猜錯時當眾轉碳黑）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 ResolutionWorkId = INDEX_NONE;
+
 	// 上一次指認的結果（Resolution 演出用）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	ENiceInkAccusationResult LastAccusationResult = ENiceInkAccusationResult::None;

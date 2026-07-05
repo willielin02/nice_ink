@@ -86,6 +86,20 @@ void ANiceInkHUD::DrawHUD()
 			Y += LineHeight;
 		}
 
+		if (GS->CurrentPhase == ENiceInkPhase::Accusation && MyPS && MyChar &&
+			GS->VictimPlayerId == MyPS->GetPlayerId())
+		{
+			DrawText(FString::Printf(TEXT("ACCUSE — previewing work %d / %d (keys 1-9)"),
+				MyChar->AccusePickNumber, GS->TourWorkCount),
+				FLinearColor(1.0f, 0.95f, 0.6f, 1.0f), Padding, Y, nullptr, 0.95f, false);
+			Y += LineHeight;
+			const APlayerState* Suspect = MyChar->GetAccuseSuspect();
+			DrawText(FString::Printf(TEXT("Suspect: %s  (TAB cycle)    ENTER = accuse!"),
+				Suspect ? *Suspect->GetPlayerName() : TEXT("?")),
+				FLinearColor(1.0f, 0.8f, 0.5f, 1.0f), Padding, Y, nullptr, 0.95f, false);
+			Y += LineHeight;
+		}
+
 		if (GS->CurrentPhase == ENiceInkPhase::Resolution)
 		{
 			FString ResultText = GS->LastAccusationResult == ENiceInkAccusationResult::Correct

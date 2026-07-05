@@ -136,6 +136,43 @@ bool UInkBodyComponent::BuildTriCache()
 	return bTriCacheBuilt;
 }
 
+bool UInkBodyComponent::ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition)
+{
+	if (!bTriCacheBuilt && !BuildTriCache())
+	{
+		return false;
+	}
+
+	for (const FCachedTri& Tri : CachedTris)
+	{
+		// UV 空間的重心座標（2D）
+		const FVector2D V0 = Tri.UVB - Tri.UVA;
+		const FVector2D V1 = Tri.UVC - Tri.UVA;
+		const FVector2D V2 = UV - Tri.UVA;
+		const float D00 = FVector2D::DotProduct(V0, V0);
+		const float D01 = FVector2D::DotProduct(V0, V1);
+		const float D11 = FVector2D::DotProduct(V1, V1);
+		const float D20 = FVector2D::DotProduct(V2, V0);
+		const float D21 = FVector2D::DotProduct(V2, V1);
+		const float Denom = D00 * D11 - D01 * D01;
+		if (FMath::IsNearlyZero(Denom))
+		{
+			continue;
+		}
+		const float V = (D11 * D20 - D01 * D21) / Denom;
+		const float W = (D00 * D21 - D01 * D20) / Denom;
+		const float U = 1.0f - V - W;
+		constexpr float Eps = -0.001f;
+		if (U >= Eps && V >= Eps && W >= Eps)
+		{
+			const FVector Local = Tri.A * U + Tri.B * V + Tri.C * W;
+			OutWorldPosition = GetComponentTransform().TransformPosition(Local);
+			return true;
+		}
+	}
+	return false;
+}
+
 FString UInkBodyComponent::DebugResolveBodyUV(const FVector& WorldPosition)
 {
 	const bool bCache = bTriCacheBuilt || BuildTriCache();

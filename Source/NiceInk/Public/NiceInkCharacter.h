@@ -5,6 +5,7 @@
 #include "InkTypes.h"
 #include "NiceInkCharacter.generated.h"
 
+class ACameraActor;
 class UCameraComponent;
 class UInkBodyComponent;
 class UInkCanvasComponent;
@@ -179,6 +180,20 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
 
+	// --- 指認 UI 狀態（受害者本地；HUD 讀取） ---
+
+	// 目前預覽的傑作編號（1..N，巡禮順序）；數字鍵選擇，鏡頭跟著聚焦
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Accuse")
+	int32 AccusePickNumber = 1;
+
+	// 目前指向的嫌疑人游標（TAB 輪換；非受害者玩家依席位排序）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Accuse")
+	int32 AccuseSuspectCursor = 0;
+
+	// 嫌疑人清單（席位排序、排除受害者）；回傳 PlayerState 供 HUD 顯示名字
+	UFUNCTION(BlueprintPure, Category = "Nice Ink|Accuse")
+	APlayerState* GetAccuseSuspect() const;
+
 	// --- 除錯 exec（PIE 主控台；轉發到伺服器） ---
 
 	UFUNCTION(Exec)
@@ -223,6 +238,21 @@ private:
 	UFUNCTION()
 	void OnRep_Blinded();
 
+	// 系統鏡頭（巡禮／指認預覽／結算聚焦）——各端本地生成、依複寫的 WorkId 對位
+	UPROPERTY(Transient)
+	TObjectPtr<ACameraActor> CinematicCamera;
+
+	int32 LastViewWorkId = INDEX_NONE;
+	bool bWideViewActive = false;
+	bool bViewOverridden = false;
+
+	void UpdateCinematicCamera(APlayerController* PC);
+	void ViewWork(APlayerController* PC, int32 WorkId);
+	void ViewWide(APlayerController* PC);
+	void RestoreView(APlayerController* PC);
+	ACameraActor* GetOrSpawnCinematicCamera();
+
+	void PollAccusation(APlayerController* PC);
 	void PollCounterplay(APlayerController* PC);
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);

@@ -1,5 +1,6 @@
 #include "NiceInkCharacter.h"
 
+#include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Engine/StaticMesh.h"
@@ -120,8 +121,244 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollMove(PC);
 	PollMinigame(PC);
 	PollCounterplay(PC);
+	PollAccusation(PC);
 	PollPalette(PC);
 	PollPaint(PC, DeltaSeconds);
+	UpdateCinematicCamera(PC);
+}
+
+// --- 系統鏡頭（巡禮＝爆點：全員同一時段看同一幅） ---
+
+void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS)
+	{
+		return;
+	}
+
+	const bool bIsVictim = GetInkAuthorId() == GS->VictimPlayerId;
+	int32 FocusWork = INDEX_NONE;
+	bool bWide = false;
+
+	switch (GS->CurrentPhase)
+	{
+	case ENiceInkPhase::Tour:
+		FocusWork = GS->TourWorkId;
+		break;
+	case ENiceInkPhase::Resolution:
+		FocusWork = GS->ResolutionWorkId;
+		break;
+	case ENiceInkPhase::Accusation:
+		// 受害者：數字鍵預覽哪幅、鏡頭就聚焦哪幅；其他人看全景
+		if (bIsVictim && GS->TourWorkIdList.IsValidIndex(AccusePickNumber - 1))
+		{
+			FocusWork = GS->TourWorkIdList[AccusePickNumber - 1];
+		}
+		else
+		{
+			bWide = true;
+		}
+		break;
+	default:
+		break;
+	}
+
+	if (FocusWork != INDEX_NONE)
+	{
+		ViewWork(PC, FocusWork);
+	}
+	else if (bWide)
+	{
+		ViewWide(PC);
+	}
+	else
+	{
+		RestoreView(PC);
+	}
+}
+
+namespace
+{
+	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
+	FVector ClampToRoom(const FVector& P)
+	{
+		return FVector(
+			FMath::Clamp(P.X, -270.0f, 170.0f),
+			FMath::Clamp(P.Y, -220.0f, 170.0f),
+			FMath::Clamp(P.Z, 40.0f, 225.0f));
+	}
+}
+
+ACameraActor* ANiceInkCharacter::GetOrSpawnCinematicCamera()
+{
+	if (!CinematicCamera && GetWorld())
+	{
+		FActorSpawnParameters Params;
+		Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		CinematicCamera = GetWorld()->SpawnActor<ACameraActor>(FVector(0, 0, 300), FRotator::ZeroRotator, Params);
+	}
+	return CinematicCamera;
+}
+
+void ANiceInkCharacter::ViewWork(APlayerController* PC, int32 WorkId)
+{
+	if (bViewOverridden && !bWideViewActive && LastViewWorkId == WorkId)
+	{
+		return;
+	}
+
+	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
+	ANiceInkCharacter* Victim = FindByPlayerId(GetWorld(), GS->VictimPlayerId);
+	if (!Victim || !Victim->InkCanvas || !Victim->Body)
+	{
+		return;
+	}
+
+	FInkWork Work;
+	if (!Victim->InkCanvas->GetWork(WorkId, Work))
+	{
+		return;
+	}
+
+	// 傑作錨點＝可反解筆劃點的平均世界位置
+	FVector Sum = FVector::ZeroVector;
+	int32 Count = 0;
+	for (const FInkStroke& Stroke : Work.Strokes)
+	{
+		for (int32 PtIdx = 0; PtIdx < Stroke.Points.Num() && Count < 24; PtIdx += FMath::Max(1, Stroke.Points.Num() / 4))
+		{
+			FVector WorldPos;
+			if (Victim->Body->ResolveUVToWorld(Stroke.Points[PtIdx], WorldPos))
+			{
+				Sum += WorldPos;
+				++Count;
+			}
+		}
+	}
+
+	const FVector BodyCenter = Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f));
+	const FVector Anchor = Count > 0 ? Sum / Count : BodyCenter;
+
+	FVector Outward = (Anchor - BodyCenter).GetSafeNormal2D();
+	if (Outward.IsNearlyZero())
+	{
+		Outward = FVector(0, 1, 0);
+	}
+	const FVector CamPos = ClampToRoom(Anchor + Outward * 135.0f + FVector(0, 0, 45.0f));
+
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
+	{
+		Cam->SetActorLocationAndRotation(CamPos, (Anchor - CamPos).Rotation());
+		PC->SetViewTargetWithBlend(Cam, 0.45f, VTBlend_Cubic);
+		bViewOverridden = true;
+		bWideViewActive = false;
+		LastViewWorkId = WorkId;
+	}
+}
+
+void ANiceInkCharacter::ViewWide(APlayerController* PC)
+{
+	if (bViewOverridden && bWideViewActive)
+	{
+		return;
+	}
+
+	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
+	ANiceInkCharacter* Victim = FindByPlayerId(GetWorld(), GS->VictimPlayerId);
+	if (!Victim || !Victim->Body)
+	{
+		return;
+	}
+
+	const FVector BodyCenter = Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f));
+	const FVector CamPos = ClampToRoom(BodyCenter + FVector(-50.0f, -190.0f, 165.0f));
+
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
+	{
+		Cam->SetActorLocationAndRotation(CamPos, (BodyCenter - CamPos).Rotation());
+		PC->SetViewTargetWithBlend(Cam, 0.5f, VTBlend_Cubic);
+		bViewOverridden = true;
+		bWideViewActive = true;
+		LastViewWorkId = INDEX_NONE;
+	}
+}
+
+void ANiceInkCharacter::RestoreView(APlayerController* PC)
+{
+	if (!bViewOverridden)
+	{
+		return;
+	}
+	PC->SetViewTargetWithBlend(this, 0.35f, VTBlend_Cubic);
+	bViewOverridden = false;
+	bWideViewActive = false;
+	LastViewWorkId = INDEX_NONE;
+}
+
+// --- 指認輸入（受害者；每回合恰好一次） ---
+
+void ANiceInkCharacter::PollAccusation(APlayerController* PC)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::Accusation || GetInkAuthorId() != GS->VictimPlayerId)
+	{
+		AccusePickNumber = 1;
+		AccuseSuspectCursor = 0;
+		return;
+	}
+
+	static const FKey DigitKeys[9] = {
+		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
+		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine
+	};
+	for (int32 Index = 0; Index < 9; ++Index)
+	{
+		if (PC->WasInputKeyJustPressed(DigitKeys[Index]) && GS->TourWorkIdList.IsValidIndex(Index))
+		{
+			AccusePickNumber = Index + 1;
+			break;
+		}
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::Tab))
+	{
+		++AccuseSuspectCursor;
+	}
+
+	if (PC->WasInputKeyJustPressed(EKeys::Enter))
+	{
+		const APlayerState* Suspect = GetAccuseSuspect();
+		if (Suspect && GS->TourWorkIdList.IsValidIndex(AccusePickNumber - 1))
+		{
+			ServerSubmitAccusation(GS->TourWorkIdList[AccusePickNumber - 1], Suspect->GetPlayerId());
+		}
+	}
+}
+
+APlayerState* ANiceInkCharacter::GetAccuseSuspect() const
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS)
+	{
+		return nullptr;
+	}
+
+	TArray<ANiceInkPlayerState*> Suspects;
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
+		if (NIPS && NIPS->GetPlayerId() != GS->VictimPlayerId)
+		{
+			Suspects.Add(NIPS);
+		}
+	}
+	if (Suspects.IsEmpty())
+	{
+		return nullptr;
+	}
+	Suspects.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
+	return Suspects[AccuseSuspectCursor % Suspects.Num()];
 }
 
 void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
