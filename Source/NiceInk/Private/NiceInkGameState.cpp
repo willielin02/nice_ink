@@ -1,5 +1,6 @@
 #include "NiceInkGameState.h"
 
+#include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 
 ANiceInkGameState::ANiceInkGameState()
@@ -13,19 +14,37 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, CurrentPhase);
 	DOREPLIFETIME(ANiceInkGameState, CurrentRound);
 	DOREPLIFETIME(ANiceInkGameState, VictimPlayerId);
+	DOREPLIFETIME(ANiceInkGameState, TourWorkId);
+	DOREPLIFETIME(ANiceInkGameState, TourWorkNumber);
+	DOREPLIFETIME(ANiceInkGameState, TourWorkCount);
+	DOREPLIFETIME(ANiceInkGameState, LastAccusationResult);
+	DOREPLIFETIME(ANiceInkGameState, RevealedAuthorId);
+	DOREPLIFETIME(ANiceInkGameState, LoserPlayerId);
 	DOREPLIFETIME(ANiceInkGameState, PhaseEndServerTime);
 }
 
 void ANiceInkGameState::SetPhase(ENiceInkPhase NewPhase, float DurationSeconds)
 {
 	CurrentPhase = NewPhase;
-	PhaseEndServerTime = GetServerWorldTimeSeconds() + FMath::Max(0.0f, DurationSeconds);
+	PhaseEndServerTime = DurationSeconds > 0.0f ? GetServerWorldTimeSeconds() + DurationSeconds : 0.0f;
 	OnRep_Phase();
 }
 
 float ANiceInkGameState::GetPhaseTimeRemaining() const
 {
-	return FMath::Max(0.0f, PhaseEndServerTime - GetServerWorldTimeSeconds());
+	return PhaseEndServerTime > 0.0f ? FMath::Max(0.0f, PhaseEndServerTime - GetServerWorldTimeSeconds()) : 0.0f;
+}
+
+APlayerState* ANiceInkGameState::FindPlayerStateById(int32 PlayerId) const
+{
+	for (APlayerState* PS : PlayerArray)
+	{
+		if (PS && PS->GetPlayerId() == PlayerId)
+		{
+			return PS;
+		}
+	}
+	return nullptr;
 }
 
 void ANiceInkGameState::OnRep_Phase()

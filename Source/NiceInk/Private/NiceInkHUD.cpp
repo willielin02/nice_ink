@@ -1,87 +1,106 @@
 #include "NiceInkHUD.h"
 
 #include "Engine/Canvas.h"
-#include "EngineUtils.h"
-#include "InkTestPawn.h"
+#include "GameFramework/PlayerState.h"
+#include "InkCanvasComponent.h"
+#include "NiceInkCharacter.h"
 #include "NiceInkGameState.h"
-#include "TattooComponent.h"
-#include "TattooPrototypeActor.h"
+#include "NiceInkPlayerState.h"
+#include "NiceInkTypes.h"
 
-namespace
-{
-FString GetMarkerLabel(ENiceInkMarkerType MarkerType)
-{
-	switch (MarkerType)
-	{
-	case ENiceInkMarkerType::FineMarker:
-		return TEXT("Fine Marker");
-	case ENiceInkMarkerType::ThickMarker:
-		return TEXT("Thick Marker");
-	case ENiceInkMarkerType::BrushTip:
-		return TEXT("Brush Tip");
-	default:
-		return TEXT("Unknown");
-	}
-}
-}
-
+// M1 除錯 HUD：相位／回合／受害者／罰酒／巡禮進度＋準星與選色。
+// 正式 UI（甦醒小遊戲、姿勢面板、指認介面）是 UMG，M2/M4 實作。
 void ANiceInkHUD::DrawHUD()
 {
 	Super::DrawHUD();
 
-	if (!Canvas)
+	if (!Canvas || !GetWorld())
 	{
 		return;
 	}
 
-	const ANiceInkGameState* NIState = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
+	const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	const ANiceInkPlayerState* MyPS = PlayerOwner ? PlayerOwner->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+
 	const float Padding = 18.0f;
 	const float LineHeight = 21.0f;
-	const float PanelWidth = 430.0f;
-	const float PanelHeight = 184.0f;
+	float Y = Padding;
 
-	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.42f), Padding - 8.0f, Padding - 8.0f, PanelWidth, PanelHeight);
-	DrawText(TEXT("Nice Ink Prototype"), FLinearColor::White, Padding, Padding, nullptr, 1.15f, false);
+	DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.42f), Padding - 8.0f, Padding - 8.0f, 470.0f, 210.0f);
+	DrawText(TEXT("Nice Ink"), FLinearColor::White, Padding, Y, nullptr, 1.15f, false);
+	Y += LineHeight * 1.35f;
 
-	if (NIState)
+	if (GS)
 	{
-		const FString PhaseText = FString::Printf(
-			TEXT("Phase: %s    Time: %.1fs    Round: %d"),
-			*GetPhaseLabel(NIState->CurrentPhase),
-			NIState->GetPhaseTimeRemaining(),
-			NIState->CurrentRound + 1);
-		DrawText(PhaseText, FLinearColor(0.86f, 0.94f, 1.0f, 1.0f), Padding, Padding + LineHeight * 1.35f, nullptr, 0.95f, false);
-
-		const FString RoleText = FString::Printf(TEXT("Victim: %d    All others draw"), NIState->VictimPlayerId);
-		DrawText(RoleText, FLinearColor(1.0f, 0.83f, 0.62f, 1.0f), Padding, Padding + LineHeight * 2.45f, nullptr, 0.9f, false);
-	}
-	else
-	{
-		DrawText(TEXT("Phase: waiting for GameState"), FLinearColor(0.86f, 0.94f, 1.0f, 1.0f), Padding, Padding + LineHeight * 1.35f, nullptr, 0.95f, false);
-	}
-
-	const ATattooPrototypeActor* TattooPrototype = nullptr;
-	if (GetWorld())
-	{
-		for (TActorIterator<ATattooPrototypeActor> It(GetWorld()); It; ++It)
+		FString PhaseText = FString::Printf(TEXT("Phase: %s    Round: %d"), *GetPhaseLabel(GS->CurrentPhase), GS->CurrentRound + 1);
+		const float Remaining = GS->GetPhaseTimeRemaining();
+		if (Remaining > 0.0f)
 		{
-			TattooPrototype = *It;
-			break;
+			PhaseText += FString::Printf(TEXT("    %.0fs"), Remaining);
+		}
+		DrawText(PhaseText, FLinearColor(0.86f, 0.94f, 1.0f, 1.0f), Padding, Y, nullptr, 0.95f, false);
+		Y += LineHeight;
+
+		if (const APlayerState* VictimPS = GS->FindPlayerStateById(GS->VictimPlayerId))
+		{
+			const ANiceInkPlayerState* VictimNIPS = Cast<ANiceInkPlayerState>(VictimPS);
+			const FString VictimText = FString::Printf(TEXT("Victim: %s    Cups: %d / 3"),
+				*VictimPS->GetPlayerName(), VictimNIPS ? VictimNIPS->PenaltyCups : 0);
+			DrawText(VictimText, FLinearColor(1.0f, 0.83f, 0.62f, 1.0f), Padding, Y, nullptr, 0.9f, false);
+			Y += LineHeight;
+		}
+
+		if (GS->CurrentPhase == ENiceInkPhase::Tour && GS->TourWorkId != INDEX_NONE)
+		{
+			DrawText(FString::Printf(TEXT("Tour: work %d / %d"), GS->TourWorkNumber, GS->TourWorkCount),
+				FLinearColor(0.9f, 1.0f, 0.8f, 1.0f), Padding, Y, nullptr, 0.9f, false);
+			Y += LineHeight;
+		}
+
+		if (GS->CurrentPhase == ENiceInkPhase::Resolution)
+		{
+			FString ResultText = GS->LastAccusationResult == ENiceInkAccusationResult::Correct
+				? TEXT("Correct! Author takes the seat.")
+				: TEXT("Wrong! True author inks the picked work. +1 cup.");
+			if (const APlayerState* AuthorPS = GS->FindPlayerStateById(GS->RevealedAuthorId))
+			{
+				ResultText += FString::Printf(TEXT("  (Author: %s)"), *AuthorPS->GetPlayerName());
+			}
+			DrawText(ResultText, FLinearColor(1.0f, 0.6f, 0.6f, 1.0f), Padding, Y, nullptr, 0.9f, false);
+			Y += LineHeight;
+		}
+
+		if (GS->CurrentPhase == ENiceInkPhase::Finale || GS->CurrentPhase == ENiceInkPhase::PostGame)
+		{
+			if (const APlayerState* LoserPS = GS->FindPlayerStateById(GS->LoserPlayerId))
+			{
+				DrawText(FString::Printf(TEXT("FINALE: %s is out cold. Cash split, ink locked."), *LoserPS->GetPlayerName()),
+					FLinearColor(1.0f, 0.4f, 0.4f, 1.0f), Padding, Y, nullptr, 0.9f, false);
+				Y += LineHeight;
+			}
 		}
 	}
 
-	if (TattooPrototype && TattooPrototype->TattooComponent)
+	if (MyPS)
 	{
-		const FString ToolText = FString::Printf(
-			TEXT("Current: %s    Color Slot: %d"),
-			*GetMarkerLabel(TattooPrototype->TattooComponent->CurrentMarkerType),
-			TattooPrototype->SelectedPaletteIndex + 1);
-		DrawText(ToolText, FLinearColor(0.92f, 0.98f, 1.0f, 1.0f), Padding, Padding + LineHeight * 3.75f, nullptr, 0.82f, false);
+		DrawText(FString::Printf(TEXT("Me: %s    Seat: %d    Cash: %d"), *MyPS->GetPlayerName(), MyPS->SeatIndex, MyPS->Cash),
+			FLinearColor(0.8f, 0.9f, 1.0f, 1.0f), Padding, Y, nullptr, 0.85f, false);
+		Y += LineHeight;
 	}
 
-	DrawText(TEXT("Move: WASD/QE (Shift fast)   Look: mouse   Draw: hold LMB"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 4.75f, nullptr, 0.82f, false);
-	DrawText(TEXT("Palette: 1-9,0   X wash marker   C my work -> carbon"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 5.75f, nullptr, 0.82f, false);
-	DrawText(TEXT("L laser first carbon   P lock permanent   R next round   F10 export QA"), FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Padding + LineHeight * 6.75f, nullptr, 0.82f, false);
+	if (MyChar && MyChar->bAsleep)
+	{
+		DrawText(TEXT("You are ASLEEP. Press WASD to wake & emerge (minigame comes in M2)."),
+			FLinearColor(1.0f, 1.0f, 0.5f, 1.0f), Padding, Y, nullptr, 0.85f, false);
+		Y += LineHeight;
+	}
+
+	DrawText(TEXT("Move: WASD  Look: mouse  Draw: hold LMB  Palette: 1-9,0"),
+		FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Y, nullptr, 0.8f, false);
+	Y += LineHeight;
+	DrawText(TEXT("Console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"),
+		FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Y, nullptr, 0.8f, false);
 
 	DrawInkCrosshair();
 }
@@ -94,9 +113,13 @@ void ANiceInkHUD::DrawInkCrosshair()
 	}
 
 	FLinearColor CrosshairColor = FLinearColor::White;
-	if (const AInkTestPawn* InkPawn = PlayerOwner ? Cast<AInkTestPawn>(PlayerOwner->GetPawn()) : nullptr)
+	if (const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr)
 	{
-		CrosshairColor = InkPawn->GetCurrentColor();
+		if (MyChar->bAsleep)
+		{
+			return; // 沉睡：無準星（M2 換成黑屏＋小遊戲）
+		}
+		CrosshairColor = MyChar->GetCurrentColor();
 		CrosshairColor.A = 1.0f;
 	}
 
@@ -117,23 +140,15 @@ FString ANiceInkHUD::GetPhaseLabel(ENiceInkPhase Phase) const
 {
 	switch (Phase)
 	{
-	case ENiceInkPhase::Lobby:
-		return TEXT("Lobby");
-	case ENiceInkPhase::SelectingVictim:
-		return TEXT("Selecting Victim");
-	case ENiceInkPhase::Drinking:
-		return TEXT("Drinking");
-	case ENiceInkPhase::Tattooing:
-		return TEXT("Tattooing");
-	case ENiceInkPhase::Accusation:
-		return TEXT("Accusation");
-	case ENiceInkPhase::Reveal:
-		return TEXT("Reveal");
-	case ENiceInkPhase::Celebration:
-		return TEXT("Celebration");
-	case ENiceInkPhase::NextRound:
-		return TEXT("Next Round");
-	default:
-		return TEXT("Unknown");
+	case ENiceInkPhase::Lobby: return TEXT("Lobby");
+	case ENiceInkPhase::BottleSpin: return TEXT("Bottle Spin");
+	case ENiceInkPhase::Seating: return TEXT("Seating");
+	case ENiceInkPhase::Drawing: return TEXT("Drawing");
+	case ENiceInkPhase::Tour: return TEXT("Gallery Tour");
+	case ENiceInkPhase::Accusation: return TEXT("Accusation");
+	case ENiceInkPhase::Resolution: return TEXT("Resolution");
+	case ENiceInkPhase::Finale: return TEXT("Finale");
+	case ENiceInkPhase::PostGame: return TEXT("Post Game");
+	default: return TEXT("Unknown");
 	}
 }
