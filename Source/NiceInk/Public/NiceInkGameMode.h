@@ -97,6 +97,12 @@ public:
 	void HandleEmergeRequest(ANiceInkCharacter* Requester, bool bForce = false);
 	void HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId, int32 AccusedPlayerId);
 
+	// 場間大廳：雷射自己最舊的碳黑一級（自費；三級清除；永久無效）
+	void HandleLaserRequest(ANiceInkCharacter* Requester);
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Economy")
+	int32 LaserCostPerPass = 2000;
+
 	// 作畫許可（server 權威）：作畫階段畫受害者；終局羞辱時間畫輸家。
 	bool CanPaintOn(const ANiceInkCharacter* Painter, const ANiceInkCharacter* Target) const;
 
@@ -158,6 +164,15 @@ private:
 
 	// 回合結算清場：全員洗麥克筆與證據標記、解除致盲（SPEC：指認結算時一同洗掉）
 	void RoundCleanupAllCharacters();
+
+	// 跨場持久化（錢包＋刺青）。存檔鍵＝玩家名（去 PIE 尾碼）＋席位；
+	// 正式版改 EOS product user id。
+	FString SaveSlotFor(const class ANiceInkPlayerState* PS) const;
+	void PersistCharacter(ANiceInkCharacter* Character);
+	void RestoreCharacter(ANiceInkCharacter* Character);
+
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void PersistAllCharacters();
 
 	void SetPhaseTimer(float Seconds, void (ANiceInkGameMode::*Handler)());
 };

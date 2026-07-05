@@ -122,6 +122,19 @@ void ANiceInkHUD::DrawHUD()
 				Y += LineHeight;
 			}
 		}
+
+		// 場間大廳：端詳刺青、自費雷射、開下一場
+		if (GS->CurrentPhase == ENiceInkPhase::PostGame && MyChar && MyChar->InkCanvas)
+		{
+			const int32 CarbonCount = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Carbon).Num();
+			const int32 PermanentCount = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Permanent).Num();
+			DrawText(FString::Printf(TEXT("LOBBY — your ink: %d carbon (laserable), %d permanent (forever)"), CarbonCount, PermanentCount),
+				FLinearColor(0.7f, 0.95f, 1.0f, 1.0f), Padding, Y, nullptr, 0.9f, false);
+			Y += LineHeight;
+			DrawText(TEXT("L = laser oldest carbon (fades, 3rd pass removes; costs 2000)   Console: NiStart = next match"),
+				FLinearColor(0.7f, 0.85f, 0.9f, 1.0f), Padding, Y, nullptr, 0.85f, false);
+			Y += LineHeight;
+		}
 	}
 
 	if (MyPS)

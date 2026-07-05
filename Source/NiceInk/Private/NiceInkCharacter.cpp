@@ -33,6 +33,15 @@ namespace
 
 	constexpr float PointFlushInterval = 0.05f;
 	constexpr int32 PointFlushMaxBatch = 10;
+
+	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
+	FVector ClampToRoom(const FVector& P)
+	{
+		return FVector(
+			FMath::Clamp(P.X, -270.0f, 170.0f),
+			FMath::Clamp(P.Y, -220.0f, 170.0f),
+			FMath::Clamp(P.Z, 40.0f, 225.0f));
+	}
 }
 
 ANiceInkCharacter::ANiceInkCharacter()
@@ -122,9 +131,23 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollMinigame(PC);
 	PollCounterplay(PC);
 	PollAccusation(PC);
+	PollLobby(PC);
 	PollPalette(PC);
 	PollPaint(PC, DeltaSeconds);
 	UpdateCinematicCamera(PC);
+}
+
+void ANiceInkCharacter::PollLobby(APlayerController* PC)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::PostGame)
+	{
+		return;
+	}
+	if (PC->WasInputKeyJustPressed(EKeys::L))
+	{
+		ServerRequestLaser();
+	}
 }
 
 // --- 系統鏡頭（巡禮＝爆點：全員同一時段看同一幅） ---
@@ -140,6 +163,7 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	const bool bIsVictim = GetInkAuthorId() == GS->VictimPlayerId;
 	int32 FocusWork = INDEX_NONE;
 	bool bWide = false;
+	bool bThirdPerson = false;
 
 	switch (GS->CurrentPhase)
 	{
@@ -160,6 +184,12 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 			bWide = true;
 		}
 		break;
+	case ENiceInkPhase::BottleSpin:
+		bWide = true; // 轉瓶儀式全景
+		break;
+	case ENiceInkPhase::PostGame:
+		bThirdPerson = true; // 場間大廳：第三人稱端詳自己的刺青（SPEC 視角規則）
+		break;
 	default:
 		break;
 	}
@@ -172,21 +202,32 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	{
 		ViewWide(PC);
 	}
+	else if (bThirdPerson)
+	{
+		ViewSelfThirdPerson(PC);
+	}
 	else
 	{
 		RestoreView(PC);
 	}
 }
 
-namespace
+void ANiceInkCharacter::ViewSelfThirdPerson(APlayerController* PC)
 {
-	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
-	FVector ClampToRoom(const FVector& P)
+	// 跟隨式第三人稱：轉身（A/D＋滑鼠）就能看到身體各面
+	const FVector Fwd = GetActorForwardVector();
+	const FVector CamPos = ClampToRoom(GetActorLocation() - Fwd * 190.0f + FVector(0, 0, 70.0f));
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
 	{
-		return FVector(
-			FMath::Clamp(P.X, -270.0f, 170.0f),
-			FMath::Clamp(P.Y, -220.0f, 170.0f),
-			FMath::Clamp(P.Z, 40.0f, 225.0f));
+		Cam->SetActorLocationAndRotation(CamPos, ((GetActorLocation() + FVector(0, 0, 10.0f)) - CamPos).Rotation());
+		if (!bThirdPersonActive)
+		{
+			PC->SetViewTargetWithBlend(Cam, 0.4f, VTBlend_Cubic);
+			bViewOverridden = true;
+			bThirdPersonActive = true;
+			bWideViewActive = false;
+			LastViewWorkId = INDEX_NONE;
+		}
 	}
 }
 
@@ -253,6 +294,7 @@ void ANiceInkCharacter::ViewWork(APlayerController* PC, int32 WorkId)
 		PC->SetViewTargetWithBlend(Cam, 0.45f, VTBlend_Cubic);
 		bViewOverridden = true;
 		bWideViewActive = false;
+		bThirdPersonActive = false;
 		LastViewWorkId = WorkId;
 	}
 }
@@ -266,12 +308,11 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 
 	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
 	ANiceInkCharacter* Victim = FindByPlayerId(GetWorld(), GS->VictimPlayerId);
-	if (!Victim || !Victim->Body)
-	{
-		return;
-	}
 
-	const FVector BodyCenter = Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f));
+	// 沒有受害者（轉瓶儀式）就看房間舞台中心
+	const FVector BodyCenter = (Victim && Victim->Body)
+		? Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f))
+		: FVector(0.0f, 75.0f, 60.0f);
 	const FVector CamPos = ClampToRoom(BodyCenter + FVector(-50.0f, -190.0f, 165.0f));
 
 	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
@@ -280,6 +321,7 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 		PC->SetViewTargetWithBlend(Cam, 0.5f, VTBlend_Cubic);
 		bViewOverridden = true;
 		bWideViewActive = true;
+		bThirdPersonActive = false;
 		LastViewWorkId = INDEX_NONE;
 	}
 }
@@ -293,6 +335,7 @@ void ANiceInkCharacter::RestoreView(APlayerController* PC)
 	PC->SetViewTargetWithBlend(this, 0.35f, VTBlend_Cubic);
 	bViewOverridden = false;
 	bWideViewActive = false;
+	bThirdPersonActive = false;
 	LastViewWorkId = INDEX_NONE;
 }
 
@@ -789,6 +832,33 @@ void ANiceInkCharacter::MulticastRoundCleanup_Implementation()
 void ANiceInkCharacter::OnRep_Blinded()
 {
 	// HUD 直接讀 bBlinded 畫致盲遮罩；這裡不需額外處理（保留鉤子）
+}
+
+// --- 場間大廳 ---
+
+void ANiceInkCharacter::ServerRequestLaser_Implementation()
+{
+	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
+	if (GM)
+	{
+		GM->HandleLaserRequest(this);
+	}
+}
+
+void ANiceInkCharacter::MulticastApplyLaser_Implementation(int32 WorkId)
+{
+	if (InkCanvas)
+	{
+		InkCanvas->ApplyLaserToWork(WorkId);
+	}
+}
+
+void ANiceInkCharacter::MulticastRestoreWork_Implementation(FInkWork Work)
+{
+	if (InkCanvas)
+	{
+		InkCanvas->RestoreWork(Work);
+	}
 }
 
 void ANiceInkCharacter::OnRep_Asleep()

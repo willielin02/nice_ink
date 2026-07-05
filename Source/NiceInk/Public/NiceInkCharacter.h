@@ -169,6 +169,19 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastRoundCleanup();
 
+	// --- 場間大廳（PostGame）---
+
+	// 雷射自己身上最舊的碳黑刺青一級（自費；三級整幅清除；永久無效）
+	UFUNCTION(Server, Reliable)
+	void ServerRequestLaser();
+
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastApplyLaser(int32 WorkId);
+
+	// 跨場刺青還原（入場時 server 廣播存檔內容）
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastRestoreWork(FInkWork Work);
+
 	// --- 甦醒小遊戲（共用數學：輸入判定與 HUD 渲染都用它） ---
 
 	// 指標位置 0..1（以 server 同步時鐘驅動的往復運動）
@@ -249,9 +262,13 @@ private:
 	void UpdateCinematicCamera(APlayerController* PC);
 	void ViewWork(APlayerController* PC, int32 WorkId);
 	void ViewWide(APlayerController* PC);
+	void ViewSelfThirdPerson(APlayerController* PC);
 	void RestoreView(APlayerController* PC);
 	ACameraActor* GetOrSpawnCinematicCamera();
 
+	bool bThirdPersonActive = false;
+
+	void PollLobby(APlayerController* PC);
 	void PollAccusation(APlayerController* PC);
 	void PollCounterplay(APlayerController* PC);
 	void EnsureAvatarApplied();

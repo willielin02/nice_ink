@@ -5,10 +5,12 @@
 #include "GameFramework/PlayerController.h"
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
+#include "Kismet/GameplayStatics.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
 #include "NiceInkPlayerState.h"
+#include "NiceInkSaveGame.h"
 #include "TimerManager.h"
 
 ANiceInkGameMode::ANiceInkGameMode()
@@ -34,7 +36,94 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 
 	Super::PostLogin(NewPlayer);
 
+	// 跨場資產還原（延遲讓新客戶端的 actor channel 就緒，multicast 才到得了它）
+	if (APawn* Pawn = NewPlayer ? NewPlayer->GetPawn() : nullptr)
+	{
+		TWeakObjectPtr<ANiceInkCharacter> WeakChar = Cast<ANiceInkCharacter>(Pawn);
+		FTimerHandle Unused;
+		GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, WeakChar]()
+		{
+			if (ANiceInkCharacter* C = WeakChar.Get())
+			{
+				RestoreCharacter(C);
+			}
+		}), 2.0f, false);
+	}
+
 	MaybeScheduleAutoStart();
+}
+
+// --- 跨場持久化 ---
+
+FString ANiceInkGameMode::SaveSlotFor(const ANiceInkPlayerState* PS) const
+{
+	if (!PS)
+	{
+		return TEXT("NiceInk_Unknown");
+	}
+	// PIE 的玩家名帶隨機尾碼（Willie_desktop-7461A）——剝掉，改用席位穩定鍵
+	FString Name = PS->GetPlayerName();
+	int32 DashIdx;
+	if (Name.FindLastChar(TEXT('-'), DashIdx) && Name.Len() - DashIdx == 6)
+	{
+		Name = Name.Left(DashIdx);
+	}
+	Name = Name.Replace(TEXT(" "), TEXT("_"));
+	return FString::Printf(TEXT("NiceInk_%s_Seat%d"), *Name, PS->SeatIndex);
+}
+
+void ANiceInkGameMode::PersistCharacter(ANiceInkCharacter* Character)
+{
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS || !Character->InkCanvas)
+	{
+		return;
+	}
+
+	UNiceInkSaveGame* Save = Cast<UNiceInkSaveGame>(UGameplayStatics::CreateSaveGameObject(UNiceInkSaveGame::StaticClass()));
+	Save->Cash = PS->Cash;
+	for (const FInkWork& Work : Character->InkCanvas->GetWorks())
+	{
+		if (Work.State != EInkWorkState::Marker)
+		{
+			Save->Tattoos.Add(Work); // 麥克筆永不跨場
+		}
+	}
+	UGameplayStatics::SaveGameToSlot(Save, SaveSlotFor(PS), 0);
+}
+
+void ANiceInkGameMode::RestoreCharacter(ANiceInkCharacter* Character)
+{
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS)
+	{
+		return;
+	}
+
+	const FString Slot = SaveSlotFor(PS);
+	if (!UGameplayStatics::DoesSaveGameExist(Slot, 0))
+	{
+		return;
+	}
+	const UNiceInkSaveGame* Save = Cast<UNiceInkSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
+	if (!Save)
+	{
+		return;
+	}
+
+	PS->Cash = Save->Cash;
+	for (const FInkWork& Work : Save->Tattoos)
+	{
+		Character->MulticastRestoreWork(Work); // 恩怨博物館：刺青跟著角色走
+	}
+}
+
+void ANiceInkGameMode::PersistAllCharacters()
+{
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		PersistCharacter(*It);
+	}
 }
 
 APawn* ANiceInkGameMode::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
@@ -126,11 +215,54 @@ void ANiceInkGameMode::MaybeScheduleAutoStart()
 void ANiceInkGameMode::RequestStartMatch()
 {
 	ANiceInkGameState* GS = NIState();
-	if (!GS || GS->CurrentPhase != ENiceInkPhase::Lobby || GS->PlayerArray.Num() < 2)
+	if (!GS || GS->PlayerArray.Num() < 2)
 	{
 		return;
 	}
+	// Lobby 開場；PostGame＝場間大廳再開一場（刺青與錢包跟著走）
+	if (GS->CurrentPhase != ENiceInkPhase::Lobby && GS->CurrentPhase != ENiceInkPhase::PostGame)
+	{
+		return;
+	}
+
+	GS->CurrentRound = 0;
+	GS->VictimPlayerId = INDEX_NONE;
+	GS->LoserPlayerId = INDEX_NONE;
+	GS->LastAccusationResult = ENiceInkAccusationResult::None;
+	GS->RevealedAuthorId = INDEX_NONE;
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		if (ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+		{
+			NIPS->PenaltyCups = 0;
+		}
+	}
+
 	EnterBottleSpin();
+}
+
+void ANiceInkGameMode::HandleLaserRequest(ANiceInkCharacter* Requester)
+{
+	ANiceInkGameState* GS = NIState();
+	ANiceInkPlayerState* PS = Requester ? Requester->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::PostGame || !PS || !Requester->InkCanvas)
+	{
+		return;
+	}
+	if (PS->Cash < LaserCostPerPass)
+	{
+		return; // 沒錢雷射＝皮膚負債帶進下一場（SPEC 經濟）
+	}
+
+	const TArray<int32> CarbonWorks = Requester->InkCanvas->GetWorkIdsByState(EInkWorkState::Carbon);
+	if (CarbonWorks.IsEmpty())
+	{
+		return; // 永久刺青無法雷射
+	}
+
+	PS->Cash -= LaserCostPerPass;
+	Requester->MulticastApplyLaser(CarbonWorks[0]);
+	PersistCharacter(Requester);
 }
 
 void ANiceInkGameMode::EnterBottleSpin()
@@ -444,10 +576,15 @@ void ANiceInkGameMode::OnFinaleDone()
 				Loser->MulticastLockWorkPermanent(CarbonId);
 			}
 		}
+		// 場間大廳：輸家醒來（昏睡不醒只到終局結束）
+		Loser->ServerSetAsleep(false, FTransform::Identity);
 	}
 
 	// 遊戲結束：所有麥克筆塗鴉（含羞辱塗鴉）與殘留證據洗掉
 	RoundCleanupAllCharacters();
+
+	// 跨場資產落盤（錢包＋碳黑／永久刺青）
+	PersistAllCharacters();
 
 	GS->SetPhase(ENiceInkPhase::PostGame, 0.0f);
 	SetPhaseTimer(0.0f, nullptr);

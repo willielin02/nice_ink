@@ -258,6 +258,17 @@ void UInkCanvasComponent::WashAllMarker()
 	RebuildRenderTargets();
 }
 
+void UInkCanvasComponent::RestoreWork(const FInkWork& Work)
+{
+	if (Work.WorkId == INDEX_NONE || FindWork(Work.WorkId))
+	{
+		return;
+	}
+	Works.Add(Work);
+	NextWorkId = FMath::Max(NextWorkId, Work.WorkId + 1);
+	RebuildRenderTargets();
+}
+
 void UInkCanvasComponent::AddEvidenceMark(EInkEvidenceType Type, FVector2D UV, int32 Seed)
 {
 	UV = ClampUV(UV);

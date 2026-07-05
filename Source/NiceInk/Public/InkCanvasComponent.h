@@ -112,6 +112,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void RebuildRenderTargets();
 
+	// 跨場刺青還原：整幅塞回畫布（保留原 WorkId；NextWorkId 跳過避免撞號）。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void RestoreWork(const FInkWork& Work);
+
 	// QA：輸出 <前綴>_marker.png / <前綴>_tattoo.png（絕對路徑前綴）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	bool ExportLayersToPng(const FString& AbsolutePathPrefix) const;
