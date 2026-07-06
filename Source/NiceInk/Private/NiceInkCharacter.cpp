@@ -691,11 +691,14 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 起身：右鍵或 WASD
+	// 起身：右鍵或 WASD。進鎖後 0.25s 內不受理——
+	// (1) 主機的 Server RPC 同幀直接執行，進鎖的那次 RMB 在同一 tick 仍是 just-pressed，
+	//     會被誤讀成起身（鎖定只活一幀、畫面永遠不切）；
+	// (2) 按著 W 走近時按 RMB，殘留的 W 也會讓所有端秒退。
 	const bool bWantsExit = PC->WasInputKeyJustPressed(EKeys::RightMouseButton) ||
 		PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::A) ||
 		PC->IsInputKeyDown(EKeys::S) || PC->IsInputKeyDown(EKeys::D);
-	if (bWantsExit)
+	if (bWantsExit && GetWorld()->GetTimeSeconds() - LeanLockTime > 0.25f)
 	{
 		StopPaintingLocal();
 		ServerExitLean();
