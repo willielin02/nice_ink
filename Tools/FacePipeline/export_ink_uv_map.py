@@ -25,6 +25,9 @@ FACEMASK_MIN_R = 0.5   # face-island polys carry FaceMask corner color R=1
 
 bpy.ops.wm.open_mainfile(filepath=CHAR_BLEND)
 
+if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+    bpy.ops.object.mode_set(mode='OBJECT')
+
 body = None
 for ob in bpy.data.objects:
     if ob.type == 'MESH' and 'FaceUV' in ob.data.uv_layers:
@@ -32,6 +35,11 @@ for ob in bpy.data.objects:
         break
 if body is None:
     raise RuntimeError("no mesh with a FaceUV layer found")
+
+# UV0 均勻密度重排——與網格導出腳本共用同一套 UV（確定性；見 uv0_uniform.py）
+_uv_src = (BASE.parent / "AssetPrep" / "uv0_uniform.py").read_text(encoding="utf-8")
+exec(compile(_uv_src, "uv0_uniform.py", "exec"))
+reunwrap_uv0_uniform(body)
 
 me = body.data
 uv0 = me.uv_layers['UVMap'].data

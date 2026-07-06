@@ -183,6 +183,16 @@ TArray<int32> UInkCanvasComponent::GetWorkIdsByState(EInkWorkState State) const
 	return Result;
 }
 
+bool UInkCanvasComponent::GetLastPointForAuthor(int32 AuthorId, FVector2D& OutUV) const
+{
+	if (const FVector2D* Last = LastPointByAuthor.Find(AuthorId))
+	{
+		OutUV = *Last;
+		return true;
+	}
+	return false;
+}
+
 int32 UInkCanvasComponent::GetActiveWorkId(int32 AuthorId) const
 {
 	for (const FInkWork& Work : Works)

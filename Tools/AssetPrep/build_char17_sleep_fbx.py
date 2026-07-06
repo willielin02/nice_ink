@@ -6,11 +6,20 @@
 #     "C:\games\Unreal Engine\nice_ink\Content\玩家\nice_ink_player_character17.blend" ^
 #     --python build_char17_sleep_fbx.py
 import bpy, math, mathutils
+from pathlib import Path
 
 OUT = r"c:\games\Unreal Engine\nice_ink\SourceAssets\char17_sleep.fbx"
 
+if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+    bpy.ops.object.mode_set(mode='OBJECT')
+
 body = bpy.data.objects["PlusSize_Male_Body_01"]
 arm = bpy.data.objects["Skeleton_Plus-size"]
+
+# UV0 均勻密度重排（擺姿烘焙前；烘出的網格複製同一套 UV）
+_uv_src = (Path(__file__).parent / "uv0_uniform.py").read_text(encoding="utf-8")
+exec(compile(_uv_src, "uv0_uniform.py", "exec"))
+reunwrap_uv0_uniform(body)
 
 # armature 資料空間：Y=身高、X=左右、Z=前後（Mixamo 慣例）
 def rotate_pb(name, deg, axis='Z'):

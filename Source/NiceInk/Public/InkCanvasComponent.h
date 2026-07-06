@@ -37,8 +37,10 @@ public:
 	int32 RenderTargetResolution = 2048;
 
 	// 固定麥克筆筆寬（UV 半徑）。SPEC v3.1：細筆尖——皮膚是跨場資源，細筆控制通膨。
+	// 均勻密度圖集實測 0.898 px/mm @2048 → 0.00085 UV 半徑 ≈ 3.8mm 簽字筆
+	//（使用者定案：原粗度 ÷3；全身嚴格一致）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0005", ClampMax = "0.05"))
-	float MarkerUvRadius = 0.0022f;
+	float MarkerUvRadius = 0.00085f;
 
 	// 單段 UV 距離超過此值視為跨 UV 島跳躍：不內插、直接斷筆重起。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.01", ClampMax = "0.5"))
@@ -79,6 +81,10 @@ public:
 	// 作者在當前回合的麥克筆傑作（沒有則回傳 INDEX_NONE）。
 	UFUNCTION(BlueprintPure, Category = "Ink")
 	int32 GetActiveWorkId(int32 AuthorId) const;
+
+	// 該作者進行中筆劃的最新落點（實體筆對位用；無進行中筆劃回傳 false）
+	UFUNCTION(BlueprintPure, Category = "Ink")
+	bool GetLastPointForAuthor(int32 AuthorId, FVector2D& OutUV) const;
 
 	// 猜錯 → 真作者刷碳黑：整幅傑作轉為碳黑刺青。
 	UFUNCTION(BlueprintCallable, Category = "Ink")

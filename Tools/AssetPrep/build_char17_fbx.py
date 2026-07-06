@@ -1,10 +1,19 @@
 import bpy, math, mathutils
+from pathlib import Path
 
 OUT_BODY = r"c:\games\Unreal Engine\nice_ink\SourceAssets\char17_static.fbx"
 OUT_MOSAIC = r"c:\games\Unreal Engine\nice_ink\SourceAssets\char17_mosaic.fbx"
 
+if bpy.context.object and bpy.context.object.mode != 'OBJECT':
+    bpy.ops.object.mode_set(mode='OBJECT')
+
 body = bpy.data.objects["PlusSize_Male_Body_01"]
 mosaic = bpy.data.objects.get("Mosaic")
+
+# UV0 均勻密度重排（所有網格導出前必跑，見 uv0_uniform.py）
+_uv_src = (Path(__file__).parent / "uv0_uniform.py").read_text(encoding="utf-8")
+exec(compile(_uv_src, "uv0_uniform.py", "exec"))
+reunwrap_uv0_uniform(body)
 
 mesh = body.data
 if len(body.material_slots) > 1:

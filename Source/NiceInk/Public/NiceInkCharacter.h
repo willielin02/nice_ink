@@ -59,6 +59,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
 	TObjectPtr<USkeletalMesh> BowMesh;
 
+	// 實體麥克筆：筆尖永遠在墨水落下的位置（畫布狀態即真相、全端一致、零 offset）
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
+	TObjectPtr<UStaticMeshComponent> PenMesh;
+
 	// 麥克筆觸及距離（公分）。刻意短——近臉作畫原則：要畫就得湊近。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "50", ClampMax = "500"))
 	float PaintReach = 140.0f;
@@ -324,11 +328,15 @@ private:
 	bool bLeanCamActive = false;
 	bool bPeekCamApplied = false;
 
+	FVector2D LastCursorPx = FVector2D::ZeroVector; // 上一 tick 游標（螢幕細分用）
+
 	void PollLeanEnter(APlayerController* PC);
 	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
-	void ApplyBowPose();     // 程式化硬彎腰（所有端；含偷瞄頭頸）
+	bool ResolveCursorToTargetUV(APlayerController* PC, const FVector2D& ScreenPx, FVector2D& OutUV) const;
+	void ApplyBowPose();     // 程式化硬彎腰（所有端；解算頭到落筆點、臉對準目標）
 	void ResetBowPose();
 	void UpdateLeanCamera(APlayerController* PC);
+	void UpdatePenVisual();  // 實體筆對位（所有端）
 	FVector GetLeanFaceTargetWorld() const; // 受害者頭部（偷瞄注視點）
 
 	// 系統鏡頭（巡禮／指認預覽／結算聚焦）——各端本地生成、依複寫的 WorkId 對位

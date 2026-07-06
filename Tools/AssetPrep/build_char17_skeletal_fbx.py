@@ -6,6 +6,7 @@
 #     "C:\games\Unreal Engine\nice_ink\Content\玩家\nice_ink_player_character17.blend" ^
 #     --python build_char17_skeletal_fbx.py
 import bpy
+from pathlib import Path
 
 OUT = r"c:\games\Unreal Engine\nice_ink\SourceAssets\char17_skeletal.fbx"
 
@@ -16,6 +17,11 @@ if bpy.context.object and bpy.context.object.mode != 'OBJECT':
 body = bpy.data.objects["PlusSize_Male_Body_01"]
 arm = bpy.data.objects["Skeleton_Plus-size"]
 mesh = body.data
+
+# UV0 均勻密度重排（與站姿/睡姿共用同一套 UV）
+_uv_src = (Path(__file__).parent / "uv0_uniform.py").read_text(encoding="utf-8")
+exec(compile(_uv_src, "uv0_uniform.py", "exec"))
+reunwrap_uv0_uniform(body)
 
 # 馬賽克另有用途，骨骼版不帶
 mosaic = bpy.data.objects.get("Mosaic")

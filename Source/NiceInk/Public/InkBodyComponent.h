@@ -95,6 +95,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	bool ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition);
 
+	// 同上並帶出該處表面法線（實體筆的立筆方向用）
+	bool ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWorldPosition, FVector& OutNormal);
+
 private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> DynamicBodyMaterial;

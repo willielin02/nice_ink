@@ -138,6 +138,12 @@ bool UInkBodyComponent::BuildTriCache()
 
 bool UInkBodyComponent::ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition)
 {
+	FVector UnusedNormal;
+	return ResolveUVToWorldWithNormal(UV, OutWorldPosition, UnusedNormal);
+}
+
+bool UInkBodyComponent::ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWorldPosition, FVector& OutNormal)
+{
 	if (!bTriCacheBuilt && !BuildTriCache())
 	{
 		return false;
@@ -167,6 +173,8 @@ bool UInkBodyComponent::ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition
 		{
 			const FVector Local = Tri.A * U + Tri.B * V + Tri.C * W;
 			OutWorldPosition = GetComponentTransform().TransformPosition(Local);
+			const FVector LocalNormal = FVector::CrossProduct(Tri.B - Tri.A, Tri.C - Tri.A).GetSafeNormal();
+			OutNormal = GetComponentTransform().TransformVectorNoScale(LocalNormal).GetSafeNormal();
 			return true;
 		}
 	}
