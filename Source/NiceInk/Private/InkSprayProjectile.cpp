@@ -92,12 +92,19 @@ void AInkSprayProjectile::OnBlobHit(UPrimitiveComponent* HitComp, AActor* OtherA
 	{
 		if (Target != GetInstigator())
 		{
-			// 命中作畫者：噴漬標記＋該回合致盲
+			// 命中作畫者：噴漬標記＋該回合致盲。
+			// 站姿＝精準解析；彎腰（poseable，姿勢偏離站姿）＝骨頭錨定粗落點。
 			FVector2D UV;
-			if (Target->Body && Target->Body->ResolveBodyUV(Hit.ImpactPoint, UV))
+			bool bResolved = !Target->bLeanLocked && Target->Body && Target->Body->ResolveBodyUV(Hit.ImpactPoint, UV, 45.0f);
+			if (!bResolved)
+			{
+				bResolved = Target->GetEvidenceUVForHit(Hit.BoneName, Hit.ImpactPoint, UV);
+			}
+			if (bResolved)
 			{
 				Target->MulticastAddEvidence(SprayType, UV, FMath::Rand());
 			}
+			// 被噴不強制起身——半盲續畫走鐘自己的畫（SPEC v3.1 定案 #20）
 			Target->ServerApplyBlind(SprayType);
 		}
 	}

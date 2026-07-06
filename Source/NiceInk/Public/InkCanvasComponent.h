@@ -34,11 +34,11 @@ public:
 	FOnInkCanvasChanged OnCanvasChanged;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Ink", meta = (ClampMin = "256", ClampMax = "4096"))
-	int32 RenderTargetResolution = 1024;
+	int32 RenderTargetResolution = 2048;
 
-	// 固定麥克筆筆寬（UV 半徑）。SPEC：同一種筆觸、同一粗度。
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.001", ClampMax = "0.05"))
-	float MarkerUvRadius = 0.006f;
+	// 固定麥克筆筆寬（UV 半徑）。SPEC v3.1：細筆尖——皮膚是跨場資源，細筆控制通膨。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0005", ClampMax = "0.05"))
+	float MarkerUvRadius = 0.0022f;
 
 	// 單段 UV 距離超過此值視為跨 UV 島跳躍：不內插、直接斷筆重起。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.01", ClampMax = "0.5"))

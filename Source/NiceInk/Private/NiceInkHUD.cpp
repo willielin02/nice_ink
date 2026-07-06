@@ -152,7 +152,7 @@ void ANiceInkHUD::DrawHUD()
 		Y += LineHeight;
 	}
 
-	DrawText(TEXT("Move: WASD  Look: mouse  Draw: hold LMB  Palette: 1-9,0"),
+	DrawText(TEXT("Move: WASD  Look: mouse  RMB: lean in / stand up  LMB: draw  SHIFT: peek  Palette: 1-9,0"),
 		FLinearColor(0.88f, 0.88f, 0.88f, 1.0f), Padding, Y, nullptr, 0.8f, false);
 	Y += LineHeight;
 	DrawText(TEXT("Console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"),
@@ -261,6 +261,23 @@ void ANiceInkHUD::DrawInkCrosshair()
 		}
 		CrosshairColor = MyChar->GetCurrentColor();
 		CrosshairColor.A = 1.0f;
+
+		// 貼臉鎖定：麥克筆游標取代準星（筆尖點＋筆桿斜線＋選色環）
+		if (MyChar->bLeanLocked)
+		{
+			const FVector2D Cur = MyChar->GetLeanCursorPx();
+			Canvas->K2_DrawLine(FVector2D(Cur.X + 3.0f, Cur.Y - 3.0f), FVector2D(Cur.X + 16.0f, Cur.Y - 16.0f), 4.0f, FLinearColor(0.15f, 0.15f, 0.18f, 1.0f));
+			DrawRect(CrosshairColor, Cur.X - 2.0f, Cur.Y - 2.0f, 4.0f, 4.0f);
+			DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), Cur.X + 14.0f, Cur.Y + 10.0f, 18.0f, 18.0f);
+			DrawRect(CrosshairColor, Cur.X + 16.0f, Cur.Y + 12.0f, 14.0f, 14.0f);
+			DrawText(TEXT("Hold LMB = draw   Hold SHIFT = peek at his face   RMB/WASD = stand up   1-9,0 = color"),
+				FLinearColor(0.85f, 0.85f, 0.8f, 1.0f), 40.0f, Canvas->ClipY - 40.0f, nullptr, 0.9f, false);
+			return;
+		}
+
+		// 未鎖定：右鍵湊上去的提示準星
+		DrawText(TEXT("RMB = lean in to draw"),
+			FLinearColor(0.7f, 0.7f, 0.7f, 0.9f), Canvas->ClipX * 0.5f - 70.0f, Canvas->ClipY * 0.5f + 26.0f, nullptr, 0.8f, false);
 	}
 
 	const float CenterX = Canvas->ClipX * 0.5f;

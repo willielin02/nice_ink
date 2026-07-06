@@ -165,6 +165,9 @@ private:
 	// 回合結算清場：全員洗麥克筆與證據標記、解除致盲（SPEC：指認結算時一同洗掉）
 	void RoundCleanupAllCharacters();
 
+	// 相位切換時全員強制起身（貼臉鎖定不跨相位）
+	void ForceExitAllLeans();
+
 	// 跨場持久化（錢包＋刺青）。存檔鍵＝玩家名（去 PIE 尾碼）＋席位；
 	// 正式版改 EOS product user id。
 	FString SaveSlotFor(const class ANiceInkPlayerState* PS) const;

@@ -325,6 +325,8 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	GS->TourWorkIdList.Reset();
 	GS->ResolutionWorkId = INDEX_NONE;
 
+	ForceExitAllLeans();
+
 	// 小遊戲難度＝罰酒杯數（酒越深 zone 越窄）
 	const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
 	const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
@@ -379,6 +381,8 @@ void ANiceInkGameMode::EnterTour()
 {
 	ANiceInkGameState* GS = NIState();
 	ANiceInkCharacter* Victim = GetVictimCharacter();
+
+	ForceExitAllLeans(); // 他醒了——所有埋著的頭都得抬起來
 
 	TourWorkIds.Reset();
 	if (Victim && Victim->InkCanvas)
@@ -565,6 +569,8 @@ void ANiceInkGameMode::OnFinaleDone()
 {
 	ANiceInkGameState* GS = NIState();
 
+	ForceExitAllLeans();
+
 	if (ANiceInkCharacter* Loser = GetVictimCharacter())
 	{
 		if (Loser->InkCanvas)
@@ -688,6 +694,14 @@ void ANiceInkGameMode::RoundCleanupAllCharacters()
 	}
 }
 
+void ANiceInkGameMode::ForceExitAllLeans()
+{
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		It->ForceExitLean();
+	}
+}
+
 void ANiceInkGameMode::DebugRoboSpray(float AimYawWorld, uint8 OriginType)
 {
 	FTimerHandle Unused;
@@ -731,10 +745,9 @@ bool ANiceInkGameMode::CanPaintOn(const ANiceInkCharacter* Painter, const ANiceI
 
 	if (GS->CurrentPhase == ENiceInkPhase::Drawing)
 	{
-		// 作畫階段：畫沉睡的受害者；誤傷開放（SPEC 定案 #11）——
-		// 麥克筆可落在其他作畫者身上（被致盲後誤畫隊友＝內容）。
-		// 誤傷不進巡禮（巡禮只收受害者畫布）、結算時全洗＝零經濟污染。
-		return PainterPS->GetPlayerId() != GS->VictimPlayerId;
+		// 作畫階段：畫沉睡的受害者。誤傷已廢止（v3.1 定案 #20）——
+		// 貼臉鎖定只落在受害者身上；致盲的代價改為毀自己的畫。
+		return TargetPS->GetPlayerId() == GS->VictimPlayerId && PainterPS->GetPlayerId() != GS->VictimPlayerId;
 	}
 	if (GS->CurrentPhase == ENiceInkPhase::Finale)
 	{

@@ -87,6 +87,9 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	FString DebugResolveBodyUV(const FVector& WorldPosition);
 
+	// 彎腰用骨骼身體要共用同一個 MID（同一組 RT／貼圖參數）
+	UMaterialInstanceDynamic* GetDynamicMaterial() const { return DynamicBodyMaterial; }
+
 	// UV -> 世界座標（找包含該 UV 的三角形做重心插值）。
 	// 巡禮鏡頭用：從筆劃 UV 反推身體表面位置。UV 圖集有縫隙：找不到回傳 false。
 	UFUNCTION(BlueprintCallable, Category = "Ink")

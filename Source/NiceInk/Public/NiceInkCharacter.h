@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/NetSerialization.h"
 #include "GameFramework/Character.h"
 #include "InkTypes.h"
 #include "NiceInkCharacter.generated.h"
@@ -9,6 +10,8 @@ class ACameraActor;
 class UCameraComponent;
 class UInkBodyComponent;
 class UInkCanvasComponent;
+class UPoseableMeshComponent;
+class USkeletalMesh;
 
 // 玩家角色：第一人稱走動的光頭黑道老大。
 // 身體＝UInkBodyComponent（char17 靜態網格＋臉貼圖＋膚色＋眼球禁畫遮罩），
@@ -48,6 +51,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
 	TObjectPtr<UStaticMesh> SleepMesh;
 
+	// 貼臉鎖定時的可擺骨身體（程式化硬彎腰——SPEC 定案 #23）。
+	// 骨骼資產缺席時退回站姿靜態網格（姿勢不演，機制照跑）。
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
+	TObjectPtr<UPoseableMeshComponent> BowBody;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
+	TObjectPtr<USkeletalMesh> BowMesh;
+
 	// 麥克筆觸及距離（公分）。刻意短——近臉作畫原則：要畫就得湊近。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "50", ClampMax = "500"))
 	float PaintReach = 140.0f;
@@ -61,6 +72,27 @@ public:
 	// 沉睡中（受害者入座～現身之間）。移動鎖定；閉眼與否看 bEyesOpen。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Asleep, Category = "Nice Ink")
 	bool bAsleep = false;
+
+	// --- 貼臉鎖定（SPEC v3.1 定案 #19/#23）---
+
+	// 鎖定中：畫面固定、游標作畫、身體硬彎腰貼臉
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Lean, Category = "Nice Ink|Lean")
+	bool bLeanLocked = false;
+
+	// 鎖定點（被畫身體表面）與該處法線
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Lean")
+	FVector_NetQuantize LeanPoint;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Lean")
+	FVector_NetQuantizeNormal LeanNormal;
+
+	// 被畫的身體（受害者；終局＝輸家）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Lean")
+	TObjectPtr<ANiceInkCharacter> LeanTarget;
+
+	// 偷瞄中（按住 Shift）：頭頸硬轉向受害者——全房可見的緊張
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Peeking, Category = "Nice Ink|Lean")
+	bool bPeeking = false;
 
 	// 無聲甦醒（定案 #8）：第三次小遊戲成功後睜眼。零系統提示——
 	// 其他玩家能觀察到的破綻只有睜眼貼圖（頭部轉動待骨骼版身體）。
@@ -100,6 +132,20 @@ public:
 	// 入睡：鎖移動、閉眼、身體躺到指定位置（仰躺大字，定案 #18）。
 	// 甦醒現身：站回座位、睜眼、恢復移動。
 	void ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform);
+
+	// --- 貼臉鎖定 RPC ---
+
+	UFUNCTION(Server, Reliable)
+	void ServerEnterLean(ANiceInkCharacter* Target, FVector_NetQuantize Point, FVector_NetQuantizeNormal Normal);
+
+	UFUNCTION(Server, Reliable)
+	void ServerExitLean();
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetPeeking(bool bNewPeeking);
+
+	// 伺服器端強制起身（被踹飛、相位切換）
+	void ForceExitLean();
 
 	// --- 畫墨 RPC（作畫者 → 伺服器） ---
 
@@ -207,6 +253,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Accuse")
 	APlayerState* GetAccuseSuspect() const;
 
+	// HUD 用：鎖定中的麥克筆游標位置（螢幕像素）
+	FVector2D GetLeanCursorPx() const { return LeanCursorPx; }
+
+	// 噴射命中彎腰身體時的證據落點（骨頭→身體圖集 UV 的粗錨定；
+	// 無骨名（膠囊命中）時以命中高度粗分頭/軀幹/腿）
+	bool GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV);
+
 	// --- 除錯 exec（PIE 主控台；轉發到伺服器） ---
 
 	UFUNCTION(Exec)
@@ -258,6 +311,26 @@ private:
 	UFUNCTION()
 	void OnRep_Blinded();
 
+	UFUNCTION()
+	void OnRep_Lean();
+
+	UFUNCTION()
+	void OnRep_Peeking();
+
+	// --- 貼臉鎖定內部 ---
+
+	FVector2D LeanCursorPx = FVector2D::ZeroVector; // 虛擬麥克筆游標（螢幕像素）
+	float LeanLockTime = 0.0f;                      // 鎖定起始（鏡頭到位前不落筆）
+	bool bLeanCamActive = false;
+	bool bPeekCamApplied = false;
+
+	void PollLeanEnter(APlayerController* PC);
+	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
+	void ApplyBowPose();     // 程式化硬彎腰（所有端；含偷瞄頭頸）
+	void ResetBowPose();
+	void UpdateLeanCamera(APlayerController* PC);
+	FVector GetLeanFaceTargetWorld() const; // 受害者頭部（偷瞄注視點）
+
 	// 系統鏡頭（巡禮／指認預覽／結算聚焦）——各端本地生成、依複寫的 WorkId 對位
 	UPROPERTY(Transient)
 	TObjectPtr<ACameraActor> CinematicCamera;
@@ -283,8 +356,6 @@ private:
 	void PollMove(APlayerController* PC);
 	void PollMinigame(APlayerController* PC);
 	void PollPalette(APlayerController* PC);
-	void PollPaint(APlayerController* PC, float DeltaSeconds);
 	void StopPaintingLocal();
-	ANiceInkCharacter* TraceForBody(FVector2D& OutUV) const;
 	void ApplySleepVisual();
 };

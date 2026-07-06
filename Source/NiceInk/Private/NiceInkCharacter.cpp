@@ -3,6 +3,7 @@
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/PoseableMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -34,6 +35,13 @@ namespace
 
 	constexpr float PointFlushInterval = 0.05f;
 	constexpr int32 PointFlushMaxBatch = 10;
+
+	// 貼臉鎖定參數
+	constexpr float LeanEnterMaxDistance = 300.0f;  // 起手距離（湊上去的觸發範圍）
+	constexpr float LeanStandoff = 55.0f;           // 鎖定時腳站在落筆點外多遠
+	constexpr float LeanCameraHeight = 38.0f;       // 鎖定鏡頭離皮膚
+	constexpr float LeanPaintDelay = 0.25f;         // 鏡頭到位前不落筆
+	constexpr float LeanCursorSpeed = 1.0f;         // 游標像素/滑鼠單位
 
 	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
 	FVector ClampToRoom(const FVector& P)
@@ -82,6 +90,18 @@ ANiceInkCharacter::ANiceInkCharacter()
 		Body->BodyMaterial = BodyMaterialAsset.Object;
 	}
 
+	// 彎腰用可擺骨身體：鎖定時亮、平時藏。只擋噴射（PhysicsBody），
+	// 不擋 Visibility——別人的游標射線要穿過你打到受害者皮膚。
+	BowBody = CreateDefaultSubobject<UPoseableMeshComponent>(TEXT("BowBody"));
+	BowBody->SetupAttachment(GetCapsuleComponent());
+	BowBody->SetRelativeLocation(BodyStandRelLoc);
+	BowBody->SetRelativeRotation(BodyStandRelRot);
+	BowBody->SetOwnerNoSee(true);
+	BowBody->SetVisibility(false);
+	BowBody->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	BowBody->SetCollisionResponseToAllChannels(ECR_Ignore);
+	BowBody->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+
 	InkCanvas = CreateDefaultSubobject<UInkCanvasComponent>(TEXT("InkCanvas"));
 
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
@@ -113,6 +133,11 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkCharacter, KickCharges);
 	DOREPLIFETIME(ANiceInkCharacter, bBlinded);
 	DOREPLIFETIME(ANiceInkCharacter, BlindType);
+	DOREPLIFETIME(ANiceInkCharacter, bLeanLocked);
+	DOREPLIFETIME(ANiceInkCharacter, LeanPoint);
+	DOREPLIFETIME(ANiceInkCharacter, LeanNormal);
+	DOREPLIFETIME(ANiceInkCharacter, LeanTarget);
+	DOREPLIFETIME(ANiceInkCharacter, bPeeking);
 }
 
 void ANiceInkCharacter::Tick(float DeltaSeconds)
@@ -134,7 +159,8 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollAccusation(PC);
 	PollLobby(PC);
 	PollPalette(PC);
-	PollPaint(PC, DeltaSeconds);
+	PollLeanEnter(PC);
+	PollLockedDraw(PC, DeltaSeconds);
 	UpdateCinematicCamera(PC);
 }
 
@@ -160,6 +186,15 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	{
 		return;
 	}
+
+	// 貼臉鎖定中：鎖定畫布／偷瞄鏡頭優先
+	if (bLeanLocked && (GS->CurrentPhase == ENiceInkPhase::Drawing || GS->CurrentPhase == ENiceInkPhase::Finale))
+	{
+		UpdateLeanCamera(PC);
+		return;
+	}
+	bLeanCamActive = false;
+	bPeekCamApplied = false;
 
 	const bool bIsVictim = GetInkAuthorId() == GS->VictimPlayerId;
 	int32 FocusWork = INDEX_NONE;
@@ -445,6 +480,11 @@ void ANiceInkCharacter::EnsureAvatarApplied()
 
 void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 {
+	if (bLeanLocked)
+	{
+		return; // 鎖定中滑鼠＝麥克筆游標（PollLockedDraw），不轉視角
+	}
+
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	PC->GetInputMouseDelta(MouseX, MouseY);
@@ -472,6 +512,11 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 
 void ANiceInkCharacter::PollMove(APlayerController* PC)
 {
+	if (bLeanLocked)
+	{
+		return; // WASD 在鎖定中＝起身（PollLockedDraw 處理）
+	}
+
 	const bool bAnyMoveKey =
 		PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::A) ||
 		PC->IsInputKeyDown(EKeys::S) || PC->IsInputKeyDown(EKeys::D);
@@ -563,18 +608,129 @@ void ANiceInkCharacter::PollPalette(APlayerController* PC)
 	}
 }
 
-void ANiceInkCharacter::PollPaint(APlayerController* PC, float DeltaSeconds)
+// --- 貼臉鎖定：湊上去 ---
+
+void ANiceInkCharacter::PollLeanEnter(APlayerController* PC)
 {
-	const bool bWantsPaint = !bAsleep && PC->IsInputKeyDown(EKeys::LeftMouseButton);
+	if (bLeanLocked || bAsleep || !PC->WasInputKeyJustPressed(EKeys::RightMouseButton))
+	{
+		return;
+	}
+
+	// 準星指著想畫的地方按右鍵＝湊上去
+	UWorld* World = GetWorld();
+	if (!World || !FirstPersonCamera)
+	{
+		return;
+	}
+
+	const FVector Start = FirstPersonCamera->GetComponentLocation();
+	const FVector End = Start + FirstPersonCamera->GetForwardVector() * LeanEnterMaxDistance;
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkLeanTrace), /*bInTraceComplex=*/true);
+	QueryParams.AddIgnoredActor(this);
+
+	FHitResult Hit;
+	if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QueryParams))
+	{
+		return;
+	}
+
+	ANiceInkCharacter* Target = Cast<ANiceInkCharacter>(Hit.GetActor());
+	if (!Target || Target == this || !Target->Body)
+	{
+		return;
+	}
+
+	FVector2D UnusedUV;
+	if (!Target->Body->ResolveBodyUV(Hit.ImpactPoint, UnusedUV))
+	{
+		return; // 不在皮膚上
+	}
+
+	ServerEnterLean(Target, Hit.ImpactPoint, Hit.ImpactNormal);
+}
+
+// --- 貼臉鎖定：鎖定中的游標作畫／偷瞄／起身 ---
+
+void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds)
+{
+	if (!bLeanLocked)
+	{
+		StopPaintingLocal();
+		return;
+	}
+
+	// 起身：右鍵或 WASD
+	const bool bWantsExit = PC->WasInputKeyJustPressed(EKeys::RightMouseButton) ||
+		PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::A) ||
+		PC->IsInputKeyDown(EKeys::S) || PC->IsInputKeyDown(EKeys::D);
+	if (bWantsExit)
+	{
+		StopPaintingLocal();
+		ServerExitLean();
+		return;
+	}
+
+	// 偷瞄：按住 Shift，鬆開彈回（頭頸硬轉，全房可見）
+	const bool bWantsPeek = PC->IsInputKeyDown(EKeys::LeftShift);
+	if (bWantsPeek != bPeeking)
+	{
+		StopPaintingLocal();
+		ServerSetPeeking(bWantsPeek);
+		// 本地即時反應（複寫回來會再套一次，冪等）
+		bPeeking = bWantsPeek;
+		OnRep_Peeking();
+	}
+
+	// 虛擬麥克筆游標：滑鼠位移驅動、夾在視窗內
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	PC->GetInputMouseDelta(MouseX, MouseY);
+	int32 ViewX = 0;
+	int32 ViewY = 0;
+	PC->GetViewportSize(ViewX, ViewY);
+	LeanCursorPx.X = FMath::Clamp(LeanCursorPx.X + MouseX * LeanCursorSpeed * 6.0f, 0.0f, static_cast<float>(ViewX));
+	LeanCursorPx.Y = FMath::Clamp(LeanCursorPx.Y - MouseY * LeanCursorSpeed * 6.0f, 0.0f, static_cast<float>(ViewY));
+
+	// 偷瞄中或鏡頭未到位不落筆
+	const float Now = GetWorld()->GetTimeSeconds();
+	const bool bCanPaint = !bPeeking && (Now - LeanLockTime) > LeanPaintDelay;
+	const bool bWantsPaint = bCanPaint && PC->IsInputKeyDown(EKeys::LeftMouseButton);
 	if (!bWantsPaint)
 	{
 		StopPaintingLocal();
 		return;
 	}
 
-	FVector2D UV = FVector2D::ZeroVector;
-	ANiceInkCharacter* Target = TraceForBody(UV);
-	if (!Target)
+	// 游標 → 射線 → 受害者皮膚 UV
+	ANiceInkCharacter* Target = LeanTarget.Get();
+	if (!Target || !Target->Body)
+	{
+		StopPaintingLocal();
+		return;
+	}
+
+	FVector RayOrigin, RayDir;
+	if (!PC->DeprojectScreenPositionToWorld(LeanCursorPx.X, LeanCursorPx.Y, RayOrigin, RayDir))
+	{
+		StopPaintingLocal();
+		return;
+	}
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkCursorTrace), /*bInTraceComplex=*/true);
+	QueryParams.AddIgnoredActor(this);
+
+	FHitResult Hit;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, RayOrigin, RayOrigin + RayDir * 220.0f, ECC_Visibility, QueryParams) ||
+		Hit.GetActor() != Target)
+	{
+		StopPaintingLocal();
+		return;
+	}
+
+	FVector2D UV;
+	if (!Target->Body->ResolveBodyUV(Hit.ImpactPoint, UV))
 	{
 		StopPaintingLocal();
 		return;
@@ -615,40 +771,6 @@ void ANiceInkCharacter::StopPaintingLocal()
 	ServerPaintEnd();
 	bPainting = false;
 	PaintTarget = nullptr;
-}
-
-ANiceInkCharacter* ANiceInkCharacter::TraceForBody(FVector2D& OutUV) const
-{
-	UWorld* World = GetWorld();
-	if (!World || !FirstPersonCamera)
-	{
-		return nullptr;
-	}
-
-	const FVector Start = FirstPersonCamera->GetComponentLocation();
-	const FVector End = Start + FirstPersonCamera->GetForwardVector() * PaintReach;
-
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkPaintTrace), /*bInTraceComplex=*/true);
-	QueryParams.AddIgnoredActor(this);
-
-	FHitResult Hit;
-	if (!World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, QueryParams))
-	{
-		return nullptr;
-	}
-
-	ANiceInkCharacter* Target = Cast<ANiceInkCharacter>(Hit.GetActor());
-	if (!Target || Target == this || !Target->Body)
-	{
-		return nullptr;
-	}
-
-	if (!Target->Body->ResolveBodyUV(Hit.ImpactPoint, OutUV))
-	{
-		return nullptr;
-	}
-
-	return Target;
 }
 
 FLinearColor ANiceInkCharacter::GetCurrentColor() const
@@ -789,12 +911,13 @@ void ANiceInkCharacter::ServerKick_Implementation(float AimYawWorld)
 	}
 
 	// 瘀青標記（命中部位）＋彈飛。無命中回饋給沉睡者。
-	// 膠囊命中點離網格有段距離——容差放寬
+	// 膠囊命中點離網格有段距離——容差放寬；彎腰中被踹＝從跪伏裡被打飛（強制起身）
 	FVector2D UV;
 	if (Target->Body && Target->Body->ResolveBodyUV(Hit.ImpactPoint, UV, 45.0f))
 	{
 		Target->MulticastAddEvidence(EInkEvidenceType::Bruise, UV, FMath::Rand());
 	}
+	Target->ForceExitLean();
 	Target->LaunchCharacter(Dir * 900.0f + FVector(0, 0, 380.0f), true, true);
 }
 
@@ -922,6 +1045,320 @@ void ANiceInkCharacter::ApplySleepVisual()
 			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 62.0f));
 			FirstPersonCamera->SetRelativeRotation(FRotator::ZeroRotator);
 		}
+	}
+}
+
+// --- 貼臉鎖定 ---
+
+void ANiceInkCharacter::ServerEnterLean_Implementation(ANiceInkCharacter* Target, FVector_NetQuantize Point, FVector_NetQuantizeNormal Normal)
+{
+	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
+	if (!GM || !Target || bLeanLocked || bAsleep || !GM->CanPaintOn(this, Target))
+	{
+		return;
+	}
+	if (FVector::Dist(GetActorLocation(), Point) > LeanEnterMaxDistance + 120.0f)
+	{
+		return;
+	}
+
+	// 擠位錯開：與已鎖定的別人距離太近就沿切線推開一點（擠但不穿模）
+	FVector AdjustedPoint = Point;
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		if (*It != this && It->bLeanLocked && FVector::Dist(It->LeanPoint, AdjustedPoint) < 30.0f)
+		{
+			const FVector Away = (AdjustedPoint - It->LeanPoint).GetSafeNormal2D();
+			AdjustedPoint += (Away.IsNearlyZero() ? FVector(0, 1, 0) : Away) * 30.0f;
+		}
+	}
+
+	// 站位：沿目前接近方向退到 standoff，腳保持地面高度，面向落筆點
+	const FVector Approach = (GetActorLocation() - AdjustedPoint).GetSafeNormal2D();
+	FVector StandLoc = AdjustedPoint + (Approach.IsNearlyZero() ? FVector(0, -1, 0) : Approach) * LeanStandoff;
+	StandLoc.Z = GetActorLocation().Z;
+	const float FaceYaw = (-Approach).Rotation().Yaw;
+
+	bLeanLocked = true;
+	LeanPoint = AdjustedPoint;
+	LeanNormal = Normal;
+	LeanTarget = Target;
+	bPeeking = false;
+
+	SetActorLocation(StandLoc, false, nullptr, ETeleportType::TeleportPhysics);
+	SetActorRotation(FRotator(0.0f, FaceYaw, 0.0f));
+	GetCharacterMovement()->StopMovementImmediately();
+	GetCharacterMovement()->DisableMovement();
+
+	OnRep_Lean();
+}
+
+void ANiceInkCharacter::ServerExitLean_Implementation()
+{
+	ForceExitLean();
+}
+
+void ANiceInkCharacter::ForceExitLean()
+{
+	if (!HasAuthority() || !bLeanLocked)
+	{
+		return;
+	}
+	bLeanLocked = false;
+	bPeeking = false;
+	LeanTarget = nullptr;
+	if (!bAsleep)
+	{
+		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+	}
+	OnRep_Lean();
+}
+
+void ANiceInkCharacter::ServerSetPeeking_Implementation(bool bNewPeeking)
+{
+	if (!bLeanLocked)
+	{
+		return;
+	}
+	bPeeking = bNewPeeking;
+	OnRep_Peeking();
+}
+
+void ANiceInkCharacter::OnRep_Lean()
+{
+	// 沉睡時膠囊不跟控制器 yaw 的同一招：鎖定時朝向由伺服器定
+	bUseControllerRotationYaw = !bLeanLocked && !bAsleep;
+
+	// 鎖定中：靜態身體讓位（藏＋無碰撞），噴射改打膠囊（骨骼 physics asset 未備前的粗命中）
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, bLeanLocked ? ECR_Block : ECR_Ignore);
+
+	if (bLeanLocked)
+	{
+		ApplyBowPose();
+		if (IsLocallyControlled())
+		{
+			LeanLockTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			if (APlayerController* PC = Cast<APlayerController>(GetController()))
+			{
+				int32 ViewX = 0, ViewY = 0;
+				PC->GetViewportSize(ViewX, ViewY);
+				LeanCursorPx = FVector2D(ViewX * 0.5f, ViewY * 0.5f);
+			}
+		}
+	}
+	else
+	{
+		ResetBowPose();
+		StopPaintingLocal();
+	}
+}
+
+void ANiceInkCharacter::OnRep_Peeking()
+{
+	if (bLeanLocked)
+	{
+		ApplyBowPose(); // 頭頸重擺（含偷瞄轉頭）
+	}
+}
+
+FVector ANiceInkCharacter::GetLeanFaceTargetWorld() const
+{
+	// 受害者的頭（偷瞄注視點）：睡姿網格腳底原點、頭在本地 +Z ~158
+	const ANiceInkCharacter* Target = LeanTarget.Get();
+	if (Target && Target->Body)
+	{
+		return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 158.0f));
+	}
+	return LeanPoint;
+}
+
+namespace
+{
+	// 對 poseable 骨頭在元件空間左乘一個增量旋轉（子骨自動跟隨）
+	void RotateBoneCS(UPoseableMeshComponent* Poseable, FName Bone, const FQuat& Delta)
+	{
+		FTransform T = Poseable->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace);
+		T.SetRotation(Delta * T.GetRotation());
+		Poseable->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
+	}
+}
+
+void ANiceInkCharacter::ApplyBowPose()
+{
+	if (!BowBody)
+	{
+		return;
+	}
+
+	// 骨骼資產惰性載入＋共用身體 MID（缺席時機制照跑、姿勢不演）
+	if (!BowBody->GetSkinnedAsset())
+	{
+		if (!BowMesh)
+		{
+			BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Char17.SK_Char17"));
+		}
+		if (BowMesh)
+		{
+			BowBody->SetSkinnedAssetAndUpdate(BowMesh);
+			if (Body && Body->GetDynamicMaterial())
+			{
+				BowBody->SetMaterial(0, Body->GetDynamicMaterial());
+			}
+		}
+	}
+	if (!BowBody->GetSkinnedAsset())
+	{
+		return;
+	}
+
+	// 換上可擺骨身體；靜態身體藏起來、連碰撞一起讓位（噴射打彎腰的身體）
+	if (Body)
+	{
+		Body->SetVisibility(false);
+		Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	BowBody->SetVisibility(true);
+
+	// 重置再擺（冪等）
+	BowBody->ResetBoneTransformByName(TEXT("Spine"));
+	BowBody->ResetBoneTransformByName(TEXT("Neck"));
+	BowBody->ResetBoneTransformByName(TEXT("Head"));
+
+	// 元件空間：網格臉朝本地 +Y。前彎＝繞本地 X 轉負角（PIE 實測校正符號）。
+	// Spine 一根直直前彎：落筆點越低彎越深（硬生生，粗映射就是要的效果）
+	const float TargetZ = FMath::Clamp(LeanPoint.Z - (GetActorLocation().Z - 92.0f), 0.0f, 120.0f);
+	const float SpineDeg = FMath::Clamp(95.0f - TargetZ * 0.45f, 45.0f, 95.0f);
+	RotateBoneCS(BowBody, TEXT("Spine"), FQuat(FVector(1, 0, 0), FMath::DegreesToRadians(-SpineDeg)));
+
+	if (bPeeking)
+	{
+		// 偷瞄：Neck＋Head 一起硬轉向受害者的臉（抬頭＋側轉）
+		const FVector FaceTarget = GetLeanFaceTargetWorld();
+		const FTransform CompT = BowBody->GetComponentTransform();
+		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector LocalDir = CompT.InverseTransformVector((FaceTarget - HeadPos).GetSafeNormal());
+		const float YawDeg = FMath::Clamp(FMath::RadiansToDegrees(FMath::Atan2(LocalDir.X, LocalDir.Y)), -80.0f, 80.0f);
+		const FQuat PeekUp(FVector(1, 0, 0), FMath::DegreesToRadians(SpineDeg * 0.5f + 15.0f));
+		const FQuat PeekYaw(FVector(0, 0, 1), FMath::DegreesToRadians(YawDeg * 0.5f));
+		RotateBoneCS(BowBody, TEXT("Neck"), PeekYaw * PeekUp);
+		RotateBoneCS(BowBody, TEXT("Head"), PeekYaw * PeekUp);
+	}
+	else
+	{
+		// 作畫：Neck＋Head 一起直直往前上方抬——臉對著落筆點（重度近視式）
+		const float HeadDeg = SpineDeg * 0.4f;
+		const FQuat HeadUp(FVector(1, 0, 0), FMath::DegreesToRadians(HeadDeg));
+		RotateBoneCS(BowBody, TEXT("Neck"), HeadUp);
+		RotateBoneCS(BowBody, TEXT("Head"), HeadUp);
+	}
+}
+
+bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV)
+{
+	if (!Body)
+	{
+		return false;
+	}
+
+	// 骨頭 → 站姿本地座標的粗錨點（濺漬不需要毫米精度；彎腰姿勢下的命中夠用）
+	FVector Local(0.0f, 20.0f, 122.0f); // 預設：胸口
+	if (BoneName != NAME_None)
+	{
+		const FString Bone = BoneName.ToString();
+		if (Bone.Contains(TEXT("Head")) || Bone.Contains(TEXT("Neck")))
+		{
+			Local = FVector(0.0f, 18.0f, 155.0f);
+		}
+		else if (Bone.Contains(TEXT("Hips")) || Bone == TEXT("Spine"))
+		{
+			Local = FVector(0.0f, 20.0f, 95.0f);
+		}
+		else if (Bone.Contains(TEXT("Arm")) || Bone.Contains(TEXT("Hand")))
+		{
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 48.0f : -48.0f, -4.0f, 120.0f);
+		}
+		else if (Bone.Contains(TEXT("UpLeg")))
+		{
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 11.0f : -11.0f, 2.0f, 62.0f);
+		}
+		else if (Bone.Contains(TEXT("Leg")) || Bone.Contains(TEXT("Foot")) || Bone.Contains(TEXT("Toe")))
+		{
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 10.0f : -10.0f, -3.0f, 28.0f);
+		}
+	}
+	else
+	{
+		// 膠囊命中（無骨名）：彎腰中臉在前傾低處——命中高度粗分部位
+		const float RelZ = ImpactPoint.Z - (GetActorLocation().Z - 92.0f); // 相對腳底
+		if (bLeanLocked ? RelZ > 55.0f : RelZ > 130.0f)
+		{
+			Local = FVector(0.0f, 18.0f, 155.0f); // 頭臉（彎腰時頭在半高）
+		}
+		else if (RelZ < 45.0f)
+		{
+			Local = FVector(0.0f, -3.0f, 40.0f); // 腿
+		}
+	}
+
+	const FVector World = Body->GetComponentTransform().TransformPosition(Local);
+	return Body->ResolveBodyUV(World, OutUV, 30.0f);
+}
+
+void ANiceInkCharacter::ResetBowPose()
+{
+	if (BowBody)
+	{
+		BowBody->SetVisibility(false);
+	}
+	if (Body && !bAsleep)
+	{
+		Body->SetVisibility(true);
+		Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	}
+}
+
+void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
+{
+	ACameraActor* Cam = GetOrSpawnCinematicCamera();
+	if (!Cam)
+	{
+		return;
+	}
+
+	if (bPeeking)
+	{
+		if (!bPeekCamApplied)
+		{
+			// 偷瞄鏡頭：從鎖定點上方硬轉向受害者的臉
+			const FVector FaceTarget = GetLeanFaceTargetWorld();
+			const FVector CamPos = FVector(LeanPoint) + FVector(LeanNormal) * (LeanCameraHeight + 14.0f);
+			Cam->SetActorLocationAndRotation(CamPos, (FaceTarget - CamPos).Rotation());
+			PC->SetViewTargetWithBlend(Cam, 0.12f, VTBlend_Linear);
+			bPeekCamApplied = true;
+			bLeanCamActive = false;
+		}
+		return;
+	}
+
+	if (!bLeanCamActive)
+	{
+		// 鎖定畫布鏡頭：貼皮膚上方、垂直往下看；「上」偏向作畫者自己（像趴在桌前的紙）
+		const FVector N = FVector(LeanNormal).GetSafeNormal();
+		const FVector CamPos = FVector(LeanPoint) + N * LeanCameraHeight;
+		FVector UpHint = (FVector(LeanPoint) - GetActorLocation()).GetSafeNormal2D();
+		if (UpHint.IsNearlyZero())
+		{
+			UpHint = FVector(0, 1, 0);
+		}
+		const FRotator CamRot = FRotationMatrix::MakeFromXZ(-N, UpHint).Rotator();
+		Cam->SetActorLocationAndRotation(CamPos, CamRot);
+		PC->SetViewTargetWithBlend(Cam, 0.18f, VTBlend_Linear);
+		bLeanCamActive = true;
+		bPeekCamApplied = false;
+		bViewOverridden = true;
+		bWideViewActive = false;
+		bThirdPersonActive = false;
+		LastViewWorkId = INDEX_NONE;
 	}
 }
 
