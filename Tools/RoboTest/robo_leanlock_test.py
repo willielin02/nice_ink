@@ -107,19 +107,21 @@ class Test:
                 log(f"{tag} locked={locked} bowVisible={bow_vis} bowAsset={bow_asset.get_name() if bow_asset else None}")
                 ok_all = ok_all and bool(locked)
             log("LEAN REPLICATION: " + ("PASS" if ok_all else "FAIL"))
-            # 骨名與 Spine 弯曲診斷（server 端）
+            # 姿勢解算驗收：頭骨要抵達落筆點上方 ~22cm、臉軸對準落筆點
             server0 = get_world("UEDPIE_0")
             a0 = find_char(server0, self.artist_pid)
             bow0 = a0.get_editor_property("BowBody")
             try:
                 n = bow0.get_num_bones()
-                names = [str(bow0.get_bone_name(i)) for i in range(min(n, 60))]
-                interesting = [x for x in names if ("pine" in x or "eck" in x or "ead" in x or "ips" in x)]
-                log(f"bones({n}): {interesting}")
-                st = bow0.get_bone_transform_by_name("Spine", unreal.BoneSpaces.COMPONENT_SPACE)
-                log(f"Spine CS rot: {st.rotation.rotator()}")
+                log(f"bones({n})")
+                head = bow0.get_bone_transform_by_name("Head", unreal.BoneSpaces.WORLD_SPACE).translation
+                lp = a0.get_editor_property("LeanPoint")
+                lp = unreal.Vector(lp.x, lp.y, lp.z)
+                d = unreal.Vector(head.x - lp.x, head.y - lp.y, head.z - lp.z)
+                dist = (d.x**2 + d.y**2 + d.z**2) ** 0.5
+                log(f"head-to-lockpoint: {dist:.1f} cm " + ("PASS(<32)" if dist < 32.0 else "FAIL"))
             except Exception as e:
-                log("bone probe err: " + str(e))
+                log("pose probe err: " + str(e))
             # 細筆畫一條線（timer-deferred hook——guard 外，multicast 走真網路）
             server = get_world("UEDPIE_0")
             gm = unreal.GameplayStatics.get_game_mode(server)

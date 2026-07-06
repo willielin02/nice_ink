@@ -1274,10 +1274,14 @@ void ANiceInkCharacter::ApplyBowPose()
 	}
 	BowBody->SetVisibility(true);
 
-	// 重置再擺（冪等）
+	// 重置再擺（冪等）：先還原元件相對位置（上次的補位滑移不可累積），再回參考姿勢。
+	// UPoseableMeshComponent 的 CS 快取要等 tick 才重算——每次「寫姿勢→讀骨骼」之間
+	// 都必須 RefreshBoneTransforms()，否則讀到上一幀的舊姿勢（65.9cm 誤差的元凶）。
+	BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
 	BowBody->ResetBoneTransformByName(TEXT("Spine"));
 	BowBody->ResetBoneTransformByName(TEXT("Neck"));
 	BowBody->ResetBoneTransformByName(TEXT("Head"));
+	BowBody->RefreshBoneTransforms();
 
 	const FTransform CompT = BowBody->GetComponentTransform();
 	const FVector BendAxisW = CompT.TransformVectorNoScale(FVector(1, 0, 0)).GetSafeNormal(); // 元件 X＝彎折軸
@@ -1302,8 +1306,9 @@ void ANiceInkCharacter::ApplyBowPose()
 	}
 	SpineRad = FMath::Clamp(SpineRad, FMath::DegreesToRadians(-115.0f), FMath::DegreesToRadians(115.0f));
 	RotateBoneCS(BowBody, TEXT("Spine"), FQuat(FVector(1, 0, 0), SpineRad));
+	BowBody->RefreshBoneTransforms();
 
-	// 手臂長度不足以抵達 HeadTarget 時，整個 BowBody 往前湊（上半身探出去的誇張感）
+	// 彎腰半徑不足以抵達 HeadTarget 時，整個 BowBody 補位湊過去（上半身探出去的誇張感）
 	{
 		const FVector HeadAfterSpine = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
 		const FVector Gap = HeadTarget - HeadAfterSpine;
@@ -1321,7 +1326,9 @@ void ANiceInkCharacter::ApplyBowPose()
 	const FQuat AimDelta = FQuat::FindBetweenNormals(FaceDirCS, DesiredCS);
 	const FQuat HalfAim = FQuat::Slerp(FQuat::Identity, AimDelta, 0.5f);
 	RotateBoneCS(BowBody, TEXT("Neck"), HalfAim);
+	BowBody->RefreshBoneTransforms(); // Neck 動了頭的 CS——Head 寫入前先重算
 	RotateBoneCS(BowBody, TEXT("Head"), HalfAim);
+	BowBody->RefreshBoneTransforms(); // 收尾：鏡頭/實體筆同 tick 讀頭骨要拿到最終姿勢
 }
 
 bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV)
@@ -1423,6 +1430,7 @@ void ANiceInkCharacter::ResetBowPose()
 	if (BowBody)
 	{
 		BowBody->SetVisibility(false);
+		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot); // 清掉補位滑移
 	}
 	if (Body && !bAsleep)
 	{
