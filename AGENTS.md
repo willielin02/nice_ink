@@ -1,15 +1,14 @@
-# Nice Ink — Claude 操作手冊
+# Nice Ink — Codex 操作手冊
 
-這份文件是為每一個接手本專案的 Claude 寫的操作手冊。先讀完這份，再動任何東西。
-深度背景在記憶資料夾（`~/.claude/projects/c--games-Unreal-Engine-nice-ink/memory/`）——
+這份文件是為每一個接手本專案的 Codex 寫的操作手冊。先讀完這份，再動任何東西。
+深度背景在記憶資料夾（`~/.Codex/projects/c--games-Unreal-Engine-nice-ink/memory/`）——
 **開工前把 `project_nice_ink_v3_build.md` 和 `project_nice_ink_v2.md` 整份讀完**，裡面是所有踩過的坑和定案史。
 
 ## 專案是什麼
 
-派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
-（沉睡＝醉夢圓形迷宮小遊戲），其他人用麥克筆在他身上畫畫；醒來後巡禮指認作者，
-猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。
-**設計的唯一權威是 `SPEC.md`**（v3.4）。
+派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在桑拿房喝酒，醉倒的人閉眼沉睡，
+其他人用麥克筆在他身上畫畫；醒來後巡禮指認作者，猜錯的畫變成真刺青。UE 5.7 C++，
+無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。**設計的唯一權威是 `SPEC.md`**（v3.2）。
 
 ## 鐵律（違反任何一條都是嚴重事故）
 
@@ -79,29 +78,12 @@
 - **python 的 `unreal.Rotator(roll, pitch, yaw)` 參數順序**；GameMode CDO 改了不會進 PIE 實例
   （開 PIE 後改實例屬性）。
 - **PIE 多人視窗z順序**：點主編輯器會把浮動客戶端視窗蓋到後面——沒消失，工作列叫回來。
-- **Git Bash 跑 `-ExecutePythonScript` 引號兩種死法**：外層單引號→UE 收到 `""路徑""`＝空值→
-  編輯器無事可做**永遠空轉燒 CPU**；`\\` 反斜線被吃光。解法＝用 PowerShell 工具＋把腳本
-  複製到無空白路徑（scratchpad）再跑；開跑後 grep log 的 `LogInit: Command Line:` 驗證解析。
-- **level `duplicate_asset` 後同 session `load_level` 該關卡＝fatal crash**（World Memory Leaks
-  GC assert）。另存關卡的正解：load 原關卡→記憶體改→`EditorLoadingAndSavingUtils.save_map(world, 新路徑)`。
-- **換房間網格後先跑地板探針再跑 PIE**：對席位做向下射線（從頭頂高 z≈240 打，順便抓低空障礙），
-  「席位懸空」在探針裡一眼看穿，比 PIE 掉出世界好查（道場實例：建物西段無地板，整體西移才救回）。
-- **殭屍編輯器鎖 umap＝關卡存檔無聲失敗**：GUI 編輯器 crash 後 CrashReportClient 可能把它
-  重新拉起來，Stop-Process 撲空也照樣印成功。之後每個 headless session 的 save_current_level/
-  save_map 全部靜默失敗（log 裡只有一行 LogSavePackage Warning: Failed to move ... to temp）、
-  delete_asset 回 True 但檔案還在。防法：**關卡存檔一律檢查回傳值＋存完立刻比對 umap mtime**；
-  懷疑時 `Get-Process UnrealEditor` 清點＋用 Rename-Item 測檔案鎖。
-- **headless 匯入 FBX 部件（combine=False）頂點烘進 FBX 世界空間**（含 Y 翻轉）：
-  所有部件 actor 擺同一個基準點即可原樣重現；Y 翻不翻用非對稱特徵射線實測，不要猜。
 
 ## 技術地圖
 
 - `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/彎腰/鏡頭/筆）、`InkCanvasComponent`
   （筆劃=真相、RT=快取、作者 ID/碳黑/雷射/洗掉）、`InkBodyComponent`（世界↔UV 雙向解算、
-  tri-cache、換睡姿網格、眼睛開閉）、GameMode（回合狀態機）、GameState（相位/受害者/計時）、
-  `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/視錐/導航/旋轉）。
-- 場地＝`L_Dojo`（道場 25 獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；L_Sauna 保留）；
-  光照＝fullbright 均勻環境光（唯一亮度旋鈕=SaunaSkyLight Intensity，曝光 bias 5.2 是承重值）。
+  tri-cache、換睡姿網格、眼睛開閉）、GameMode（回合狀態機）、GameState（相位/受害者/計時）。
 - 墨水圖集 UV0＝**均勻紋素密度**0.898 px/mm@2048（`Tools/AssetPrep/uv0_uniform.py`，
   四個匯出腳本都會呼叫）；筆寬 `MarkerUvRadius 0.00085`＝3.8mm 全身一致；跨縫縫合＝螢幕空間
   4px 細分。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
@@ -109,15 +91,13 @@
   臉照片走 FaceUV（通道1），墨水走 UV0（通道0），互不影響。
   python 環境：`C:\games\Unreal Engine\nice_ink_face_pipeline\venv\Scripts\python.exe`。
 - Blender 5.1：`"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --background <blend> --python <腳本>`；
-  角色源正本＝`SourceAssets/sumo_character_master.blend`（char17 已退役；迭代檔 previews/masters/retopo
-  已 gitignore 留本地）。
-- 下一批已知工作：手臂握筆 IK（刻意延後）、噴射出口與褌的視覺（SPEC 待定 #11）、
-  平台小號實測（待定 #12）、開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、
-  EOS 憑證＋語音接入、頭部轉動破綻、走路動畫。
+  角色源＝`Content/玩家/nice_ink_player_character17.blend`。
+- 下一批已知工作：丁髷＋褌資產上四套網格（SPEC v3.2 技術沿用表）、手臂握筆 IK（刻意延後）、
+  噴射出口與褌的視覺（SPEC 待定 #11）、平台小號實測（待定 #12）。
 
 ## 收尾紀律
 
-- 提交訊息末尾：`Co-Authored-By: Claude <noreply@anthropic.com>`。
+- 提交訊息末尾：`Co-Authored-By: Codex <noreply@anthropic.com>`。
 - 每個工作段落結束：更新記憶資料夾（新教訓寫進對應檔案＋MEMORY.md 索引行）——
   這是跨 session 的生命線，寫得越具體，下一個你越強。
 - 提交前檢查：ini 沒帶 robo 行、診斷碼已拆、SPEC 版本註記正確。
