@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DreamMaze.h"
 #include "GameFramework/GameMode.h"
 #include "NiceInkTypes.h"
 #include "NiceInkGameMode.generated.h"
@@ -27,9 +28,10 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
-	// --- 場地配置（L_Sauna 實測：房間中央是火爐，淨空地板在北側與西側走道） ---
+	// --- 場地配置（座標系沿用桑拿房實測；L_Dojo 道場已以地板探針驗證全席位落在開放地板，
+	//     道場 actor 基準點為此西移 250cm——見 CLAUDE.md 陷阱年鑑「地板探針」條） ---
 
-	// 六個席位（2D；z 由地板探測決定）。實測避開火爐與牆外。
+	// 六個席位（2D；z 由地板探測決定）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
 	TArray<FVector2D> SeatSpots = {
 		FVector2D(155.0f, -40.0f),   // 東長凳
@@ -79,17 +81,22 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Flow")
 	int32 PenaltyCupsToFinale = 3;
 
-	// --- 甦醒小遊戲參數（playtest 旋鈕；SPEC 待定 #2） ---
+	// --- 醉夢圓形迷宮（SPEC v3.3 甦醒小遊戲；待定 #2 全部旋鈕在 FDreamMazeParams） ---
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
-	float MinigamePeriodSeconds = 1.6f;
+	// 每杯一組難度檔（索引＝受害者當前罰酒杯數——酒越深夢越深）。
+	// Config 可由 DefaultGame.ini 覆寫；ini 陣列語意＝先 !MazeParamsPerCup=ClearArray
+	// 再逐條 +MazeParamsPerCup=(...)，否則會疊在 ctor 預設之後。
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Maze")
+	TArray<FDreamMazeParams> MazeParamsPerCup;
 
-	// zone 佔軸比例，索引＝當前罰酒杯數（酒越深睡越久、被畫越滿）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
-	TArray<float> MinigameZoneWidthByCup = { 0.12f, 0.09f, 0.06f };
+	// SPEC 定案 #31 常數：兇手轉盤 5 秒（非難度旋鈕，改它＝改 SPEC）
+	static constexpr float TrapDialSeconds = 5.0f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Minigame")
-	float MinigameMissCooldownSeconds = 10.0f;
+	// --- 迷宮事件路由（Character 的 Server RPC 轉進來） ---
+
+	// 受害者踩中陷阱：驗證後只通知兇手開轉盤＋掛失效保險（逾時/掉線＝0 度）
+	void HandleMazeTrapHit(class ANiceInkCharacter* Victim, int32 KillerPlayerId);
+	void HandleTrapDialSubmit(class ANiceInkCharacter* Killer, float AngleDeg);
 
 	// --- 玩家角色的入口 ---
 
@@ -126,6 +133,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboKick(float AimYawWorld);
 
+	// 迷宮：代兇手送轉盤度數（timer-deferred；robo 驗證受害者端旋轉用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboMazeDial(float AngleDeg);
+
+	// 迷宮生成統計（純計算、無 RPC——python 可直呼）；報表字串回傳＋進 log
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugMazeStats(int32 NumSeeds, int32 Cup);
+
 	// robo 測試：指定開場受害者的席位（-1＝隨機，正式行為）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedVictimSeat = -1;
@@ -141,6 +156,12 @@ private:
 	// Resolution 演出後要接的分支
 	int32 PendingNextVictimId = INDEX_NONE;
 	bool bPendingFinale = false;
+
+	// 兇手轉盤 pending（一次一件；受害者死亡序列中不會再踩）
+	int32 PendingDialKillerId = INDEX_NONE;
+	TWeakObjectPtr<ANiceInkCharacter> PendingDialVictim;
+	FTimerHandle DialFailsafeHandle;
+	void ResolveTrapDial(float AngleDeg);
 
 	ANiceInkGameState* NIState() const;
 	ANiceInkCharacter* GetVictimCharacter() const;

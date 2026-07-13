@@ -114,22 +114,39 @@ bool UInkBodyComponent::BuildTriCache()
 	}
 
 	const uint32 SafeUvChannel = FMath::Clamp<uint32>(UvChannel, 0, Vertices.GetNumTexCoords() - 1);
-	const int32 NumTris = Indices.GetNumIndices() / 3;
-	CachedTris.Reserve(NumTris);
-	for (int32 Tri = 0; Tri < NumTris; ++Tri)
+	CachedTris.Reserve(Indices.GetNumIndices() / 3);
+	// 逐 section 收集：褌（布料）section 不進快取——墨水數學只認皮膚。
+	// 效果：UV→世界（雷射／巡禮錨點／實體筆）永遠落在皮膚上；
+	// 世界→UV 的「最近距離」變成乾淨的皮膚距離（畫筆據此拒絕打在布上的筆劃，
+	// SPEC「褌下的皮膚不可畫＝物理遮擋」）。判定用材質槽名（FaceIndex 對應在本網格上損壞，不可用）。
+	const TArray<FStaticMaterial>& Mats = SM->GetStaticMaterials();
+	for (const FStaticMeshSection& Section : LOD.Sections)
 	{
-		const uint32 I0 = Indices.GetIndex(Tri * 3 + 0);
-		const uint32 I1 = Indices.GetIndex(Tri * 3 + 1);
-		const uint32 I2 = Indices.GetIndex(Tri * 3 + 2);
+		if (Mats.IsValidIndex(Section.MaterialIndex))
+		{
+			const FStaticMaterial& Mat = Mats[Section.MaterialIndex];
+			if (Mat.MaterialSlotName.ToString().Contains(TEXT("Fundoshi")) ||
+				Mat.ImportedMaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
+			{
+				continue;
+			}
+		}
+		for (uint32 Tri = 0; Tri < Section.NumTriangles; ++Tri)
+		{
+			const uint32 Base = Section.FirstIndex + Tri * 3;
+			const uint32 I0 = Indices.GetIndex(Base + 0);
+			const uint32 I1 = Indices.GetIndex(Base + 1);
+			const uint32 I2 = Indices.GetIndex(Base + 2);
 
-		FCachedTri Cached;
-		Cached.A = FVector(Positions.VertexPosition(I0));
-		Cached.B = FVector(Positions.VertexPosition(I1));
-		Cached.C = FVector(Positions.VertexPosition(I2));
-		Cached.UVA = FVector2D(Vertices.GetVertexUV(I0, SafeUvChannel));
-		Cached.UVB = FVector2D(Vertices.GetVertexUV(I1, SafeUvChannel));
-		Cached.UVC = FVector2D(Vertices.GetVertexUV(I2, SafeUvChannel));
-		CachedTris.Add(Cached);
+			FCachedTri Cached;
+			Cached.A = FVector(Positions.VertexPosition(I0));
+			Cached.B = FVector(Positions.VertexPosition(I1));
+			Cached.C = FVector(Positions.VertexPosition(I2));
+			Cached.UVA = FVector2D(Vertices.GetVertexUV(I0, SafeUvChannel));
+			Cached.UVB = FVector2D(Vertices.GetVertexUV(I1, SafeUvChannel));
+			Cached.UVC = FVector2D(Vertices.GetVertexUV(I2, SafeUvChannel));
+			CachedTris.Add(Cached);
+		}
 	}
 
 	bTriCacheBuilt = CachedTris.Num() > 0;
@@ -161,7 +178,9 @@ bool UInkBodyComponent::ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWor
 		const float D20 = FVector2D::DotProduct(V2, V0);
 		const float D21 = FVector2D::DotProduct(V2, V1);
 		const float Denom = D00 * D11 - D01 * D01;
-		if (FMath::IsNearlyZero(Denom))
+		// 退化判定必須用相對尺度：高密度網格的 UV 三角形極小（Denom ~1e-9），
+		// 絕對容差 IsNearlyZero(1e-8) 會把整張圖集當退化跳過（sumo 23k tris 實測全滅）
+		if (Denom <= D00 * D11 * 1e-4f)
 		{
 			continue;
 		}

@@ -465,7 +465,8 @@ void UInkCanvasComponent::StampSegment(UCanvas* Canvas, const FVector2D& CanvasS
 		return;
 	}
 
-	const float StepSize = FMath::Max(MarkerUvRadius * StampSpacingFactor, 0.0005f);
+	// 下限 0.00025：sumo 圖集密度較低（0.617px/mm）→ 半徑 0.000584，舊下限 0.0005 會吃掉間距係數
+	const float StepSize = FMath::Max(MarkerUvRadius * StampSpacingFactor, 0.00025f);
 	const int32 StepCount = FMath::Clamp(FMath::CeilToInt(Distance / StepSize), 1, 256);
 	for (int32 Step = 1; Step <= StepCount; ++Step)
 	{

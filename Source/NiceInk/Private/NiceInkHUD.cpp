@@ -1,5 +1,6 @@
 #include "NiceInkHUD.h"
 
+#include "DreamMazeComponent.h"
 #include "Engine/Canvas.h"
 #include "GameFramework/PlayerState.h"
 #include "InkCanvasComponent.h"
@@ -20,15 +21,18 @@ void ANiceInkHUD::DrawHUD()
 	}
 
 	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
-	const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
 	const ANiceInkPlayerState* MyPS = PlayerOwner ? PlayerOwner->GetPlayerState<ANiceInkPlayerState>() : nullptr;
 
-	// 沉睡端：視覺全遮蔽——黑屏＋小遊戲＋姿勢面板，其他 HUD 一概不畫
+	// 沉睡端：視覺全遮蔽——黑屏＋醉夢迷宮＋姿勢面板，其他 HUD 一概不畫
 	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
 		DrawVictimSleepUI(MyChar, GS);
 		return;
 	}
+
+	// 兇手轉盤覆蓋（不打斷 lean-lock 作畫；只有被踩中陷阱的兇手本人看得到）
+	DrawTrapDial(MyChar);
 
 	// 被噴致盲（該回合內）：大面積色漬遮擋視線，指認結算時解除
 	if (MyChar && MyChar->bBlinded)
@@ -161,7 +165,7 @@ void ANiceInkHUD::DrawHUD()
 	DrawInkCrosshair();
 }
 
-void ANiceInkHUD::DrawVictimSleepUI(const ANiceInkCharacter* MyChar, const ANiceInkGameState* GS)
+void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGameState* GS)
 {
 	const float W = Canvas->ClipX;
 	const float H = Canvas->ClipY;
@@ -174,44 +178,44 @@ void ANiceInkHUD::DrawVictimSleepUI(const ANiceInkCharacter* MyChar, const ANice
 		return;
 	}
 
-	const float Now = GS->GetServerWorldTimeSeconds();
-	const float BarW = W * 0.5f;
-	const float BarH = 26.0f;
-	const float BarX = (W - BarW) * 0.5f;
-	const float BarY = H * 0.42f;
-
-	// 軸
-	DrawRect(FLinearColor(0.15f, 0.15f, 0.18f, 1.0f), BarX, BarY, BarW, BarH);
-	// zone（置中）
-	const float ZoneW = BarW * GS->MinigameZoneWidth;
-	DrawRect(FLinearColor(0.15f, 0.5f, 0.2f, 1.0f), BarX + (BarW - ZoneW) * 0.5f, BarY, ZoneW, BarH);
-	// 指標
-	const float Pos = ANiceInkCharacter::MinigameIndicatorPos(Now, GS->MinigamePeriod);
-	DrawRect(FLinearColor(0.95f, 0.9f, 0.6f, 1.0f), BarX + BarW * Pos - 2.0f, BarY - 6.0f, 4.0f, BarH + 12.0f);
-
-	// 成功計數 pips ＋ 獎勵階梯標籤
-	static const TCHAR* PipLabels[3] = { TEXT("SPRAY"), TEXT("KICK"), TEXT("WAKE") };
-	for (int32 Pip = 0; Pip < 3; ++Pip)
+	// 醉夢圓形迷宮（SPEC v3.3）：走出外緣出口＝甦醒
+	UDreamMazeComponent* Maze = MyChar->DreamMaze;
+	if (Maze && Maze->IsMazeActive())
 	{
-		const float PipX = BarX + Pip * 96.0f;
-		const bool bEarned = MyChar->MinigameHits > Pip;
-		DrawRect(bEarned ? FLinearColor(0.9f, 0.75f, 0.2f, 1.0f) : FLinearColor(0.2f, 0.2f, 0.24f, 1.0f),
-			PipX, BarY + BarH + 14.0f, 84.0f, 20.0f);
-		DrawText(PipLabels[Pip], bEarned ? FLinearColor::Black : FLinearColor(0.6f, 0.6f, 0.6f, 1.0f),
-			PipX + 8.0f, BarY + BarH + 16.0f, nullptr, 0.85f, false);
-	}
+		const FVector2D PanelCenter(W * 0.5f, H * 0.46f);
+		const float PanelRadius = FMath::Min(W, H) * 0.30f;
+		Maze->DrawMazePanel(Canvas, PanelCenter, PanelRadius);
 
-	// 冷卻狀態
-	const float CooldownLeft = MyChar->MinigameCooldownUntil - Now;
-	if (CooldownLeft > 0.0f)
-	{
-		DrawText(FString::Printf(TEXT("MISS — locked %.1fs"), CooldownLeft),
-			FLinearColor(1.0f, 0.35f, 0.3f, 1.0f), BarX, BarY - 34.0f, nullptr, 1.1f, false);
+		switch (Maze->GetSimState())
+		{
+		case EDreamMazeSimState::Walking:
+			DrawText(TEXT("DRUNK DREAM — mouse: cursor, HOLD LMB: walk out to wake. Others hide unseen in your dream."),
+				FLinearColor(0.65f, 0.65f, 0.8f, 1.0f), PanelCenter.X - PanelRadius, PanelCenter.Y - PanelRadius - 30.0f, nullptr, 0.95f, false);
+			break;
+		case EDreamMazeSimState::DeathScreen:
+		{
+			// 兇手公開（怒氣要有地址）；度數永不顯示
+			const APlayerState* KillerPS = GS->FindPlayerStateById(Maze->GetLastKillerId());
+			DrawRect(FLinearColor(0.4f, 0.02f, 0.02f, 0.35f), 0.0f, 0.0f, W, H);
+			DrawText(FString::Printf(TEXT("TRAPPED BY %s !"), KillerPS ? *KillerPS->GetPlayerName() : TEXT("???")),
+				FLinearColor(1.0f, 0.25f, 0.2f, 1.0f), PanelCenter.X - 120.0f, PanelCenter.Y - 12.0f, nullptr, 1.6f, false);
+			break;
+		}
+		case EDreamMazeSimState::AwaitRotation:
+		case EDreamMazeSimState::Rotating:
+			// 不給任何關於度數的文字——盯緊圓形自己抓定位點
+			DrawText(TEXT("the dream reels..."),
+				FLinearColor(0.55f, 0.5f, 0.75f, 0.8f), PanelCenter.X - 60.0f, PanelCenter.Y + PanelRadius + 12.0f, nullptr, 1.0f, false);
+			break;
+		default:
+			break;
+		}
 	}
 	else
 	{
-		DrawText(TEXT("SPACE = stop the needle in the zone (3 hits to wake)"),
-			FLinearColor(0.8f, 0.85f, 0.9f, 1.0f), BarX, BarY - 34.0f, nullptr, 1.0f, false);
+		// 沒有迷宮＝終局昏死（server 不發夢）：昏睡不醒
+		DrawText(TEXT("OUT COLD. The room helps itself to your cash..."),
+			FLinearColor(0.5f, 0.4f, 0.4f, 1.0f), W * 0.5f - 190.0f, H * 0.44f, nullptr, 1.2f, false);
 	}
 
 	// 姿勢面板（左下）：自己身體的示意——當前姿勢與朝向。
@@ -237,12 +241,50 @@ void ANiceInkHUD::DrawVictimSleepUI(const ANiceInkCharacter* MyChar, const ANice
 	const int32 OriginIdx = FMath::Clamp(static_cast<int32>(MyChar->SelectedSprayOrigin), 0, 2);
 	DrawText(FString::Printf(TEXT("SPRAY x%d   KICK x%d   (expire when you wake)"), MyChar->SprayCharges, MyChar->KickCharges),
 		FLinearColor(0.85f, 0.8f, 0.6f, 1.0f), W - 520.0f, ToolY, nullptr, 0.9f, false);
-	DrawText(FString::Printf(TEXT("Q spray from %s (1/2/3 pick origin)   E kick   aim = mouse"), OriginNames[OriginIdx]),
+	DrawText(FString::Printf(TEXT("Q spray from %s (1/2/3 pick origin)   E kick   HOLD RMB + mouse = aim"), OriginNames[OriginIdx]),
 		FLinearColor(0.7f, 0.7f, 0.6f, 1.0f), W - 520.0f, ToolY + 22.0f, nullptr, 0.85f, false);
 
 	// 聽覺開放提示
 	DrawText(TEXT("You hear the whole room. Voices have no direction. They may be lying."),
-		FLinearColor(0.45f, 0.45f, 0.5f, 1.0f), BarX, H - 60.0f, nullptr, 0.85f, false);
+		FLinearColor(0.45f, 0.45f, 0.5f, 1.0f), W * 0.25f, H - 60.0f, nullptr, 0.85f, false);
+}
+
+void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
+{
+	if (!MyChar || !MyChar->bTrapDialActive || !GetWorld())
+	{
+		return;
+	}
+
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+	const FVector2D Center(W - 170.0f, H * 0.38f);
+	const float Radius = 64.0f;
+	const float Remaining = FMath::Max(0.0f, MyChar->TrapDialEndTime - GetWorld()->GetTimeSeconds());
+
+	// 盤面
+	Canvas->K2_DrawPolygon(nullptr, Center, FVector2D(Radius + 10.0f, Radius + 10.0f), 32, FLinearColor(0.05f, 0.03f, 0.08f, 0.85f));
+	for (int32 Tick = 0; Tick < 8; ++Tick)
+	{
+		const float Phi = Tick * PI / 4.0f;
+		const FVector2D Dir(FMath::Sin(Phi), -FMath::Cos(Phi));
+		Canvas->K2_DrawLine(Center + Dir * (Radius - 8.0f), Center + Dir * Radius, 2.0f, FLinearColor(0.4f, 0.35f, 0.5f, 1.0f));
+	}
+	// 指針（正度數＝順時針）；CW 橘／CCW 青
+	const float NeedlePhi = FMath::DegreesToRadians(MyChar->TrapDialAngleDeg);
+	const FVector2D NeedleDir(FMath::Sin(NeedlePhi), -FMath::Cos(NeedlePhi));
+	const FLinearColor NeedleColor = MyChar->TrapDialAngleDeg >= 0.0f
+		? FLinearColor(1.0f, 0.55f, 0.15f, 1.0f) : FLinearColor(0.2f, 0.8f, 0.9f, 1.0f);
+	Canvas->K2_DrawLine(Center, Center + NeedleDir * (Radius - 6.0f), 4.0f, NeedleColor);
+
+	// 倒數條
+	const float BarW = (Radius * 2.0f) * FMath::Clamp(Remaining / FMath::Max(0.1f, MyChar->TrapDialDuration), 0.0f, 1.0f);
+	DrawRect(FLinearColor(0.9f, 0.2f, 0.15f, 0.9f), Center.X - Radius, Center.Y + Radius + 16.0f, BarW, 6.0f);
+
+	DrawText(TEXT("HE STEPPED ON YOU! SPIN HIS DREAM"),
+		FLinearColor(1.0f, 0.8f, 0.4f, 1.0f), Center.X - Radius - 60.0f, Center.Y - Radius - 44.0f, nullptr, 0.95f, false);
+	DrawText(FString::Printf(TEXT("%+.0f deg   (wheel; auto-locks %.1fs)"), MyChar->TrapDialAngleDeg, Remaining),
+		FLinearColor(0.9f, 0.85f, 0.8f, 1.0f), Center.X - Radius - 20.0f, Center.Y + Radius + 26.0f, nullptr, 0.9f, false);
 }
 
 void ANiceInkHUD::DrawInkCrosshair()

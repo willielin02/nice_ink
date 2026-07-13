@@ -23,9 +23,6 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, RevealedAuthorId);
 	DOREPLIFETIME(ANiceInkGameState, LoserPlayerId);
 	DOREPLIFETIME(ANiceInkGameState, PhaseEndServerTime);
-	DOREPLIFETIME(ANiceInkGameState, MinigamePeriod);
-	DOREPLIFETIME(ANiceInkGameState, MinigameZoneWidth);
-	DOREPLIFETIME(ANiceInkGameState, MinigameMissCooldown);
 }
 
 void ANiceInkGameState::SetPhase(ENiceInkPhase NewPhase, float DurationSeconds)

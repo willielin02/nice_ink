@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "DreamMaze.h"
 #include "Engine/NetSerialization.h"
 #include "GameFramework/Character.h"
 #include "InkTypes.h"
@@ -8,6 +9,7 @@
 
 class ACameraActor;
 class UCameraComponent;
+class UDreamMazeComponent;
 class UInkBodyComponent;
 class UInkCanvasComponent;
 class UPoseableMeshComponent;
@@ -43,6 +45,10 @@ public:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UInkCanvasComponent> InkCanvas;
+
+	// 醉夢圓形迷宮（SPEC v3.3 甦醒小遊戲）：受害者 client 本地模擬＋繪製
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
+	TObjectPtr<UDreamMazeComponent> DreamMaze;
 
 	// 站姿／仰躺大字睡姿網格（同 UV 圖集，切換不影響墨水 RT）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
@@ -98,16 +104,13 @@ public:
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Peeking, Category = "Nice Ink|Lean")
 	bool bPeeking = false;
 
-	// 無聲甦醒（定案 #8）：第三次小遊戲成功後睜眼。零系統提示——
+	// 無聲甦醒（定案 #8）：走出迷宮出口後睜眼。零系統提示——
 	// 其他玩家能觀察到的破綻只有睜眼貼圖（頭部轉動待骨骼版身體）。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_EyesOpen, Category = "Nice Ink")
 	bool bEyesOpen = false;
 
-	// 甦醒小遊戲累計成功數（server 權威；第 1 次＝噴射、第 2 次＝拳腳、第 3 次＝可甦醒）
-	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
-	int32 MinigameHits = 0;
-
-	// 反制工具庫存（小遊戲成功發放；睜眼即過期——SPEC 定案 #6/#7）
+	// 反制工具庫存（迷宮存檔點發放；睜眼即過期——SPEC 定案 #6/#7）。
+	// 只複製給本人：作畫者不該從網路層讀到「受害者拿到技能了」。
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 SprayCharges = 0;
 
@@ -189,14 +192,51 @@ public:
 
 	// --- 受害者流程 RPC ---
 
-	// 沉睡中按 WASD＝請求現身（server 驗證小遊戲已完成三次成功）
+	// 沉睡中按 WASD＝請求現身（server 驗證已無聲甦醒＝bEyesOpen）
 	UFUNCTION(Server, Reliable)
 	void ServerRequestEmerge();
 
-	// 甦醒小遊戲：客端判定停進 zone 後回報一次成功。
-	// （信任客端 timing——party game 取捨；伺服器仍驗證身分/相位/次數上限）
+	// --- 醉夢圓形迷宮 RPC（SPEC v3.3 定案 #30/#31）---
+	// 信任模型沿用既有：client 判定、server 驗身分/相位/上限（party game 取捨）。
+	// 事件只走 victim↔server↔killer 三點——其餘玩家一無所知是規則本體。
+
+	// 回合開始（EnterSeating）：server 發種子＋難度檔＋兇手名單，受害者端決定性重建迷宮
+	UFUNCTION(Client, Reliable)
+	void ClientStartMaze(int32 Seed, const FDreamMazeParams& Params, const TArray<int32>& TrapOwnerIds);
+
+	// 受害者踩中陷阱（client 偵測）→ server 驗證後只通知兇手開轉盤
 	UFUNCTION(Server, Reliable)
-	void ServerMinigameHit();
+	void ServerMazeTrapHit(int32 KillerPlayerId);
+
+	// 兇手端：開 5 秒轉盤（滾輪選 −360~360；逾時自動送出當前值，預設 0）
+	UFUNCTION(Client, Reliable)
+	void ClientOpenTrapDial(float DialSeconds);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSubmitTrapDial(float AngleDeg);
+
+	// 受害者端：套用旋轉（含 0 度——動畫照播、不可分辨）
+	UFUNCTION(Client, Reliable)
+	void ClientApplyMazeRotation(float AngleDeg);
+
+	// 存檔點：經過＝存檔＋獲得技能（server 每回合每點只授一次）。0=噴射 1=拳腳
+	UFUNCTION(Server, Reliable)
+	void ServerMazeCheckpointReached(uint8 CheckpointType);
+
+	// 走出出口＝無聲甦醒（睜眼、零提示；等同舊小遊戲第三次成功的語意）
+	UFUNCTION(Server, Reliable)
+	void ServerMazeExited();
+
+	// --- 兇手轉盤本地狀態（HUD 讀取；robo 可直寫 TrapDialAngleDeg） ---
+
+	UPROPERTY(BlueprintReadWrite, Transient, Category = "Nice Ink|Maze")
+	bool bTrapDialActive = false;
+
+	UPROPERTY(BlueprintReadWrite, Transient, Category = "Nice Ink|Maze")
+	float TrapDialAngleDeg = 0.0f;
+
+	float TrapDialEndTime = 0.0f;   // client world time
+	float TrapDialDuration = 5.0f;
 
 	// --- 沉睡者反制（SPEC 定案 #6/#7） ---
 
@@ -231,14 +271,6 @@ public:
 	// 跨場刺青還原（入場時 server 廣播存檔內容）
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastRestoreWork(FInkWork Work);
-
-	// --- 甦醒小遊戲（共用數學：輸入判定與 HUD 渲染都用它） ---
-
-	// 指標位置 0..1（以 server 同步時鐘驅動的往復運動）
-	static float MinigameIndicatorPos(float ServerTime, float Period);
-
-	// 失手冷卻結束時間（server time；僅本地受害者使用）
-	float MinigameCooldownUntil = 0.0f;
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
@@ -282,6 +314,11 @@ public:
 	// 指認巡禮清單中第 WorkNumber 幅（1 起算）的作者為第 SeatIndex 席玩家
 	UFUNCTION(Exec)
 	void NiAccuse(int32 WorkNumber, int32 SeatIndex);
+
+	// 迷宮生成器離線統計：NumSeeds 個種子的通關時間/繞路成本分布＋移動 fuzz 自測。
+	// 調參前先開表（SPEC 待定 #2 的校準儀器）；結果進 log。
+	UFUNCTION(Exec)
+	void NiMazeStats(int32 NumSeeds, int32 Cup);
 
 	UFUNCTION(Server, Reliable)
 	void ServerRequestStartMatch();
@@ -362,8 +399,12 @@ private:
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);
-	void PollMinigame(APlayerController* PC);
+	void PollTrapDial(APlayerController* PC);
 	void PollPalette(APlayerController* PC);
 	void StopPaintingLocal();
 	void ApplySleepVisual();
+
+	// 迷宮技能授予去重（server；每回合每存檔點只授一次，ServerSetAsleep(true) 重置）
+	bool bMazeSprayGranted = false;
+	bool bMazeKickGranted = false;
 };

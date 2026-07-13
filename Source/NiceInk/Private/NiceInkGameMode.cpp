@@ -19,6 +19,11 @@ ANiceInkGameMode::ANiceInkGameMode()
 	PlayerStateClass = ANiceInkPlayerState::StaticClass();
 	HUDClass = ANiceInkHUD::StaticClass();
 	DefaultPawnClass = ANiceInkCharacter::StaticClass();
+
+	// 醉夢迷宮難度檔：每杯一組（ini 有覆寫時 config 載入會蓋掉這裡）
+	MazeParamsPerCup.Add(FDreamMazeGen::DefaultParamsForCup(0));
+	MazeParamsPerCup.Add(FDreamMazeGen::DefaultParamsForCup(1));
+	MazeParamsPerCup.Add(FDreamMazeGen::DefaultParamsForCup(2));
 }
 
 void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
@@ -327,19 +332,39 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 
 	ForceExitAllLeans();
 
-	// 小遊戲難度＝罰酒杯數（酒越深 zone 越窄）
-	const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
-	const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
-	GS->MinigamePeriod = MinigamePeriodSeconds;
-	GS->MinigameMissCooldown = MinigameMissCooldownSeconds;
-	GS->MinigameZoneWidth = MinigameZoneWidthByCup.Num() > 0
-		? MinigameZoneWidthByCup[FMath::Clamp(Cups, 0, MinigameZoneWidthByCup.Num() - 1)]
-		: 0.12f;
+	// 掛著的轉盤跨回合作廢（防禦：正常流程死亡序列內不會切相位）
+	GetWorldTimerManager().ClearTimer(DialFailsafeHandle);
+	PendingDialKillerId = INDEX_NONE;
+	PendingDialVictim = nullptr;
 
 	if (ANiceInkCharacter* Victim = GetVictimCharacter())
 	{
 		Victim->MulticastSetRoundIndex(GS->CurrentRound);
 		Victim->ServerSetAsleep(true, GetVictimLieTransform());
+
+		// 醉夢迷宮：難度檔＝罰酒杯數（酒越深夢越深）；種子每回合新開；
+		// 陷阱＝其他玩家（洗牌後與陷阱格一一對應）。只發受害者——其餘玩家一無所知。
+		const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
+		const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
+		const FDreamMazeParams MazeParams = MazeParamsPerCup.Num() > 0
+			? MazeParamsPerCup[FMath::Clamp(Cups, 0, MazeParamsPerCup.Num() - 1)]
+			: FDreamMazeGen::DefaultParamsForCup(Cups);
+
+		TArray<int32> ArtistIds;
+		for (APlayerState* PS : GS->PlayerArray)
+		{
+			if (PS && PS->GetPlayerId() != VictimPlayerId)
+			{
+				ArtistIds.Add(PS->GetPlayerId());
+			}
+		}
+		for (int32 i = ArtistIds.Num() - 1; i > 0; --i)
+		{
+			ArtistIds.Swap(i, FMath::RandRange(0, i));
+		}
+
+		const int32 MazeSeed = FMath::RandRange(1, MAX_int32 - 1);
+		Victim->ClientStartMaze(MazeSeed, MazeParams, ArtistIds);
 	}
 
 	GS->SetPhase(ENiceInkPhase::Seating, SeatingSeconds);
@@ -367,8 +392,8 @@ void ANiceInkGameMode::HandleEmergeRequest(ANiceInkCharacter* Requester, bool bF
 		return;
 	}
 
-	// 現身的前提＝無聲甦醒（第三次小遊戲成功）；robo 測試可強制
-	if (!bForce && Requester->MinigameHits < 3)
+	// 現身的前提＝無聲甦醒（已走出迷宮出口睜眼）；robo 測試可強制
+	if (!bForce && !Requester->bEyesOpen)
 	{
 		return;
 	}
@@ -712,6 +737,82 @@ void ANiceInkGameMode::DebugRoboSpray(float AimYawWorld, uint8 OriginType)
 			Victim->ServerSpray(static_cast<EInkEvidenceType>(OriginType), AimYawWorld);
 		}
 	}), 0.1f, false);
+}
+
+// --- 醉夢迷宮：轉盤路由（victim↔server↔killer 三點；零 multicast、零第三方資訊） ---
+
+void ANiceInkGameMode::HandleMazeTrapHit(ANiceInkCharacter* Victim, int32 KillerPlayerId)
+{
+	const ANiceInkGameState* GS = NIState();
+	if (!GS || !Victim || KillerPlayerId == GS->VictimPlayerId || !FindNIPlayerState(KillerPlayerId))
+	{
+		return; // 兇手必須是在場的非受害者玩家（相位/身分驗證在 Character RPC 端）
+	}
+	if (PendingDialKillerId != INDEX_NONE)
+	{
+		return; // 一次一件：受害者死亡序列中不會再踩，重複＝異常訊息，忽略
+	}
+
+	ANiceInkCharacter* Killer = ANiceInkCharacter::FindByPlayerId(GetWorld(), KillerPlayerId);
+	if (!Killer)
+	{
+		return;
+	}
+
+	PendingDialKillerId = KillerPlayerId;
+	PendingDialVictim = Victim;
+	Killer->ClientOpenTrapDial(TrapDialSeconds);
+
+	// 失效保險：兇手掉線／沒回 → 逾時預設 0 度（SPEC 定案 #31）
+	GetWorldTimerManager().SetTimer(DialFailsafeHandle, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		ResolveTrapDial(0.0f);
+	}), TrapDialSeconds + 0.6f, false);
+}
+
+void ANiceInkGameMode::HandleTrapDialSubmit(ANiceInkCharacter* Killer, float AngleDeg)
+{
+	if (!Killer || Killer->GetInkAuthorId() != PendingDialKillerId)
+	{
+		return; // 非 pending 兇手的度數（含轉盤已被失效保險結案的遲到訊息）
+	}
+	ResolveTrapDial(AngleDeg);
+}
+
+void ANiceInkGameMode::ResolveTrapDial(float AngleDeg)
+{
+	if (PendingDialKillerId == INDEX_NONE)
+	{
+		return;
+	}
+	GetWorldTimerManager().ClearTimer(DialFailsafeHandle);
+	PendingDialKillerId = INDEX_NONE;
+
+	if (ANiceInkCharacter* Victim = PendingDialVictim.Get())
+	{
+		// 度數只回受害者 client 執行旋轉——永不顯示、不進任何共享狀態
+		Victim->ClientApplyMazeRotation(FMath::Clamp(AngleDeg, -360.0f, 360.0f));
+	}
+	PendingDialVictim = nullptr;
+}
+
+void ANiceInkGameMode::DebugRoboMazeDial(float AngleDeg)
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, AngleDeg]()
+	{
+		ResolveTrapDial(AngleDeg);
+	}), 0.1f, false);
+}
+
+FString ANiceInkGameMode::DebugMazeStats(int32 NumSeeds, int32 Cup)
+{
+	const FDreamMazeParams Params = MazeParamsPerCup.IsValidIndex(FMath::Clamp(Cup, 0, MazeParamsPerCup.Num() - 1))
+		? MazeParamsPerCup[FMath::Clamp(Cup, 0, MazeParamsPerCup.Num() - 1)]
+		: FDreamMazeGen::DefaultParamsForCup(Cup);
+	const FString Report = FDreamMazeGen::RunStats(Params, NumSeeds, /*TrapCount=*/4);
+	UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
+	return Report;
 }
 
 void ANiceInkGameMode::DebugRoboKick(float AimYawWorld)

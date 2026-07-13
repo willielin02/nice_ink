@@ -4,6 +4,8 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PoseableMeshComponent.h"
+#include "DreamMazeComponent.h"
+#include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -25,11 +27,12 @@
 
 namespace
 {
-	// char17 網格：腳底在原點、臉朝本地 +Y（PIE 實測）；yaw -90 → 臉對齊角色前方 +X
+	// sumo 網格：腳底在原點。Blender 源臉朝 -Y，FBX→UE 匯入含 (x,-y,z) 鏡射 →
+	// UE 本地臉朝 +Y（與 char17 完全相同——char17 的 Blender 源同樣朝 -Y，PIE 實證 +Y）。
+	// 因此站/躺旋轉與 char17 逐字沿用；本地錨點 = Blender 量測值 y 取負。
 	const FVector BodyStandRelLoc(0.0f, 0.0f, -92.0f);
 	const FRotator BodyStandRelRot(0.0f, -90.0f, 0.0f);
-	// 仰躺大字（定案 #18）：PIE 實測 (pitch 0, yaw +90, roll -90) ＝臉朝上、頭朝 +X；
-	// pivot（腳底）偏 -87 讓身體置中，z -60 貼地
+	// 仰躺（char17 PIE 實測值沿用）；pivot 偏移待 ragdoll 睡姿（我-12）落地後重調
 	const FVector BodyLieRelLoc(-87.0f, 0.0f, -60.0f);
 	const FRotator BodyLieRelRot(0.0f, 90.0f, -90.0f);
 
@@ -78,7 +81,7 @@ ANiceInkCharacter::ANiceInkCharacter()
 	Body->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
 
-	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyMeshAsset(TEXT("/Game/Characters/SM_Char17.SM_Char17"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> BodyMeshAsset(TEXT("/Game/Characters/SM_Sumo.SM_Sumo"));
 	if (BodyMeshAsset.Succeeded())
 	{
 		StandMesh = BodyMeshAsset.Object;
@@ -117,9 +120,12 @@ ANiceInkCharacter::ANiceInkCharacter()
 
 	InkCanvas = CreateDefaultSubobject<UInkCanvasComponent>(TEXT("InkCanvas"));
 
+	// 醉夢迷宮：受害者 client 本地模擬（不複製——其餘玩家一無所知）
+	DreamMaze = CreateDefaultSubobject<UDreamMazeComponent>(TEXT("DreamMaze"));
+
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
 	FirstPersonCamera->SetupAttachment(GetCapsuleComponent());
-	FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 62.0f)); // 174cm 的眼高
+	FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f)); // sumo 眼高 z156（量測）− 半膠囊 92
 }
 
 void ANiceInkCharacter::BeginPlay()
@@ -151,9 +157,9 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkCharacter, bAsleep);
 	DOREPLIFETIME(ANiceInkCharacter, bEyesOpen);
-	DOREPLIFETIME(ANiceInkCharacter, MinigameHits);
-	DOREPLIFETIME(ANiceInkCharacter, SprayCharges);
-	DOREPLIFETIME(ANiceInkCharacter, KickCharges);
+	// 技能庫存只給本人：作畫者不該從網路層讀到「受害者拿到技能／進度」
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SprayCharges, COND_OwnerOnly);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, KickCharges, COND_OwnerOnly);
 	DOREPLIFETIME(ANiceInkCharacter, bBlinded);
 	DOREPLIFETIME(ANiceInkCharacter, BlindType);
 	DOREPLIFETIME(ANiceInkCharacter, bLeanLocked);
@@ -178,7 +184,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	PollLook(PC, DeltaSeconds);
 	PollMove(PC);
-	PollMinigame(PC);
+	PollTrapDial(PC);
 	PollCounterplay(PC);
 	PollAccusation(PC);
 	PollLobby(PC);
@@ -344,7 +350,7 @@ void ANiceInkCharacter::ViewWork(APlayerController* PC, int32 WorkId)
 		}
 	}
 
-	const FVector BodyCenter = Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f));
+	const FVector BodyCenter = Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 103.0f));
 	const FVector Anchor = Count > 0 ? Sum / Count : BodyCenter;
 
 	FVector Outward = (Anchor - BodyCenter).GetSafeNormal2D();
@@ -377,7 +383,7 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 
 	// 沒有受害者（轉瓶儀式）就看房間舞台中心
 	const FVector BodyCenter = (Victim && Victim->Body)
-		? Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 88.0f))
+		? Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 103.0f))
 		: FVector(0.0f, 75.0f, 60.0f);
 	const FVector CamPos = ClampToRoom(BodyCenter + FVector(-50.0f, -190.0f, 165.0f));
 
@@ -521,7 +527,13 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 
 	if (bAsleep)
 	{
-		// 沉睡：滑鼠僅控制頭部視野（單純轉頭，SPEC 定案 #8）；身體不動
+		// 2026-07-13 操作改版：迷宮持有滑鼠（虛擬游標走迷宮，DreamMazeComponent 消化增量）；
+		// 按住右鍵＝瞄準模式，滑鼠讓回轉頭（Q/E 瞄準＝頭部視野方向，沿用）
+		if (DreamMaze && DreamMaze->IsMazeActive() && !bEyesOpen && !PC->IsInputKeyDown(EKeys::RightMouseButton))
+		{
+			return;
+		}
+		// 沉睡轉頭（瞄準模式／睜眼後）：滑鼠僅控制頭部視野（SPEC 定案 #8）；身體不動
 		SleepCameraYaw = FMath::Clamp(SleepCameraYaw + MouseX * LookSensitivity, -110.0f, 110.0f);
 		CameraPitch = FMath::Clamp(CameraPitch + MouseY * LookSensitivity, -89.0f, 89.0f);
 		FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, SleepCameraYaw, 0.0f));
@@ -577,47 +589,26 @@ void ANiceInkCharacter::PollMove(APlayerController* PC)
 	if (PC->IsInputKeyDown(EKeys::A)) { AddMovementInput(Right, -1.0f); }
 }
 
-float ANiceInkCharacter::MinigameIndicatorPos(float ServerTime, float Period)
+void ANiceInkCharacter::PollTrapDial(APlayerController* PC)
 {
-	// 三角波往復：0 → 1 → 0，一趟 Period 秒
-	const float Cycle = FMath::Fmod(ServerTime, Period * 2.0f) / Period; // 0..2
-	return Cycle <= 1.0f ? Cycle : 2.0f - Cycle;
-}
-
-void ANiceInkCharacter::PollMinigame(APlayerController* PC)
-{
-	// 只有沉睡且尚未睜眼的受害者在玩小遊戲
-	if (!bAsleep || bEyesOpen || MinigameHits >= 3)
+	// 兇手轉盤（SPEC 定案 #31）：滾輪選 −360~360——兇手很可能正 lean-lock 作畫，
+	// 游標是他的筆，不徵用；5 秒到自動送出當前值（沒動＝0 度）。
+	if (!bTrapDialActive)
 	{
 		return;
 	}
-	if (!PC->WasInputKeyJustPressed(EKeys::SpaceBar))
+	if (PC->WasInputKeyJustPressed(EKeys::MouseScrollUp))
 	{
-		return;
+		TrapDialAngleDeg = FMath::Clamp(TrapDialAngleDeg + 15.0f, -360.0f, 360.0f);
 	}
-
-	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
-	if (!GS)
+	if (PC->WasInputKeyJustPressed(EKeys::MouseScrollDown))
 	{
-		return;
+		TrapDialAngleDeg = FMath::Clamp(TrapDialAngleDeg - 15.0f, -360.0f, 360.0f);
 	}
-
-	const float Now = GS->GetServerWorldTimeSeconds();
-	if (Now < MinigameCooldownUntil)
+	if (GetWorld()->GetTimeSeconds() >= TrapDialEndTime)
 	{
-		return; // 冷卻中按下無效（不重置冷卻）
-	}
-
-	const float Pos = MinigameIndicatorPos(Now, GS->MinigamePeriod);
-	const float HalfZone = GS->MinigameZoneWidth * 0.5f;
-	if (FMath::Abs(Pos - 0.5f) <= HalfZone)
-	{
-		ServerMinigameHit();
-	}
-	else
-	{
-		// 失手：十秒冷卻（只鎖按鍵，不清成功數——SPEC 定案 #5）
-		MinigameCooldownUntil = Now + GS->MinigameMissCooldown;
+		bTrapDialActive = false;
+		ServerSubmitTrapDial(TrapDialAngleDeg);
 	}
 }
 
@@ -812,7 +803,9 @@ bool ANiceInkCharacter::ResolveCursorToTargetUV(APlayerController* PC, const FVe
 		return false;
 	}
 
-	return Target->Body->ResolveBodyUV(Hit.ImpactPoint, OutUV);
+	// 容差 1.5mm：褌外表面離皮膚至少一個布厚（2mm）——打在布上的命中解算不到皮膚，
+	// 筆劃被拒＝SPEC「褌下的皮膚不可畫（物理遮擋）」。皮膚直擊的解算距離 ≈ 0。
+	return Target->Body->ResolveBodyUV(Hit.ImpactPoint, OutUV, /*MaxDistance=*/0.15f);
 }
 
 void ANiceInkCharacter::StopPaintingLocal()
@@ -855,10 +848,11 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 
 	if (bNewAsleep)
 	{
-		MinigameHits = 0;
 		bEyesOpen = false;
 		SprayCharges = 0;
 		KickCharges = 0;
+		bMazeSprayGranted = false; // 技能授予去重：每回合每存檔點一次
+		bMazeKickGranted = false;
 		SeatTransform = GetActorTransform();
 		SetActorTransform(LieTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->StopMovementImmediately();
@@ -876,27 +870,96 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 	ApplySleepVisual();
 }
 
-void ANiceInkCharacter::ServerMinigameHit_Implementation()
+// --- 醉夢圓形迷宮 RPC（SPEC v3.3）---
+
+namespace
 {
-	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
-	const APlayerState* PS = GetPlayerState();
-	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
-		PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || bEyesOpen || MinigameHits >= 3)
+	// 迷宮事件的共通驗證：發話者＝當前受害者、沉睡未睜眼、相位在睡眠期
+	bool ValidateMazeSender(const ANiceInkCharacter* Sender, bool bAllowSeating)
+	{
+		const ANiceInkGameState* GS = Sender->GetWorld() ? Sender->GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+		const APlayerState* PS = Sender->GetPlayerState();
+		if (!GS || !PS || PS->GetPlayerId() != GS->VictimPlayerId || !Sender->bAsleep || Sender->bEyesOpen)
+		{
+			return false;
+		}
+		return GS->CurrentPhase == ENiceInkPhase::Drawing ||
+			(bAllowSeating && GS->CurrentPhase == ENiceInkPhase::Seating);
+	}
+}
+
+void ANiceInkCharacter::ClientStartMaze_Implementation(int32 Seed, const FDreamMazeParams& Params, const TArray<int32>& TrapOwnerIds)
+{
+	if (DreamMaze)
+	{
+		DreamMaze->StartMaze(Seed, Params, TrapOwnerIds);
+	}
+}
+
+void ANiceInkCharacter::ServerMazeTrapHit_Implementation(int32 KillerPlayerId)
+{
+	if (!ValidateMazeSender(this, /*bAllowSeating=*/true))
 	{
 		return;
 	}
-
-	++MinigameHits;
-	switch (MinigameHits)
+	if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
 	{
-	case 1: ++SprayCharges; break;   // 第 1 次＝噴射 ×1
-	case 2: ++KickCharges; break;    // 第 2 次＝拳腳 ×1
-	case 3:
-		bEyesOpen = true;            // 第 3 次＝無聲甦醒：睜眼、零提示
-		ApplySleepVisual();
-		break;
-	default: break;
+		GM->HandleMazeTrapHit(this, KillerPlayerId);
 	}
+}
+
+void ANiceInkCharacter::ClientOpenTrapDial_Implementation(float DialSeconds)
+{
+	// 只有兇手本人收到這通（SPEC：系統只通知 A 本人）
+	bTrapDialActive = true;
+	TrapDialAngleDeg = 0.0f;
+	TrapDialDuration = DialSeconds;
+	TrapDialEndTime = GetWorld()->GetTimeSeconds() + DialSeconds;
+}
+
+void ANiceInkCharacter::ServerSubmitTrapDial_Implementation(float AngleDeg)
+{
+	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		GM->HandleTrapDialSubmit(this, AngleDeg);
+	}
+}
+
+void ANiceInkCharacter::ClientApplyMazeRotation_Implementation(float AngleDeg)
+{
+	if (DreamMaze)
+	{
+		DreamMaze->ApplyRotation(AngleDeg);
+	}
+}
+
+void ANiceInkCharacter::ServerMazeCheckpointReached_Implementation(uint8 CheckpointType)
+{
+	if (!ValidateMazeSender(this, /*bAllowSeating=*/true))
+	{
+		return;
+	}
+	if (CheckpointType == 0 && !bMazeSprayGranted)
+	{
+		bMazeSprayGranted = true;
+		++SprayCharges;
+	}
+	else if (CheckpointType == 1 && !bMazeKickGranted)
+	{
+		bMazeKickGranted = true;
+		++KickCharges;
+	}
+}
+
+void ANiceInkCharacter::ServerMazeExited_Implementation()
+{
+	// 出口只在作畫階段有效；睜眼＝無聲甦醒（貼圖切換是唯一破綻，零提示）
+	if (!ValidateMazeSender(this, /*bAllowSeating=*/false))
+	{
+		return;
+	}
+	bEyesOpen = true;
+	ApplySleepVisual();
 }
 
 void ANiceInkCharacter::ServerSpray_Implementation(EInkEvidenceType Origin, float AimYawWorld)
@@ -915,9 +978,9 @@ void ANiceInkCharacter::ServerSpray_Implementation(EInkEvidenceType Origin, floa
 	FVector LocalOrigin;
 	switch (Origin)
 	{
-	case EInkEvidenceType::Sneeze: LocalOrigin = FVector(0.0f, 20.0f, 158.0f); break;
-	case EInkEvidenceType::Piss:   LocalOrigin = FVector(0.0f, 14.0f, 88.0f); break;
-	default:                       LocalOrigin = FVector(0.0f, -16.0f, 88.0f); break;
+	case EInkEvidenceType::Sneeze: LocalOrigin = FVector(0.0f, 22.0f, 151.0f); break;  // sumo 鼻尖（Blender 量測 y 取負）
+	case EInkEvidenceType::Piss:   LocalOrigin = FVector(0.0f, 44.0f, 75.0f); break;   // sumo 胯前
+	default:                       LocalOrigin = FVector(0.0f, -52.0f, 66.0f); break;  // sumo 臀後
 	}
 	const FVector WorldOrigin = Body->GetComponentTransform().TransformPosition(LocalOrigin) + FVector(0, 0, 6.0f);
 
@@ -946,8 +1009,8 @@ void ANiceInkCharacter::ServerKick_Implementation(float AimYawWorld)
 	}
 	--KickCharges;
 
-	// 從身體中心朝瞄準方向掃掠 170cm
-	const FVector Start = Body->GetComponentTransform().TransformPosition(FVector(0.0f, 0.0f, 88.0f));
+	// 從身體中心朝瞄準方向掃掠 170cm（sumo 軀幹質心 z103，量測）
+	const FVector Start = Body->GetComponentTransform().TransformPosition(FVector(0.0f, 0.0f, 103.0f));
 	const FVector Dir = FRotator(0.0f, AimYawWorld, 0.0f).Vector();
 	const FVector End = Start + Dir * 170.0f;
 
@@ -1068,10 +1131,18 @@ void ANiceInkCharacter::ApplySleepVisual()
 
 	Body->SetEyesClosed(bAsleep && !bEyesOpen);
 
-	// 睡姿網格惰性載入（資產尚未匯入時退回站姿網格翻轉）
+	// 醒了（現身或睜眼後回合收束）：迷宮收工。終局昏死沒有迷宮（server 不發），
+	// 元件維持 Inactive——HUD 畫「昏死不醒」。
+	if (!bAsleep && DreamMaze)
+	{
+		DreamMaze->StopMaze();
+	}
+
+	// 睡姿網格：sumo 無烘焙睡姿（我-12 改 runtime ragdoll 快照）；
+	// 過渡期用站姿網格放躺（fallback 分支天然處理：SleepMesh=StandMesh）
 	if (bAsleep && !SleepMesh)
 	{
-		SleepMesh = LoadObject<UStaticMesh>(nullptr, TEXT("/Game/Characters/SM_Char17_Sleep.SM_Char17_Sleep"));
+		SleepMesh = StandMesh;
 	}
 	if (UStaticMesh* WantedMesh = bAsleep && SleepMesh ? SleepMesh.Get() : StandMesh.Get())
 	{
@@ -1100,7 +1171,7 @@ void ANiceInkCharacter::ApplySleepVisual()
 		{
 			SleepCameraYaw = 0.0f;
 			CameraPitch = 0.0f;
-			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 62.0f));
+			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f)); // 與建構子一致（sumo 眼高）
 			FirstPersonCamera->SetRelativeRotation(FRotator::ZeroRotator);
 		}
 	}
@@ -1221,11 +1292,11 @@ void ANiceInkCharacter::OnRep_Peeking()
 
 FVector ANiceInkCharacter::GetLeanFaceTargetWorld() const
 {
-	// 受害者的頭（偷瞄注視點）：睡姿網格腳底原點、頭在本地 +Z ~158
+	// 受害者的頭（偷瞄注視點）：sumo 腳底原點、頭在本地 +Z ~152、臉朝 +Y（UE 匯入後）
 	const ANiceInkCharacter* Target = LeanTarget.Get();
 	if (Target && Target->Body)
 	{
-		return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 158.0f));
+		return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 152.0f));
 	}
 	return LeanPoint;
 }
@@ -1253,14 +1324,23 @@ void ANiceInkCharacter::ApplyBowPose()
 	{
 		if (!BowMesh)
 		{
-			BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Char17.SK_Char17"));
+			BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo.SK_Sumo"));
 		}
 		if (BowMesh)
 		{
 			BowBody->SetSkinnedAssetAndUpdate(BowMesh);
 			if (Body && Body->GetDynamicMaterial())
 			{
-				BowBody->SetMaterial(0, Body->GetDynamicMaterial());
+				// 皮膚 MID 按槽名指派：SK 匯入的槽序與 SM 相反（褌在 0）——
+				// 寫死 index 0 會把皮膚材質糊到褌上。褌槽保留資產上的 M_Fundoshi。
+				const TArray<FSkeletalMaterial>& SkMats = BowMesh->GetMaterials();
+				for (int32 i = 0; i < SkMats.Num(); ++i)
+				{
+					if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
+					{
+						BowBody->SetMaterial(i, Body->GetDynamicMaterial());
+					}
+				}
 			}
 		}
 	}
@@ -1341,30 +1421,30 @@ bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& Impac
 		return false;
 	}
 
-	// 骨頭 → 站姿本地座標的粗錨點（濺漬不需要毫米精度；彎腰姿勢下的命中夠用）
-	FVector Local(0.0f, 20.0f, 122.0f); // 預設：胸口
+	// 骨頭 → 站姿本地座標的粗錨點（sumo 半蹲量測，Blender y 取負：UE 本地臉朝 +Y）
+	FVector Local(0.0f, 25.0f, 128.0f); // 預設：胸口
 	if (BoneName != NAME_None)
 	{
 		const FString Bone = BoneName.ToString();
 		if (Bone.Contains(TEXT("Head")) || Bone.Contains(TEXT("Neck")))
 		{
-			Local = FVector(0.0f, 18.0f, 155.0f);
+			Local = FVector(0.0f, 18.0f, 152.0f);
 		}
 		else if (Bone.Contains(TEXT("Hips")) || Bone == TEXT("Spine"))
 		{
-			Local = FVector(0.0f, 20.0f, 95.0f);
+			Local = FVector(0.0f, 30.0f, 90.0f);
 		}
 		else if (Bone.Contains(TEXT("Arm")) || Bone.Contains(TEXT("Hand")))
 		{
-			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 48.0f : -48.0f, -4.0f, 120.0f);
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 55.0f : -55.0f, 0.0f, 110.0f);
 		}
 		else if (Bone.Contains(TEXT("UpLeg")))
 		{
-			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 11.0f : -11.0f, 2.0f, 62.0f);
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 25.0f : -25.0f, 5.0f, 60.0f);
 		}
 		else if (Bone.Contains(TEXT("Leg")) || Bone.Contains(TEXT("Foot")) || Bone.Contains(TEXT("Toe")))
 		{
-			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 10.0f : -10.0f, -3.0f, 28.0f);
+			Local = FVector(Bone.StartsWith(TEXT("Left")) ? 30.0f : -30.0f, 0.0f, 25.0f);
 		}
 	}
 	else
@@ -1373,11 +1453,11 @@ bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& Impac
 		const float RelZ = ImpactPoint.Z - (GetActorLocation().Z - 92.0f); // 相對腳底
 		if (bLeanLocked ? RelZ > 55.0f : RelZ > 130.0f)
 		{
-			Local = FVector(0.0f, 18.0f, 155.0f); // 頭臉（彎腰時頭在半高）
+			Local = FVector(0.0f, 18.0f, 152.0f); // 頭臉（彎腰時頭在半高）
 		}
 		else if (RelZ < 45.0f)
 		{
-			Local = FVector(0.0f, -3.0f, 40.0f); // 腿
+			Local = FVector(0.0f, 10.0f, 40.0f); // 腿（半蹲雙腿開，容差抓內側）
 		}
 	}
 
@@ -1629,6 +1709,25 @@ void ANiceInkCharacter::NiJoin()
 void ANiceInkCharacter::NiEmerge()
 {
 	ServerRequestEmerge();
+}
+
+void ANiceInkCharacter::NiMazeStats(int32 NumSeeds, int32 Cup)
+{
+	// 參數來源：listen host 有 GameMode（含 ini 覆寫）；純 client 用內建預設檔
+	FDreamMazeParams Params = FDreamMazeGen::DefaultParamsForCup(Cup);
+	if (const ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		if (GM->MazeParamsPerCup.IsValidIndex(FMath::Clamp(Cup, 0, GM->MazeParamsPerCup.Num() - 1)))
+		{
+			Params = GM->MazeParamsPerCup[FMath::Clamp(Cup, 0, GM->MazeParamsPerCup.Num() - 1)];
+		}
+	}
+	const FString Report = FDreamMazeGen::RunStats(Params, NumSeeds > 0 ? NumSeeds : 1000, /*TrapCount=*/4);
+	UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(9137, 12.0f, FColor::Cyan, Report);
+	}
 }
 
 void ANiceInkCharacter::NiAccuse(int32 WorkNumber, int32 SeatIndex)

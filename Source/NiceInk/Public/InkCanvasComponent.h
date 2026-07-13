@@ -37,10 +37,10 @@ public:
 	int32 RenderTargetResolution = 2048;
 
 	// 固定麥克筆筆寬（UV 半徑）。SPEC v3.1：細筆尖——皮膚是跨場資源，細筆控制通膨。
-	// 均勻密度圖集實測 0.898 px/mm @2048 → 0.00085 UV 半徑 ≈ 3.8mm 簽字筆
-	//（使用者定案：原粗度 ÷3；全身嚴格一致）
+	// sumo 均勻密度圖集實測 0.617 px/mm @2048 → 0.000584 UV 半徑 ≈ 3.8mm 簽字筆
+	//（筆實體半徑 1.938mm 不變；char17 時代 0.898 px/mm → 0.00085）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0005", ClampMax = "0.05"))
-	float MarkerUvRadius = 0.00085f;
+	float MarkerUvRadius = 0.000584f;
 
 	// 單段 UV 距離超過此值視為跨 UV 島跳躍：不內插、直接斷筆重起。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.01", ClampMax = "0.5"))

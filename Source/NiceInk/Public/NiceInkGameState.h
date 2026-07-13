@@ -63,19 +63,8 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	float PhaseEndServerTime = 0.0f;
 
-	// --- 甦醒小遊戲參數（EnterSeating 時由 GameMode 依罰酒杯數設定） ---
-
-	// 指標往復一趟的秒數
-	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Minigame")
-	float MinigamePeriod = 1.6f;
-
-	// zone 佔軸長比例（置中）；酒越深 zone 越窄（SPEC 傾向：罰酒提升難度）
-	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Minigame")
-	float MinigameZoneWidth = 0.12f;
-
-	// 失手冷卻秒數（SPEC 定案 #5：10 秒）
-	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink|Minigame")
-	float MinigameMissCooldown = 10.0f;
+	// v3.3 註：往復指標小遊戲參數已退役——醉夢迷宮的參數只發給受害者本人
+	// （ClientStartMaze），不進 GameState：其餘玩家一無所知是規則本體。
 
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink")
 	void SetPhase(ENiceInkPhase NewPhase, float DurationSeconds);
