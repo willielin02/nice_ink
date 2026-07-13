@@ -56,7 +56,7 @@ void UNiceInkSessionSubsystem::OnCreateSessionComplete(FName SessionName, bool b
 	UE_LOG(LogTemp, Log, TEXT("CreateSession %s: %s"), *SessionName.ToString(), bWasSuccessful ? TEXT("OK") : TEXT("FAILED"));
 	if (bWasSuccessful && GetWorld())
 	{
-		GetWorld()->ServerTravel(TEXT("/Game/Maps/L_Sauna?listen"));
+		GetWorld()->ServerTravel(TEXT("/Game/Maps/L_Dojo?listen"));
 	}
 }
 
