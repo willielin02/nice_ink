@@ -62,8 +62,14 @@ def load_image(path, non_color=False):
 
 def clear_custom_normals(obj):
     """FBX-imported custom split normals override shade smooth entirely and
-    bake in faceting; clear them so POINT-domain smooth shading takes over."""
+    bake in faceting; clear them so POINT-domain smooth shading takes over.
+
+    Meshes tagged nice_ink_shading_normals carry INTENTIONAL custom normals
+    (proxy-smoothed collar/chest shading) — never clear those."""
     me = obj.data
+    if me.get("nice_ink_shading_normals"):
+        print("kept intentional custom shading normals")
+        return
     if me.has_custom_normals:
         bpy.context.view_layer.objects.active = obj
         bpy.ops.mesh.customdata_custom_splitnormals_clear()

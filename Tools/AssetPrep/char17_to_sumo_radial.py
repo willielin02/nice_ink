@@ -1,11 +1,13 @@
 # 相撲體型改造 step2c：徑向剖面場轉移（對參考模型的姿勢免疫；shrinkwrap 碎裂法已棄）
 # R_sumo(z,θ) 沿他自己的彎曲軸取樣（歸一化傾斜）；char17 頂點按 R_s/R_c 比例徑向外推。
+# 朝向定案（2026-07-08 臉部渲染驗證）：char17 與相撲 glb 的世界正面都是 −Y。
+# θ 座標系：atan2(y,x)，θ=90° 帶指向 +Y（背面）、θ=270° 帶指向 −Y（正面）。
 import bpy, bmesh, math
 from mathutils import Vector
 
-OUT = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\dc54225f-9100-446c-bab5-b0af2567e64c\scratchpad\sumo_radial_result.txt"
-REN = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\dc54225f-9100-446c-bab5-b0af2567e64c\scratchpad\ren3_"
-WORK = r"C:\games\Unreal Engine\nice_ink\SourceAssets\char18_work.blend"
+OUT = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\935f71c0-54fe-4782-8f05-ff3a52565e53\scratchpad\sumo_radial_result.txt"
+REN = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\935f71c0-54fe-4782-8f05-ff3a52565e53\scratchpad\ren5_"
+WORK = r"C:\games\Unreal Engine\nice_ink\SourceAssets\char20_work.blend"
 GLB = r"C:\games\Unreal Engine\nice_ink\SourceAssets\Sumo wrestler\sumo_wrestler_2k.glb"
 LINES = []
 
@@ -143,12 +145,12 @@ def sanitize(R):
         R[iz] = [max(med * 0.55, min(med * 1.8, x)) for x in R[iz]]
 sanitize(R_s)
 sanitize(R_c)
-# 正面扇區（θ 30°-150°）：z<1.0 由上往下單調傳播（微衰減 max）——
+# 正面扇區（θ 210°-330°，正面＝−Y）：z<1.0 由上往下單調傳播（微衰減 max）——
 # 他的兜襠布前垂片會把低處正面射線切短，肚腩量體必須從上方輾過去
 iz_top = int((1.00 - Z0) / (Z1 - Z0) * (NZ - 1))
 for it in range(NTH):
     th_deg = 360.0 * it / NTH
-    if 30.0 <= th_deg <= 150.0:
+    if 210.0 <= th_deg <= 330.0:
         for iz in range(iz_top - 1, -1, -1):
             R_s[iz][it] = max(R_s[iz][it], R_s[iz + 1][it] * 0.985)
 for R in (R_s, R_c):
@@ -166,7 +168,7 @@ for R in (R_s, R_c):
 for tag, R, axis in (("sumo", R_s, sumo_axis), ("char", R_c, char_axis)):
     iz = int((0.95 - Z0) / (Z1 - Z0) * (NZ - 1))
     row = R[iz]
-    log(f"{tag} belly z=0.95: front={row[18]:.3f} back={row[54]:.3f} side={row[0]:.3f}/{row[36]:.3f}")
+    log(f"{tag} belly z=0.95: front={row[54]:.3f} back={row[18]:.3f} side={row[0]:.3f}/{row[36]:.3f}")
 
 # --- 保護島：密集區偵測（乳頭/肚臍/背面精雕區）＋固定候選，全部剛體跟隨 ---
 bm2 = bmesh.new()
@@ -200,15 +202,18 @@ dcl = [c for c in dcl if len(c["v"]) >= 8]
 dcl.sort(key=lambda c: -len(c["v"]))
 islands = []
 for c in dcl[:5]:
-    # 只收「背面中線」的精雕區（肛門）；上背未知密集對與手部不做剛體騎乘（會造成凹陷）
-    if abs(c["c"].x) < 0.05 and c["c"].y < 0:
-        spread = max((p - c["c"]).length for p in c["v"])
-        islands.append((c["c"], min(0.05, max(0.03, spread * 1.15))))
-        log(f"back-midline island n={len(c['v'])} at ({c['c'].x:.3f},{c['c'].y:.3f},{c['c'].z:.3f})")
-# 肚臍＋左右胸（兩組乳頭候選各自合併成一座大島，避免多島相鄰各騎各的產生皺摺）
-islands.append((Vector((0.0, 0.345, 0.945)), 0.045))
-islands.append((Vector((0.10, 0.283, 1.081)), 0.058))
-islands.append((Vector((-0.10, 0.283, 1.081)), 0.058))
+    # 正面（y<0）的精雕密集區＝肚臍（中線、z<1.05）與左右乳頭（成對、z>1.05）。
+    # 舊版把肚臍誤判成「背面肛門」、乳頭硬編碼在 +Y——朝向定案後全部改自動偵測。
+    p = c["c"]
+    if p.y > 0 or abs(p.x) > 0.30:
+        continue  # 背側／手部密集區不騎乘
+    is_navel = abs(p.x) < 0.05 and p.z < 1.05
+    is_nipple = 0.05 < abs(p.x) < 0.30 and p.z > 1.05
+    if is_navel or is_nipple:
+        spread = max((q - p).length for q in c["v"])
+        islands.append((p, min(0.06, max(0.03, spread * 1.15))))
+        log(f"{'navel' if is_navel else 'nipple'} island n={len(c['v'])} "
+            f"at ({p.x:.3f},{p.y:.3f},{p.z:.3f}) r={islands[-1][1]:.3f}")
 log(f"islands total={len(islands)}")
 
 # --- 權重（世界空間）：軀幹窗＝他單柱狀軀幹的 z 範圍；手臂用軸線距離精確挖除 ---
@@ -257,7 +262,7 @@ def scale_factor_at(p):
     _, _, _, rs = sample(R_s, char_axis, p)
     if r < 1e-5 or rc < 1e-5:
         return None
-    fr = max(0.0, rel.y / r); bk = max(0.0, -rel.y / r); sd = abs(rel.x) / r
+    fr = max(0.0, -rel.y / r); bk = max(0.0, rel.y / r); sd = abs(rel.x) / r   # 正面＝−Y
     fr *= fr; bk *= bk; sd *= sd
     side_gain = 0.45 * smoothstep(1.22, 1.02, p.z)
     gain = fr * 1.0 + bk * 0.85 + sd * side_gain
@@ -353,8 +358,9 @@ scene.camera = cam
 mosaic = bpy.data.objects.get("PlusSize_Male_Mosaic_01")
 if mosaic:
     mosaic.hide_render = True
-views = {"front": ((0.0, 3.6, 0.95), (math.radians(90), 0, math.radians(180))),
-         "side": ((3.6, 0.0, 0.95), (math.radians(90), 0, math.radians(90)))}
+views = {"front": ((0.0, -3.6, 0.95), (math.radians(90), 0, 0)),
+         "side": ((3.6, 0.0, 0.95), (math.radians(90), 0, math.radians(90))),
+         "back": ((0.0, 3.6, 0.95), (math.radians(90), 0, math.radians(180)))}
 variants = {"orig": ([orig], [body] + sumo_objs),
             "new": ([body], [orig] + sumo_objs),
             "sumo": (sumo_objs, [body, orig])}

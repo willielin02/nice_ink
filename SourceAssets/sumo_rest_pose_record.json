@@ -1,0 +1,550 @@
+{
+ "file": "C:\\games\\Unreal Engine\\nice_ink\\SourceAssets\\sumo_retopo_base12.blend",
+ "note": "REST POSE 基準：所有程序化動作（走路/彎腰/站立/jiggle）的根基",
+ "bones": {
+  "Root": {
+   "head_local": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "tail_local": [
+    -0.0,
+    -0.0,
+    0.117941
+   ],
+   "parent": null,
+   "use_deform": true
+  },
+  "Hips": {
+   "head_local": [
+    -0.0,
+    0.296737,
+    0.656865
+   ],
+   "tail_local": [
+    -0.0,
+    0.297209,
+    0.76214
+   ],
+   "parent": "Root",
+   "use_deform": true
+  },
+  "LeftUpLeg": {
+   "head_local": [
+    0.335564,
+    0.131082,
+    0.718127
+   ],
+   "tail_local": [
+    0.586751,
+    -0.176137,
+    0.446159
+   ],
+   "parent": "Hips",
+   "use_deform": true
+  },
+  "LeftLeg": {
+   "head_local": [
+    0.586751,
+    -0.176137,
+    0.446159
+   ],
+   "tail_local": [
+    0.334994,
+    0.108347,
+    0.083115
+   ],
+   "parent": "LeftUpLeg",
+   "use_deform": true
+  },
+  "LeftFoot": {
+   "head_local": [
+    0.334994,
+    0.108347,
+    0.083115
+   ],
+   "tail_local": [
+    0.457199,
+    -0.142421,
+    0.04748
+   ],
+   "parent": "LeftLeg",
+   "use_deform": true
+  },
+  "LeftToeBase": {
+   "head_local": [
+    0.457199,
+    -0.142421,
+    0.04748
+   ],
+   "tail_local": [
+    0.47337,
+    -0.208166,
+    0.039177
+   ],
+   "parent": "LeftFoot",
+   "use_deform": true
+  },
+  "Spine": {
+   "head_local": [
+    -0.0,
+    0.295669,
+    0.762764
+   ],
+   "tail_local": [
+    -0.0,
+    0.334281,
+    0.946559
+   ],
+   "parent": "Hips",
+   "use_deform": true
+  },
+  "Spine1": {
+   "head_local": [
+    -0.0,
+    0.334281,
+    0.946559
+   ],
+   "tail_local": [
+    -0.0,
+    0.258883,
+    1.329937
+   ],
+   "parent": "Spine",
+   "use_deform": true
+  },
+  "Neck": {
+   "head_local": [
+    -0.0,
+    0.131801,
+    1.431671
+   ],
+   "tail_local": [
+    -0.0,
+    0.02714,
+    1.47314
+   ],
+   "parent": "Spine1",
+   "use_deform": true
+  },
+  "Head": {
+   "head_local": [
+    -0.0,
+    0.02714,
+    1.47314
+   ],
+   "tail_local": [
+    -0.0,
+    -0.096784,
+    1.64449
+   ],
+   "parent": "Neck",
+   "use_deform": true
+  },
+  "LeftShoulder": {
+   "head_local": [
+    0.090004,
+    0.144055,
+    1.44677
+   ],
+   "tail_local": [
+    0.373433,
+    0.113394,
+    1.307862
+   ],
+   "parent": "Spine1",
+   "use_deform": true
+  },
+  "LeftArm": {
+   "head_local": [
+    0.373433,
+    0.113394,
+    1.307862
+   ],
+   "tail_local": [
+    0.729212,
+    0.131312,
+    1.079342
+   ],
+   "parent": "LeftShoulder",
+   "use_deform": true
+  },
+  "LeftForeArm": {
+   "head_local": [
+    0.729212,
+    0.131312,
+    1.079342
+   ],
+   "tail_local": [
+    0.892039,
+    -0.083907,
+    0.846042
+   ],
+   "parent": "LeftArm",
+   "use_deform": true
+  },
+  "LeftHand": {
+   "head_local": [
+    0.892039,
+    -0.083907,
+    0.846042
+   ],
+   "tail_local": [
+    0.919077,
+    -0.151317,
+    0.799644
+   ],
+   "parent": "LeftForeArm",
+   "use_deform": true
+  },
+  "LeftHandIndex1": {
+   "head_local": [
+    0.873483,
+    -0.244677,
+    0.791378
+   ],
+   "tail_local": [
+    0.889899,
+    -0.268952,
+    0.751521
+   ],
+   "parent": "LeftHand",
+   "use_deform": true
+  },
+  "LeftHandIndex2": {
+   "head_local": [
+    0.889899,
+    -0.268952,
+    0.751521
+   ],
+   "tail_local": [
+    0.847649,
+    -0.252292,
+    0.687385
+   ],
+   "parent": "LeftHandIndex1",
+   "use_deform": true
+  },
+  "LeftHandProp": {
+   "head_local": [
+    0.936721,
+    -0.120901,
+    0.714748
+   ],
+   "tail_local": [
+    0.798285,
+    -0.277977,
+    0.722935
+   ],
+   "parent": "LeftHand",
+   "use_deform": true
+  },
+  "LeftHandThumb1": {
+   "head_local": [
+    0.836902,
+    -0.169335,
+    0.836056
+   ],
+   "tail_local": [
+    0.785016,
+    -0.223347,
+    0.811687
+   ],
+   "parent": "LeftHand",
+   "use_deform": true
+  },
+  "LeftHandThumb2": {
+   "head_local": [
+    0.785016,
+    -0.223347,
+    0.811687
+   ],
+   "tail_local": [
+    0.773428,
+    -0.273853,
+    0.752274
+   ],
+   "parent": "LeftHandThumb1",
+   "use_deform": true
+  },
+  "RightShoulder": {
+   "head_local": [
+    -0.090004,
+    0.144055,
+    1.44677
+   ],
+   "tail_local": [
+    -0.373433,
+    0.113394,
+    1.307862
+   ],
+   "parent": "Spine1",
+   "use_deform": true
+  },
+  "RightArm": {
+   "head_local": [
+    -0.373433,
+    0.113394,
+    1.307862
+   ],
+   "tail_local": [
+    -0.729212,
+    0.131312,
+    1.079342
+   ],
+   "parent": "RightShoulder",
+   "use_deform": true
+  },
+  "RightForeArm": {
+   "head_local": [
+    -0.729212,
+    0.131312,
+    1.079342
+   ],
+   "tail_local": [
+    -0.892039,
+    -0.083907,
+    0.846042
+   ],
+   "parent": "RightArm",
+   "use_deform": true
+  },
+  "RightHand": {
+   "head_local": [
+    -0.892039,
+    -0.083907,
+    0.846042
+   ],
+   "tail_local": [
+    -0.919077,
+    -0.151317,
+    0.799644
+   ],
+   "parent": "RightForeArm",
+   "use_deform": true
+  },
+  "RightHandIndex1": {
+   "head_local": [
+    -0.873483,
+    -0.244677,
+    0.791378
+   ],
+   "tail_local": [
+    -0.889899,
+    -0.268952,
+    0.751521
+   ],
+   "parent": "RightHand",
+   "use_deform": true
+  },
+  "RightHandIndex2": {
+   "head_local": [
+    -0.889899,
+    -0.268952,
+    0.751521
+   ],
+   "tail_local": [
+    -0.847649,
+    -0.252292,
+    0.687385
+   ],
+   "parent": "RightHandIndex1",
+   "use_deform": true
+  },
+  "RightHandProp": {
+   "head_local": [
+    -0.936721,
+    -0.120901,
+    0.714748
+   ],
+   "tail_local": [
+    -0.798285,
+    -0.277977,
+    0.722935
+   ],
+   "parent": "RightHand",
+   "use_deform": true
+  },
+  "RightHandThumb1": {
+   "head_local": [
+    -0.836902,
+    -0.169335,
+    0.836056
+   ],
+   "tail_local": [
+    -0.785016,
+    -0.223347,
+    0.811687
+   ],
+   "parent": "RightHand",
+   "use_deform": true
+  },
+  "RightHandThumb2": {
+   "head_local": [
+    -0.785016,
+    -0.223347,
+    0.811687
+   ],
+   "tail_local": [
+    -0.773428,
+    -0.273853,
+    0.752274
+   ],
+   "parent": "RightHandThumb1",
+   "use_deform": true
+  },
+  "Jiggle_Chest_L": {
+   "head_local": [
+    0.304618,
+    -0.289786,
+    1.127197
+   ],
+   "tail_local": [
+    0.304618,
+    -0.289785,
+    1.526598
+   ],
+   "parent": "Spine1",
+   "use_deform": true
+  },
+  "Jiggle_Chest_R": {
+   "head_local": [
+    -0.304618,
+    -0.289786,
+    1.127197
+   ],
+   "tail_local": [
+    -0.304618,
+    -0.289785,
+    1.526598
+   ],
+   "parent": "Spine1",
+   "use_deform": true
+  },
+  "Jiggle_Belly": {
+   "head_local": [
+    -0.0,
+    0.334281,
+    0.946559
+   ],
+   "tail_local": [
+    -0.0,
+    -0.48634,
+    0.793736
+   ],
+   "parent": "Spine",
+   "use_deform": true
+  },
+  "RightUpLeg": {
+   "head_local": [
+    -0.335564,
+    0.131082,
+    0.718127
+   ],
+   "tail_local": [
+    -0.586751,
+    -0.176137,
+    0.446159
+   ],
+   "parent": "Hips",
+   "use_deform": true
+  },
+  "RightLeg": {
+   "head_local": [
+    -0.586751,
+    -0.176137,
+    0.446159
+   ],
+   "tail_local": [
+    -0.334994,
+    0.108347,
+    0.083115
+   ],
+   "parent": "RightUpLeg",
+   "use_deform": true
+  },
+  "RightFoot": {
+   "head_local": [
+    -0.334994,
+    0.108347,
+    0.083115
+   ],
+   "tail_local": [
+    -0.457199,
+    -0.142421,
+    0.04748
+   ],
+   "parent": "RightLeg",
+   "use_deform": true
+  },
+  "RightToeBase": {
+   "head_local": [
+    -0.457199,
+    -0.142421,
+    0.04748
+   ],
+   "tail_local": [
+    -0.47337,
+    -0.208166,
+    0.039177
+   ],
+   "parent": "RightFoot",
+   "use_deform": true
+  },
+  "Jiggle_Butt_L": {
+   "head_local": [
+    0.196635,
+    0.557782,
+    0.650821
+   ],
+   "tail_local": [
+    0.196635,
+    0.557782,
+    0.819867
+   ],
+   "parent": "Hips",
+   "use_deform": true
+  },
+  "Jiggle_Butt_R": {
+   "head_local": [
+    -0.196635,
+    0.557782,
+    0.650821
+   ],
+   "tail_local": [
+    -0.196635,
+    0.557782,
+    0.819867
+   ],
+   "parent": "Hips",
+   "use_deform": true
+  }
+ },
+ "armature_object_matrix_world": [
+  [
+   1.0,
+   0.0,
+   0.0,
+   0.0
+  ],
+  [
+   0.0,
+   1.0,
+   0.0,
+   0.0
+  ],
+  [
+   0.0,
+   0.0,
+   1.0,
+   0.0
+  ],
+  [
+   0.0,
+   0.0,
+   0.0,
+   1.0
+  ]
+ ]
+}

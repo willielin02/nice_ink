@@ -21,6 +21,7 @@ Plugins/**/node_modules/
 # Local AI/editor state and secrets
 .agents/
 .claude/
+.codex/
 .cursor/
 .env
 .env.*
@@ -86,6 +87,7 @@ Tools/FacePipeline/face_texture*.png
 Tools/FacePipeline/debug_*.jpg
 Tools/FacePipeline/debug_*.png
 Tools/FacePipeline/__pycache__/
+__pycache__/
 
 # Blender auto-backups (previous-save copies)
 Content/**/*.blend1
@@ -96,3 +98,14 @@ SourceAssets/Sauna_localyany/sauna (1).zip
 SourceAssets/Sauna_localyany/sauna_1k.glb
 SourceAssets/Sauna_localyany/sauna.usdz
 SourceAssets/**/*.fbm/
+
+# Sumo 身體戰役：只入庫正本（掃描源 Sumo wrestler/ ＋ sumo_character_master.blend ＋ 烘焙貼圖）；
+# 迭代預覽/工作檔/版本快照留本地（previews 4.8GB、masters/retopo/char1x_work 皆為歷史迭代）
+SourceAssets/previews/
+SourceAssets/masters/
+SourceAssets/sumo_retopo_base*.blend
+SourceAssets/char18_work.blend
+SourceAssets/char19_work.blend
+SourceAssets/char19_warped.blend
+SourceAssets/char19_warped.ble
+SourceAssets/**/*.blend1
