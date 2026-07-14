@@ -31,7 +31,10 @@ enum class EDreamMazeSimState : uint8
 // - 廊道中線行走：迷宮內部人物永遠在廊道正中央（軌道網）；中央圓室自由移動。
 // - 導航式滑行：任何位置按住左鍵都能走——局部前瞻選「更接近游標點」的走法，
 //   斜指牆壁自動沿廊滑行、路口自動轉彎；刻意不做全域尋路（那會替玩家解迷宮）。
-// - 陷阱地圖上完全不可見（用命記）；視錐＋牆擋光（射線投射），其餘皆黑暗。
+// - 陷阱地圖上完全不可見（用命記）。
+// - 呈現＝光圈式局部顯示（v3.5，2026-07-14 user 定案）：avatar 為心的光圈內
+//   全亮（含牆、不做遮擋），圈外全黑；半徑＝站在原點剛好看到五道等距門。
+//   射線視錐／嚴格視界／雙層光（r8-r15）整套退役。
 UCLASS(ClassGroup = (NiceInk), meta = (BlueprintSpawnableComponent))
 class NICEINK_API UDreamMazeComponent : public UActorComponent
 {
@@ -85,7 +88,8 @@ private:
 	FDreamMazeLayout Layout;
 	TArray<int32> TrapOwners; // 與 Layout.TrapCells 平行（兇手 PlayerId）
 
-	// 廊道中線軌道網＋視錐遮光體（StartMaze 時從 Layout 建）
+	// 廊道中線軌道網＋牆件幾何（StartMaze 時從 Layout 建；Occluders 在光圈制下
+	// 只當牆的幾何來源用——Segs/PieceRanges/CullAround；射線查詢函式閒置）
 	FDreamMazeNet Net;
 	FDreamMazeOccluders Occluders;
 

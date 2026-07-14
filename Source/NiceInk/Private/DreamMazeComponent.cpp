@@ -14,26 +14,22 @@ namespace
 	constexpr float CheckpointTouchRadius = 0.5f;   // 存檔點觸發半徑（cell）
 	constexpr float AwaitRotationFailsafeSec = 10.0f; // 網路失聯保底（僅魯棒性，非設計保護）
 
-	// 視錐（2026-07-13 規格：往移動方向的視錐＋牆擋光，其餘皆黑暗）
-	constexpr float ConeHalfRad = 40.0f * PI / 180.0f; // 半角
-	constexpr float ConeFadeRad = 14.0f * PI / 180.0f; // 角向邊緣淡出
-	constexpr float FeetGlowRadius = 0.3f;             // 腳邊小光圈：小於走廊半寬＝不透牆
-
 	// 導航前瞻（局部貪婪）：刻意不做全域尋路——那會替玩家解迷宮
 	constexpr float NavLookahead = 0.9f; // cell
 	constexpr float NavMinGain = 0.03f;  // 最低改善門檻（低於此＝已在游標的最近點）
 
-	// 迷宮盤配色（醉夢：深靛底、淡牆）。ShadowColor＝DiscColor 不透明同色——
-	// 被遮住的區域塗出來的黑必須和底盤的黑一模一樣，牆後才讀成「黑暗」而非補丁
-	const FLinearColor DiscColor(0.045f, 0.04f, 0.10f, 1.0f);
-	const FLinearColor ShadowColor(0.045f, 0.04f, 0.10f, 1.0f);
-	const FLinearColor WallColor(0.62f, 0.60f, 0.78f, 1.0f);
-	const FLinearColor AvatarColor(0.95f, 0.93f, 0.85f, 1.0f);
-	const FLinearColor SprayCpColor(0.35f, 0.85f, 0.75f, 1.0f);
-	const FLinearColor KickCpColor(0.95f, 0.62f, 0.25f, 1.0f);
-	const FLinearColor ExitGlowColor(0.85f, 0.72f, 0.35f, 1.0f);
-	const FLinearColor FloorGlowInner(0.30f, 0.28f, 0.44f, 0.32f); // 視錐地面光（扇心）
-	const FLinearColor FloorGlowOuter(0.30f, 0.28f, 0.44f, 0.0f);  // 視錐地面光（射程端）
+	// 迷宮盤配色（醉夢：近黑底、淡牆）。全部以 sRGB 顯示色（網頁設計台的 hex）宣告、
+	// 經 FromSRGBColor 轉線性——canvas 上屏會做 gamma 校正，把顯示值直接塞進
+	// FLinearColor 會整組變亮（「黑」上屏變中紫的事故，2026-07-14）。
+	// DiscColor 同時是底盤與光圈遮罩的黑：兩種黑必須一模一樣才讀成同一片黑暗。
+	const FLinearColor DiscColor = FLinearColor::FromSRGBColor(FColor(12, 11, 24));
+	const FLinearColor WallColor = FLinearColor::FromSRGBColor(FColor(185, 179, 214));
+	const FLinearColor AvatarColor = FLinearColor::FromSRGBColor(FColor(242, 237, 217));
+	const FLinearColor SprayCpColor = FLinearColor::FromSRGBColor(FColor(79, 209, 181));
+	const FLinearColor KickCpColor = FLinearColor::FromSRGBColor(FColor(240, 160, 74));
+	const FLinearColor ExitGlowColor = FLinearColor::FromSRGBColor(FColor(217, 194, 122));
+	const FLinearColor FloorGlowInner = FLinearColor::FromSRGBColor(FColor(77, 71, 112)).CopyWithNewOpacity(0.32f); // 光圈地面光（圈心）
+	const FLinearColor FloorGlowOuter = FLinearColor::FromSRGBColor(FColor(77, 71, 112)).CopyWithNewOpacity(0.0f);  // 光圈地面光（圈緣）
 }
 
 UDreamMazeComponent::UDreamMazeComponent()
@@ -113,8 +109,8 @@ void UDreamMazeComponent::TickComponent(float DeltaTime, ELevelTick TickType, FA
 
 	StateTime += DeltaTime;
 
-	// 游標與視錐在整個死亡序列中照常活著（2026-07-13 user 定案：旋轉時人物不可移動、
-	// 但視錐依然跟著游標轉——人在原點＝旋轉不動點，看著牆型轉是抓方向感的唯一手段）
+	// 游標在整個死亡序列中照常活著（2026-07-13 user 定案：旋轉時人物不可移動）；
+	// 人在原點＝旋轉不動點＝光圈中心，看著圈內牆型轉是抓方向感的唯一手段
 	if (SimState != EDreamMazeSimState::Inactive)
 	{
 		UpdateCursorHeading();
@@ -693,14 +689,17 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 	LastPanelScale = Scale;
 
 	const bool bWalking = SimState == EDreamMazeSimState::Walking;
-	// 死亡當下人已回原點（Pos＝旋轉不動點）；視錐朝向全程由游標驅動（含旋轉中）
+	// 死亡當下人已回原點（Pos＝旋轉不動點）
 	const FVector2D Eye = Pos;
-	const FVector2D EyeHd = HeadingMaze;
-	const float Range = P.VisionRadius;
+	const float DiscR = Layout.RimRadius() + DreamMazeWallThickness; // 盤緣（含牆帽外緣）
 
-	// 每幀粗篩一次射程內的遮光段——之後所有射線/LOS 只掃這份（掉幀修正 2026-07-13）
-	TArray<int32> CulledOccluders;
-	Occluders.CullAround(Eye, Range, CulledOccluders);
+	// --- 光圈式局部顯示（v3.5，2026-07-14 user 定案；射線視錐／嚴格視界／雙層光
+	// r8-r15 整套退役）：圈內全亮——含牆、不做遮擋（牆不擋光）；圈外全黑。
+	// 光圈半徑定義（user 原話）：「人物站在地圖原點時剛好可以看到五個等距的門」——
+	// 門＝環 0 圓牆上的缺口，看到門＝看到那圈牆帶：半徑剛好蓋住環 0 牆外緣＋餘裕。
+	// FogEdgeSoftness＝向外漸黑的軟邊帶寬。 ---
+	const float LightR = Layout.ROuter[0] + DreamMazeWallThickness * 0.5f + 0.06f;
+	const float LightFade = FMath::Clamp(P.FogEdgeSoftness, 0.05f, 1.5f);
 
 	auto ToPx = [&](const FVector2D& MazePos) -> FVector2D
 	{
@@ -708,71 +707,131 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		return FVector2D(CenterPx.X + Rotated.X * Scale, CenterPx.Y - Rotated.Y * Scale);
 	};
 
-	// 可見度＝純解析視錐（徑向淡出 × 角向淡出；腳邊小光圈只做徑向）。
-	// 2026-07-13 user 定案改制：不再逐點問 LOS——視錐內容嚴格照畫，
-	// 「牆擋光」由後面的陰影帔（shadow-casting 四邊形）一次塗黑牆後區域。
-	// 逐段 LOS 的病：取樣粒度＝明暗跳段＝不完整的牆；陰影帔的明暗邊界是幾何精確的。
-	const float CosIn = FMath::Cos(ConeHalfRad);
-	const float CosOut = FMath::Cos(ConeHalfRad + ConeFadeRad);
-	auto ConeVis = [&](const FVector2D& Pt) -> float
+	// Eye 沿 Dir 到盤緣的距離（射線×圓；Eye 必在盤內＝判別式恆正）
+	auto EdgeT = [&](const FVector2D& Dir) -> float
 	{
-		const FVector2D DVec = Pt - Eye;
-		const float Dist = DVec.Size();
-		const float Radial = 1.0f - FMath::Clamp(
-			(Dist - (Range - P.FogEdgeSoftness)) / FMath::Max(0.1f, P.FogEdgeSoftness), 0.0f, 1.0f);
-		if (Radial <= 0.0f)
-		{
-			return 0.0f;
-		}
-		if (Dist <= FeetGlowRadius)
-		{
-			return Radial;
-		}
-		const float CosA = FVector2D::DotProduct(DVec / Dist, EyeHd);
-		const float Ang = FMath::Clamp((CosA - CosOut) / FMath::Max(1e-4f, CosIn - CosOut), 0.0f, 1.0f);
-		return Radial * Ang;
+		const float B = FVector2D::DotProduct(Eye, Dir);
+		return -B + FMath::Sqrt(FMath::Max(0.0f, B * B - Eye.SizeSquared() + DiscR * DiscR));
 	};
 
 	// 底盤（近全黑的夢）
 	Canvas->K2_DrawPolygon(nullptr, CenterPx, FVector2D(RadiusPx + 8.0f, RadiusPx + 8.0f), 48, DiscColor);
 
-	// --- v4（2026-07-13 user 模型逐字版）：FPS 嚴格視線呈現＝三層——
-	// ①視錐地面光（你能看的空間範圍）
-	// ②黑影：每段牆把背後區域投影塗黑（幾何精確＝「被遮住的區域整個塗黑」）
-	// ③牆畫在黑影之上：視線碰得到正面的牆「整件完好呈現」（二值物件），
-	//   看不到的牆從不上畫面。擋人的牆因此永遠完整，牆後的一切永遠在黑暗裡。 ---
+	// --- 繪製順序（光圈三步）：
+	//   ①內容完整畫（光圈地面光、出口、技能點）——不做任何逐點可見性判斷
+	//   ②牆完整畫（光圈附近的牆件整件：四邊形帶＋兩端圓頭）
+	//   ③光圈遮罩最後裁一切：avatar 為心，LightR 內全亮、軟邊帶漸黑、之外全黑——
+	//     光圈邊界是牆唯一合法的切口。 ---
 
-	// ①視錐地面光（解析扇形＋腳邊小光圈；牆後由②塗黑）
+	// 整件牆＝三角形帶（每段一個四邊形）＋折點/端點圓盤——全部走三角形流。
+	// 血淚根因（2026-07-14 r9 紅圈診斷）：K2_DrawLine 的粗線與三角形進同一個
+	// FBatchedElements 的不同陣列，GPU 端固定「先線後三角」＝提交順序失效——
+	// 粗線牆永遠沉在遮罩（三角形）底下被切出平切稜角。
+	// 牆一律用三角形畫＝提交順序即繪製順序；幾何算在迷宮座標（跟旋轉、跟縮放）。
+	// 手動抗鋸齒（2026-07-15 user 抓到鋸齒）：canvas 批次三角形零 AA（網頁 canvas 的
+	// 平滑是瀏覽器送的）——沿整條輪廓外擴 ~1.3px 的 alpha 漸層羽化裙邊＝亞像素過渡；
+	// 裙邊蓋在鄰件同色實體上不可見（同色 blend＝無痕），蓋在地面上＝AA。
+	const float SkirtCell = 1.3f / FMath::Max(1.0f, Scale); // 裙寬（cell）≈1.3 螢幕像素
+	const FLinearColor WallEdgeColor = WallColor.CopyWithNewOpacity(0.0f);
+	auto AppendWholePiece = [&](const FIntPoint& Piece, bool bCapA, bool bCapB, TArray<FCanvasUVTri>& Out)
+	{
+		const float HalfT = DreamMazeWallThickness * 0.5f;
+		auto AddTriC = [&](const FVector2D& P0, const FLinearColor& C0,
+			const FVector2D& P1, const FLinearColor& C1,
+			const FVector2D& P2, const FLinearColor& C2)
+		{
+			FCanvasUVTri Tri;
+			Tri.V0_Pos = P0;
+			Tri.V1_Pos = P1;
+			Tri.V2_Pos = P2;
+			Tri.V0_Color = C0;
+			Tri.V1_Color = C1;
+			Tri.V2_Color = C2;
+			Out.Add(Tri);
+		};
+		auto AddTri = [&](const FVector2D& P0, const FVector2D& P1, const FVector2D& P2)
+		{
+			AddTriC(P0, WallColor, P1, WallColor, P2, WallColor);
+		};
+		// 圓盤（端蓋與折點共用）：實體扇＋外圈羽化環。
+		// 折點圓盤＝lineJoin='round' 等價物（凸側折點的次像素楔形縫→孤立暗點，r17 修）；
+		// 端蓋圓盤＝真牆末圓潤；轉角處疊在鄰件同色實體上不可見
+		auto AddDisc = [&](const FVector2D& C, int32 Sides)
+		{
+			const FVector2D CPx = ToPx(C);
+			for (int32 k = 0; k < Sides; ++k)
+			{
+				const float R0 = 2.0f * PI * k / Sides;
+				const float R1 = 2.0f * PI * (k + 1) / Sides;
+				const FVector2D E0(FMath::Cos(R0), FMath::Sin(R0));
+				const FVector2D E1(FMath::Cos(R1), FMath::Sin(R1));
+				const FVector2D P0 = ToPx(C + E0 * HalfT);
+				const FVector2D P1 = ToPx(C + E1 * HalfT);
+				const FVector2D Q0 = ToPx(C + E0 * (HalfT + SkirtCell));
+				const FVector2D Q1 = ToPx(C + E1 * (HalfT + SkirtCell));
+				AddTri(CPx, P0, P1);
+				AddTriC(P0, WallColor, Q0, WallEdgeColor, Q1, WallEdgeColor);
+				AddTriC(P0, WallColor, Q1, WallEdgeColor, P1, WallColor);
+			}
+		};
+		for (int32 i = Piece.X; i < Piece.Y; ++i)
+		{
+			const FDreamMazeOccluders::FSeg& S = Occluders.Segs[i];
+			FVector2D Dir = S.B - S.A;
+			const float Len = Dir.Size();
+			if (Len < 1e-6f)
+			{
+				continue;
+			}
+			Dir /= Len;
+			const FVector2D N(-Dir.Y * HalfT, Dir.X * HalfT);
+			const FVector2D NS = N * ((HalfT + SkirtCell) / HalfT); // 法線外擴到裙緣
+			const FVector2D A0 = ToPx(S.A + N);
+			const FVector2D A1 = ToPx(S.A - N);
+			const FVector2D B0 = ToPx(S.B + N);
+			const FVector2D B1 = ToPx(S.B - N);
+			AddTri(A0, A1, B1);
+			AddTri(A0, B1, B0);
+			// 兩側長邊羽化裙
+			const FVector2D A0s = ToPx(S.A + NS);
+			const FVector2D B0s = ToPx(S.B + NS);
+			const FVector2D A1s = ToPx(S.A - NS);
+			const FVector2D B1s = ToPx(S.B - NS);
+			AddTriC(A0, WallColor, A0s, WallEdgeColor, B0s, WallEdgeColor);
+			AddTriC(A0, WallColor, B0s, WallEdgeColor, B0, WallColor);
+			AddTriC(A1, WallColor, A1s, WallEdgeColor, B1s, WallEdgeColor);
+			AddTriC(A1, WallColor, B1s, WallEdgeColor, B1, WallColor);
+			if (i > Piece.X)
+			{
+				AddDisc(S.A, 10); // 折點
+			}
+		}
+		const FVector2D Ends[2] = { Occluders.Segs[Piece.X].A, Occluders.Segs[Piece.Y - 1].B };
+		const bool CapFlags[2] = { bCapA, bCapB };
+		for (int32 e = 0; e < 2; ++e)
+		{
+			if (CapFlags[e])
+			{
+				AddDisc(Ends[e], 16); // 端蓋
+			}
+		}
+	};
+
+	// ①-a 光圈地面光：圈心到圈緣的徑向漸層——亮區在無牆處也讀得出「這裡是空間」
 	if (SimState != EDreamMazeSimState::Inactive)
 	{
-		const float Alpha0 = FMath::Atan2(EyeHd.Y, EyeHd.X);
-		const float WHalf = ConeHalfRad + ConeFadeRad;
-		constexpr int32 NumRays = 48;
+		constexpr int32 GlowSegs = 48;
 		const FVector2D EyePx = ToPx(Eye);
 		TArray<FCanvasUVTri> Tris;
-		Tris.Reserve(NumRays + 16);
-		for (int32 Ray = 1; Ray <= NumRays; ++Ray)
+		Tris.Reserve(GlowSegs);
+		for (int32 i = 0; i < GlowSegs; ++i)
 		{
-			const float A0 = Alpha0 - WHalf + 2.0f * WHalf * (Ray - 1) / NumRays;
-			const float A1 = Alpha0 - WHalf + 2.0f * WHalf * Ray / NumRays;
+			const float A0 = 2.0f * PI * i / GlowSegs;
+			const float A1 = 2.0f * PI * (i + 1) / GlowSegs;
 			FCanvasUVTri Tri;
 			Tri.V0_Pos = EyePx;
-			Tri.V1_Pos = ToPx(Eye + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * Range);
-			Tri.V2_Pos = ToPx(Eye + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * Range);
-			Tri.V0_Color = FloorGlowInner;
-			Tri.V1_Color = Tri.V2_Color = FloorGlowOuter;
-			Tris.Add(Tri);
-		}
-		// 腳邊小光圈（半徑小於走廊半寬＝物理上照不到任何牆後）
-		constexpr int32 FeetSegs = 16;
-		for (int32 i = 0; i < FeetSegs; ++i)
-		{
-			const float A0 = 2.0f * PI * i / FeetSegs;
-			const float A1 = 2.0f * PI * (i + 1) / FeetSegs;
-			FCanvasUVTri Tri;
-			Tri.V0_Pos = EyePx;
-			Tri.V1_Pos = ToPx(Eye + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * FeetGlowRadius);
-			Tri.V2_Pos = ToPx(Eye + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * FeetGlowRadius);
+			Tri.V1_Pos = ToPx(Eye + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * LightR);
+			Tri.V2_Pos = ToPx(Eye + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * LightR);
 			Tri.V0_Color = FloorGlowInner;
 			Tri.V1_Color = Tri.V2_Color = FloorGlowOuter;
 			Tris.Add(Tri);
@@ -780,144 +839,138 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		Canvas->K2_DrawTriangle(nullptr, Tris); // nullptr＝引擎白紋理
 	}
 
-	// ②黑影：被遮住的區域整片塗黑（自牆中線向外投影到射程外；
-	// 擋人的牆本體會在③重畫於影子之上——所以這裡蓋到它也無妨）
-	{
-		TArray<FCanvasUVTri> ShadowTris;
-		ShadowTris.Reserve(CulledOccluders.Num() * 2);
-		const float ProjDist = Range + 0.5f;
-		for (const int32 SegIdx : CulledOccluders)
-		{
-			const FDreamMazeOccluders::FSeg& Seg = Occluders.Segs[SegIdx];
-			const FVector2D DA = Seg.A - Eye;
-			const FVector2D DB = Seg.B - Eye;
-			const float LenA = DA.Size();
-			const float LenB = DB.Size();
-			if (LenA < 1e-4f || LenB < 1e-4f || (LenA > Range && LenB > Range))
-			{
-				continue; // 整段在射程外＝背後本來就黑
-			}
-			const FVector2D FarA = Eye + DA / LenA * ProjDist;
-			const FVector2D FarB = Eye + DB / LenB * ProjDist;
-			FCanvasUVTri Tri1;
-			Tri1.V0_Pos = ToPx(Seg.A);
-			Tri1.V1_Pos = ToPx(Seg.B);
-			Tri1.V2_Pos = ToPx(FarB);
-			Tri1.V0_Color = Tri1.V1_Color = Tri1.V2_Color = ShadowColor;
-			FCanvasUVTri Tri2;
-			Tri2.V0_Pos = ToPx(Seg.A);
-			Tri2.V1_Pos = ToPx(FarB);
-			Tri2.V2_Pos = ToPx(FarA);
-			Tri2.V0_Color = Tri2.V1_Color = Tri2.V2_Color = ShadowColor;
-			ShadowTris.Add(Tri1);
-			ShadowTris.Add(Tri2);
-		}
-		if (ShadowTris.Num() > 0)
-		{
-			Canvas->K2_DrawTriangle(nullptr, ShadowTris);
-		}
-	}
-
-	// ③牆：以「邏輯牆件」為單位二值呈現——正面任一點視線可達＝整件完好畫出
-	// （蓋在黑影之上）；否則整件不畫（留在黑暗）。亮度沿牆身按視錐解析淡出；
-	// 件端蓋圓頭＝與全圖渲染同一視覺語彙（也修掉尖銳尾端）
-	const float WallPx = FMath::Max(2.0f, DreamMazeWallThickness * Scale);
-	const float CapR = WallPx * 0.5f;
-	for (const FIntPoint& Piece : Occluders.PieceRanges)
-	{
-		bool bNear = false;
-		for (int32 i = Piece.X; i < Piece.Y && !bNear; ++i)
-		{
-			const FDreamMazeOccluders::FSeg& S = Occluders.Segs[i];
-			const float MaxD = Range + S.HalfLen + 0.3f;
-			bNear = (S.Mid - Eye).SizeSquared() < MaxD * MaxD;
-		}
-		if (!bNear)
-		{
-			continue;
-		}
-		bool bSeen = false;
-		for (int32 i = Piece.X; i < Piece.Y && !bSeen; ++i)
-		{
-			const FDreamMazeOccluders::FSeg& S = Occluders.Segs[i];
-			bSeen = ConeVis(S.Mid) > 0.02f && Occluders.HasLineOfSight(Eye, S.Mid, 0.12f, &CulledOccluders);
-		}
-		if (!bSeen)
-		{
-			continue;
-		}
-		for (int32 i = Piece.X; i < Piece.Y; ++i)
-		{
-			const FDreamMazeOccluders::FSeg& S = Occluders.Segs[i];
-			const float Vis = FMath::Max3(ConeVis(S.Mid), ConeVis(S.A), ConeVis(S.B));
-			if (Vis <= 0.02f)
-			{
-				continue;
-			}
-			FLinearColor Color = WallColor;
-			Color.A *= Vis;
-			Canvas->K2_DrawLine(ToPx(S.A), ToPx(S.B), WallPx, Color);
-			if (i == Piece.X)
-			{
-				Canvas->K2_DrawPolygon(nullptr, ToPx(S.A), FVector2D(CapR, CapR), 10, Color);
-			}
-			if (i == Piece.Y - 1)
-			{
-				Canvas->K2_DrawPolygon(nullptr, ToPx(S.B), FVector2D(CapR, CapR), 10, Color);
-			}
-		}
-	}
-
-	// 出口光（視線連得到才看得到——黑暗中零穿牆資訊）
+	// ①-b 出口光與技能點：先全額畫好——圈外的部分由③的遮罩塗黑，
+	// 不做逐點可見性判斷（黑暗中零地標的守則由遮罩實現）
+	if (SimState != EDreamMazeSimState::Inactive)
 	{
 		const float Rim = Layout.RimRadius();
 		const float ExitPhis[2] = { Layout.ExitPhi0, Layout.ExitPhi1 };
 		for (const float Phi : ExitPhis)
 		{
 			const FVector2D Pt(Rim * FMath::Cos(Phi), Rim * FMath::Sin(Phi));
-			const float Vis = ConeVis(Pt);
-			if (Vis > 0.03f && Occluders.HasLineOfSight(Eye, Pt, 0.10f, &CulledOccluders))
+			Canvas->K2_DrawPolygon(nullptr, ToPx(Pt), FVector2D(0.1f * Scale, 0.1f * Scale), 8, ExitGlowColor);
+		}
+		auto DrawCheckpoint = [&](int32 Cell, const FLinearColor& Color, bool bVisited, const TCHAR* Label)
+		{
+			if (Cell == INDEX_NONE)
 			{
-				FLinearColor Color = ExitGlowColor;
-				Color.A *= Vis;
-				Canvas->K2_DrawPolygon(nullptr, ToPx(Pt), FVector2D(0.1f * Scale, 0.1f * Scale), 8, Color);
+				return;
 			}
+			const FVector2D Px = ToPx(Layout.CellCenter(Cell));
+			const float HalfSize = 0.24f * Scale;
+			const FVector2D Up(0.0f, -HalfSize), Right(HalfSize, 0.0f);
+			Canvas->K2_DrawLine(Px + Up, Px + Right, 2.0f, Color);
+			Canvas->K2_DrawLine(Px + Right, Px - Up, 2.0f, Color);
+			Canvas->K2_DrawLine(Px - Up, Px - Right, 2.0f, Color);
+			Canvas->K2_DrawLine(Px - Right, Px + Up, 2.0f, Color);
+			if (bVisited)
+			{
+				Canvas->K2_DrawPolygon(nullptr, Px, FVector2D(HalfSize * 0.8f, HalfSize * 0.8f), 4, Color);
+			}
+			FCanvasTextItem Text(Px + FVector2D(-4.0f, HalfSize + 2.0f), FText::FromString(Label), GEngine->GetSmallFont(), Color);
+			Text.Scale = FVector2D(0.8f, 0.8f);
+			Canvas->DrawItem(Text);
+		};
+		DrawCheckpoint(Layout.CheckpointSprayCell, SprayCpColor, bSprayVisited, TEXT("S"));
+		DrawCheckpoint(Layout.CheckpointKickCell, KickCpColor, bKickVisited, TEXT("K"));
+
+	}
+
+	// ②牆：光圈附近的牆件整件畫（四邊形帶＋兩端圓頭，全三角形流——K2_DrawLine 粗線
+	// 與三角形進不同 GPU 陣列、提交順序失效的血淚見 r9-r10 記錄）。
+	// 距離粗篩＝效能規格（移植教訓）：圈外的牆反正被③全黑遮罩蓋掉，不畫＝零視覺差異
+	{
+		TArray<int32> NearSegs;
+		Occluders.CullAround(Eye, LightR + LightFade + 0.6f, NearSegs);
+		TArray<int32> SegPiece;
+		SegPiece.SetNumUninitialized(Occluders.Segs.Num());
+		for (int32 PieceIdx = 0; PieceIdx < Occluders.PieceRanges.Num(); ++PieceIdx)
+		{
+			for (int32 s = Occluders.PieceRanges[PieceIdx].X; s < Occluders.PieceRanges[PieceIdx].Y; ++s)
+			{
+				SegPiece[s] = PieceIdx;
+			}
+		}
+		TSet<int32> NearPieces;
+		for (const int32 SegIdx : NearSegs)
+		{
+			NearPieces.Add(SegPiece[SegIdx]);
+		}
+		TArray<FCanvasUVTri> WallTris;
+		WallTris.Reserve(NearSegs.Num() * 2 + NearPieces.Num() * 32);
+		for (const int32 PieceIdx : NearPieces)
+		{
+			AppendWholePiece(Occluders.PieceRanges[PieceIdx], true, true, WallTris);
+		}
+		if (WallTris.Num() > 0)
+		{
+			Canvas->K2_DrawTriangle(nullptr, WallTris);
 		}
 	}
 
-	// 存檔點：視錐照到才可見（v3.3 補位設計「穿霧常駐」廢止——黑暗中零地標，
-	// 否則兩個固定圖示＋一次旋轉＝廉價反推度數）
-	auto DrawCheckpoint = [&](int32 Cell, const FLinearColor& BaseColor, bool bVisited, const TCHAR* Label)
+	// ③光圈遮罩收尾：avatar 為心——LightR 內全亮、[LightR→LightR+Fade] 軟邊漸黑、
+	// 之外全黑；楔形收在盤緣（EdgeT）防外溢。塗的黑＝DiscColor＝與底盤同一個黑。
+	// 光圈邊界是牆唯一合法的切口——牆被軟邊漸黑裁切，不做角度／遮擋判斷
+	if (SimState != EDreamMazeSimState::Inactive)
 	{
-		if (Cell == INDEX_NONE)
+		constexpr int32 NumWedges = 96;
+		TArray<FCanvasUVTri> MaskTris;
+		MaskTris.Reserve(NumWedges * 4);
+		FLinearColor CIn = DiscColor;
+		CIn.A = 0.0f;
+		FLinearColor COut = DiscColor;
+		COut.A = 1.0f;
+		for (int32 i = 0; i < NumWedges; ++i)
 		{
-			return;
+			const float A0 = 2.0f * PI * i / NumWedges;
+			const float A1 = 2.0f * PI * (i + 1) / NumWedges;
+			const FVector2D D0(FMath::Cos(A0), FMath::Sin(A0));
+			const FVector2D D1(FMath::Cos(A1), FMath::Sin(A1));
+			const float E0 = EdgeT(D0);
+			const float E1 = EdgeT(D1);
+			const FVector2D PIn0 = ToPx(Eye + D0 * FMath::Min(LightR, E0));
+			const FVector2D PIn1 = ToPx(Eye + D1 * FMath::Min(LightR, E1));
+			const FVector2D PMid0 = ToPx(Eye + D0 * FMath::Min(LightR + LightFade, E0));
+			const FVector2D PMid1 = ToPx(Eye + D1 * FMath::Min(LightR + LightFade, E1));
+			const FVector2D POut0 = ToPx(Eye + D0 * E0);
+			const FVector2D POut1 = ToPx(Eye + D1 * E1);
+			FCanvasUVTri TriA;
+			TriA.V0_Pos = PIn0;
+			TriA.V1_Pos = PIn1;
+			TriA.V2_Pos = PMid1;
+			TriA.V0_Color = TriA.V1_Color = CIn;
+			TriA.V2_Color = COut;
+			FCanvasUVTri TriB;
+			TriB.V0_Pos = PIn0;
+			TriB.V1_Pos = PMid1;
+			TriB.V2_Pos = PMid0;
+			TriB.V0_Color = CIn;
+			TriB.V1_Color = TriB.V2_Color = COut;
+			FCanvasUVTri TriC;
+			TriC.V0_Pos = PMid0;
+			TriC.V1_Pos = PMid1;
+			TriC.V2_Pos = POut1;
+			TriC.V0_Color = TriC.V1_Color = TriC.V2_Color = COut;
+			FCanvasUVTri TriD;
+			TriD.V0_Pos = PMid0;
+			TriD.V1_Pos = POut1;
+			TriD.V2_Pos = POut0;
+			TriD.V0_Color = TriD.V1_Color = TriD.V2_Color = COut;
+			MaskTris.Add(TriA);
+			MaskTris.Add(TriB);
+			MaskTris.Add(TriC);
+			MaskTris.Add(TriD);
 		}
-		const FVector2D Center = Layout.CellCenter(Cell);
-		const float Alpha = ConeVis(Center);
-		if (Alpha <= 0.03f || !Occluders.HasLineOfSight(Eye, Center, 0.10f, &CulledOccluders))
-		{
-			return; // 視線被牆擋住＝不畫（逐視線精算，不是畫了再蓋）
-		}
-		const FVector2D Px = ToPx(Center);
-		const float HalfSize = 0.24f * Scale;
-		FLinearColor Color = BaseColor;
-		Color.A *= Alpha;
-		const FVector2D Up(0.0f, -HalfSize), Right(HalfSize, 0.0f);
-		Canvas->K2_DrawLine(Px + Up, Px + Right, 2.0f, Color);
-		Canvas->K2_DrawLine(Px + Right, Px - Up, 2.0f, Color);
-		Canvas->K2_DrawLine(Px - Up, Px - Right, 2.0f, Color);
-		Canvas->K2_DrawLine(Px - Right, Px + Up, 2.0f, Color);
-		if (bVisited)
-		{
-			Canvas->K2_DrawPolygon(nullptr, Px, FVector2D(HalfSize * 0.8f, HalfSize * 0.8f), 4, Color);
-		}
-		FCanvasTextItem Text(Px + FVector2D(-4.0f, HalfSize + 2.0f), FText::FromString(Label), GEngine->GetSmallFont(), Color);
-		Text.Scale = FVector2D(0.8f, 0.8f);
-		Canvas->DrawItem(Text);
-	};
-	DrawCheckpoint(Layout.CheckpointSprayCell, SprayCpColor, bSprayVisited, TEXT("S"));
-	DrawCheckpoint(Layout.CheckpointKickCell, KickCpColor, bKickVisited, TEXT("K"));
+		Canvas->K2_DrawTriangle(nullptr, MaskTris);
+	}
+
+	// 版本戳（排除「跑到舊 binary」的變數；驗收後可拆）
+	{
+		FCanvasTextItem Ver(FVector2D(CenterPx.X - RadiusPx, CenterPx.Y + RadiusPx + 4.0f),
+			FText::FromString(TEXT("maze-r18-aa")), GEngine->GetSmallFont(), FLinearColor(0.5f, 0.5f, 0.62f, 0.6f));
+		Ver.Scale = FVector2D(0.8f, 0.8f);
+		Canvas->DrawItem(Ver);
+	}
 
 	// 陷阱：不畫。2026-07-13 定案——力士陷阱在地圖上完全不可見，哪裡不能走用命記。
 	//（v3.3 待定 #13 的 TellRange 破綻顯形隨此廢止）

@@ -23,7 +23,8 @@ struct NICEINK_API FDreamMazeParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "2", ClampMax = "12"))
 	int32 RingCount = 8;
 
-	// 第 1 環扇形數
+	// 第 1 環扇形數。生成時向上取到 5 的倍數（下限 10）——K=5 等分中央門與
+	// 環 1 五重對稱內殼要求扇區數整除 5（倍增 ×2 保持整除）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "4", ClampMax = "24"))
 	int32 BaseSectorCount = 10;
 
@@ -46,15 +47,18 @@ struct NICEINK_API FDreamMazeParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "0", ClampMax = "1"))
 	float RadialBias = 0.30f;
 
-	// --- 視野（2026-07-13 改版：視錐＋牆擋光，其餘皆黑暗） ---
+	// --- 視野（v3.5，2026-07-14 user 定案＝光圈式局部顯示：avatar 為心的圈內全亮
+	//     ——含牆、不做遮擋；圈外全黑。射線視錐／嚴格視界／雙層光整套退役） ---
 
-	// 視錐射程（cell）＝讀圖難度主旋鈕（原霧半徑語義）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "0.8", ClampMax = "10"))
-	float VisionRadius = 3.0f;
+	// 【已停用 v3.5】近身光圈半徑——光圈半徑改為幾何定義（站在原點剛好看到五道
+	// 等距門＝剛好蓋住環 0 門牆外緣，繪製端由 Layout 推導），不再是 per-cup 旋鈕。
+	// 欄位保留（ini 相容），繪製端不再讀
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "0.5", ClampMax = "10"))
+	float VisionRadius = 1.5f;
 
-	// 視錐射程邊緣淡出帶寬（cell）
+	// 光圈向外漸黑的軟邊帶寬（cell）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "0.1", ClampMax = "3"))
-	float FogEdgeSoftness = 0.8f;
+	float FogEdgeSoftness = 0.35f;
 
 	// 【已停用】舊迷霧殘影秒數——視錐制下無消費者，留欄位保 ini 相容
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Maze", meta = (ClampMin = "0", ClampMax = "10"))
@@ -167,6 +171,8 @@ struct NICEINK_API FDreamMazeLayout
 	float IdealSolveSec = 0.0f;
 	float DetourRatioSpray = 0.0f;
 	float DetourRatioKick = 0.0f;
+	float SolveWanderRatio = 0.0f; // 正解步數÷環數：≈1＝純徑向可解＝迷宮不抵抗（記憶不值錢，旋轉偷空錢包）
+	int32 SolveDecisionCount = 0;  // 正解上的岔路決策點數＝記憶難度的真正單位（環數只是粗代理）
 	int32 RegenAttempts = 0;
 
 	// --- 查詢 ---

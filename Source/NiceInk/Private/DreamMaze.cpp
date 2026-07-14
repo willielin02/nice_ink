@@ -6,6 +6,7 @@
 namespace
 {
 	constexpr float CenterRadius = 1.5f;   // 中心圓室半徑（cell）
+	constexpr int32 CenterDoorCount = 5;   // 中央門數（user 定值：固定五門均分 360°——原點鄰域旋轉自相似）
 	constexpr float ExitGapFraction = 0.6f; // 出口缺口佔出口格弧域比例
 	constexpr float MoveSubStep = 0.1f;     // 碰撞子步長（cell）
 
@@ -253,7 +254,9 @@ namespace
 		L.RInner.Add(0.0f);
 		L.ROuter.Add(CenterRadius);
 
-		int32 SectorCount = FMath::Max(4, P.BaseSectorCount);
+		// 扇區數向上取 5 的倍數（下限 10）：K=5 等分中央門＋五重內殼的整除前提，
+		// 倍增 ×2 不破壞整除性
+		int32 SectorCount = 5 * FMath::Max(2, FMath::DivideAndRoundUp(FMath::Max(4, P.BaseSectorCount), 5));
 		for (int32 Ring = 1; Ring <= P.RingCount; ++Ring)
 		{
 			const float Inner = L.ROuter.Last();
@@ -306,14 +309,96 @@ namespace
 		}
 	}
 
-	void CarveMaze(const FDreamMazeParams& P, FRandomStream& R, FDreamMazeLayout& L)
+	int32 FindEdgeBetween(const FDreamMazeLayout& L, int32 CellA, int32 CellB)
+	{
+		for (const int32 EdgeIdx : L.CellEdges[CellA])
+		{
+			const FDreamMazeEdge& E = L.Edges[EdgeIdx];
+			if ((E.A == CellA && E.B == CellB) || (E.A == CellB && E.B == CellA))
+			{
+				return EdgeIdx;
+			}
+		}
+		return INDEX_NONE;
+	}
+
+	// 五重對稱內殼（2026-07-14 拓樸定案）：K=5 等分中央門＋環 1 wedge 模板複製五份。
+	// 依據：被抓一律回原點才旋轉→重定位永遠發生在原點鄰域；門距不等＝指紋，一眼讀出
+	// 旋轉角＝旋轉懲罰退化成心算題。等分門＋對稱殼讓重建變成「五選一的清晰賭注」，
+	// 「盯緊旋轉動畫」成為唯一可靠防禦（v3.3 設計意圖）。殼外交給 growing-tree 自然
+	// 破對稱——全圖對稱反而讓「哪道門」不再重要，殼只到環 1。
+	// 殼內所有邊（中央門、環 1 切向、環 1→2 出口）鎖死，carve/braid 不得再碰。
+	void BuildShell(FRandomStream& R, FDreamMazeLayout& L, TBitArray<>& Locked)
+	{
+		Locked.Init(false, L.Edges.Num());
+		const int32 S1 = L.Sectors[1];
+		const int32 W = S1 / CenterDoorCount; // BuildGrid 保證整除
+		const int32 DoorOffset = R.RandRange(0, W - 1);
+
+		// 中央門：每 wedge 同一相對位置開一道（恰 72° 等距），其餘鎖閉
+		for (int32 Sec = 0; Sec < S1; ++Sec)
+		{
+			const int32 EdgeIdx = FindEdgeBetween(L, 0, L.CellIndex(1, Sec));
+			L.Edges[EdgeIdx].bOpen = (Sec % W) == DoorOffset;
+			Locked[EdgeIdx] = true;
+		}
+		// 環 1 切向：wedge 內全開（殼內連通、五條相同的短弧）、wedge 界全閉
+		// （環 1 永無整圈環廊，wedge 間只能走中央或環 2）
+		for (int32 Sec = 0; Sec < S1; ++Sec)
+		{
+			const int32 EdgeIdx = FindEdgeBetween(L, L.CellIndex(1, Sec), L.CellIndex(1, (Sec + 1) % S1));
+			if (EdgeIdx == INDEX_NONE)
+			{
+				continue;
+			}
+			L.Edges[EdgeIdx].bOpen = (Sec % W) != (W - 1);
+			Locked[EdgeIdx] = true;
+		}
+		// 環 1→環 2：wedge 相對位置模板五份複製（每 wedge 至少 1 個、至多 2 個出口）——
+		// 站在殼內看到的出口佈局五個 wedge 完全相同，走出殼才開始有資訊
+		const int32 Mult = L.Sectors[2] / S1; // 1 或 2（倍增環）
+		const int32 SlotCount = W * Mult;
+		TArray<bool> SlotOpen;
+		SlotOpen.Init(false, SlotCount);
+		const int32 NumOut = R.RandRange(1, FMath::Min(2, SlotCount));
+		for (int32 n = 0; n < NumOut; ++n)
+		{
+			SlotOpen[R.RandRange(0, SlotCount - 1)] = true; // 重複命中容忍：帶寬 1..2
+		}
+		for (int32 Wedge = 0; Wedge < CenterDoorCount; ++Wedge)
+		{
+			for (int32 Slot = 0; Slot < SlotCount; ++Slot)
+			{
+				const int32 SecIn = Wedge * W + Slot / Mult;
+				const int32 SecOut = SecIn * Mult + Slot % Mult;
+				const int32 EdgeIdx = FindEdgeBetween(L, L.CellIndex(1, SecIn), L.CellIndex(2, SecOut));
+				L.Edges[EdgeIdx].bOpen = SlotOpen[Slot];
+				Locked[EdgeIdx] = true;
+			}
+		}
+	}
+
+	void CarveMaze(const FDreamMazeParams& P, FRandomStream& R, FDreamMazeLayout& L, const TBitArray<>& Locked)
 	{
 		// growing-tree：Branchiness 在「最新格優先＝長廊」↔「隨機格＝多岔」間內插；
 		// RadialBias 加權挖門方向（徑向 vs 環向）。
+		// 內殼預開邊已連通中心／環 1／環 2 入口——整個連通元件都是起點；
+		// 鎖住的邊（殼的既定形狀）永不列入抽樣。
 		TBitArray<> Visited(false, L.NumCells());
 		TArray<int32> Active;
 		Visited[0] = true;
 		Active.Add(0);
+		for (int32 Head = 0; Head < Active.Num(); ++Head)
+		{
+			for (const int32 Next : L.OpenNeighbors(Active[Head]))
+			{
+				if (!Visited[Next])
+				{
+					Visited[Next] = true;
+					Active.Add(Next);
+				}
+			}
+		}
 
 		while (Active.Num() > 0)
 		{
@@ -329,7 +414,7 @@ namespace
 			{
 				const FDreamMazeEdge& Edge = L.Edges[EdgeIdx];
 				const int32 Other = (Edge.A == Cell) ? Edge.B : Edge.A;
-				if (Visited[Other])
+				if (Visited[Other] || Locked[EdgeIdx])
 				{
 					continue;
 				}
@@ -354,7 +439,7 @@ namespace
 		}
 	}
 
-	void Braid(const FDreamMazeParams& P, FRandomStream& R, FDreamMazeLayout& L)
+	void Braid(const FDreamMazeParams& P, FRandomStream& R, FDreamMazeLayout& L, const TBitArray<>& Locked)
 	{
 		// 打通部分死路成環路（繞開陷阱／迷路自救的餘地）
 		TArray<int32> DeadEnds;
@@ -380,7 +465,7 @@ namespace
 			TArray<int32> ClosedEdges;
 			for (const int32 EdgeIdx : L.CellEdges[DeadEnds[i]])
 			{
-				if (!L.Edges[EdgeIdx].bOpen)
+				if (!L.Edges[EdgeIdx].bOpen && !Locked[EdgeIdx]) // 殼的形狀不許 braid 破壞
 				{
 					ClosedEdges.Add(EdgeIdx);
 				}
@@ -388,6 +473,39 @@ namespace
 			if (ClosedEdges.Num() > 0)
 			{
 				L.Edges[ClosedEdges[R.RandRange(0, ClosedEdges.Num() - 1)]].bOpen = true;
+			}
+		}
+	}
+
+	// 任何環不得形成整圈環廊：整圈＝免記憶的角向高速路（衝到邊沿邊掃出口、
+	// 廉價角向重定位）。growing-tree 無環路，只有 braid 可能補成整圈——閉一段破圈
+	// （整圈剩一條連通弧，連通性不受影響）。環 1 由殼的 wedge 界保證，從環 2 查起。
+	void BreakFullRingCorridors(FRandomStream& R, FDreamMazeLayout& L, const TBitArray<>& Locked)
+	{
+		for (int32 Ring = 2; Ring <= L.RingCount; ++Ring)
+		{
+			const int32 S = L.Sectors[Ring];
+			if (S < 3)
+			{
+				continue;
+			}
+			TArray<int32> Breakable;
+			bool bAllOpen = true;
+			for (int32 Sec = 0; Sec < S && bAllOpen; ++Sec)
+			{
+				const int32 EdgeIdx = FindEdgeBetween(L, L.CellIndex(Ring, Sec), L.CellIndex(Ring, (Sec + 1) % S));
+				if (EdgeIdx == INDEX_NONE || !L.Edges[EdgeIdx].bOpen)
+				{
+					bAllOpen = false;
+				}
+				else if (!Locked[EdgeIdx])
+				{
+					Breakable.Add(EdgeIdx);
+				}
+			}
+			if (bAllOpen && Breakable.Num() > 0)
+			{
+				L.Edges[Breakable[R.RandRange(0, Breakable.Num() - 1)]].bOpen = false;
 			}
 		}
 	}
@@ -426,7 +544,10 @@ namespace
 		TArray<int32> CpCandidates;
 		for (int32 Cell = 1; Cell < NumCells; ++Cell)
 		{
-			if (Cell == L.ExitCell || DistFromCenter[Cell] < 0)
+			int32 CpRing, CpSector;
+			L.CellCoords(Cell, CpRing, CpSector);
+			// 拾取點畫在圖上＝角向地標——禁入五重對稱內殼（環 1），否則殼的匿名性破功
+			if (CpRing < 2 || Cell == L.ExitCell || DistFromCenter[Cell] < 0)
 			{
 				continue;
 			}
@@ -492,7 +613,9 @@ namespace
 				}
 			}
 
-			const int32 MinDepth = (RelaxLevel >= 4) ? 1 : P.TrapMinDepthRing;
+			// 深度下限 2 是結構不變量（環 1 殼內五份一模一樣，殼內死亡不可歸咎），
+			// 不隨 RelaxLevel 降到殼裡
+			const int32 MinDepth = FMath::Max(2, (RelaxLevel >= 4) ? 1 : P.TrapMinDepthRing);
 			const int32 MinSep = (RelaxLevel >= 2) ? 1 : P.TrapMinSeparation;
 			TArray<int32> Candidates;
 			TArray<float> Weights;
@@ -577,6 +700,23 @@ namespace
 		const TSet<int32> TrapSet(L.TrapCells);
 		L.SafeSolveLen = L.BFSDistance(0, L.ExitCell, TrapSet);
 		L.IdealSolveSec = L.SafeSolveLen / FMath::Max(0.5f, P.AvatarSpeed);
+
+		// 記憶值錢度儀器（拓樸需求的量測端）：
+		// 繞行比＝正解步數÷環數（純徑向下限）——≈1 表示「一路往外」就能解＝記憶不值錢；
+		// 決策點數＝正解上的岔路格數——中位醉酒玩家要能組塊記住的量，難度的真正單位
+		L.SolveWanderRatio = L.RingCount > 0 ? float(L.SafeSolveLen) / float(L.RingCount) : 0.0f;
+		L.SolveDecisionCount = 0;
+		TArray<int32> SafePath;
+		if (L.BFSPath(0, L.ExitCell, TrapSet, SafePath))
+		{
+			for (const int32 PathCell : SafePath)
+			{
+				if (L.OpenNeighbors(PathCell).Num() >= 3)
+				{
+					++L.SolveDecisionCount;
+				}
+			}
+		}
 		if (RelaxLevel < 5 && (L.IdealSolveSec < P.MinIdealSolveSec || L.IdealSolveSec > P.MaxIdealSolveSec))
 		{
 			return false;
@@ -590,8 +730,11 @@ namespace
 		Out.Params = P;
 		FRandomStream R(Seed);
 		BuildGrid(P, Out);
-		CarveMaze(P, R, Out);
-		Braid(P, R, Out);
+		TBitArray<> Locked;
+		BuildShell(R, Out, Locked);
+		CarveMaze(P, R, Out, Locked);
+		Braid(P, R, Out, Locked);
+		BreakFullRingCorridors(R, Out, Locked);
 		return PlaceFeatures(P, R, TrapCount, RelaxLevel, Out);
 	}
 }
@@ -640,7 +783,7 @@ FDreamMazeParams FDreamMazeGen::DefaultParamsForCup(int32 Cup)
 	{
 	case 0:
 		P.RingCount = 7;
-		P.VisionRadius = 3.4f;
+		P.VisionRadius = 1.8f; // 【已停用 v3.5】光圈半徑改幾何定義（見 DreamMaze.h），值留 ini 相容
 		P.Branchiness = 0.5f;
 		P.BraidFactor = 0.12f;
 		P.RadialBias = 0.35f;
@@ -654,7 +797,7 @@ FDreamMazeParams FDreamMazeGen::DefaultParamsForCup(int32 Cup)
 		break;
 	case 2:
 		P.RingCount = 9;
-		P.VisionRadius = 2.6f;
+		P.VisionRadius = 1.2f; // 【已停用 v3.5】同上——光圈半徑不再隨杯數變化
 		P.Branchiness = 0.6f;
 		P.BraidFactor = 0.05f;
 		P.RadialBias = 0.25f;
@@ -671,7 +814,7 @@ FDreamMazeParams FDreamMazeGen::DefaultParamsForCup(int32 Cup)
 FString FDreamMazeGen::RunStats(const FDreamMazeParams& P, int32 NumSeeds, int32 TrapCount)
 {
 	NumSeeds = FMath::Clamp(NumSeeds, 1, 20000);
-	TArray<float> Solves, DetourS, DetourK;
+	TArray<float> Solves, DetourS, DetourK, Wander, Decisions;
 	int32 RegenSum = 0;
 	int32 HardFails = 0;
 
@@ -682,6 +825,8 @@ FString FDreamMazeGen::RunStats(const FDreamMazeParams& P, int32 NumSeeds, int32
 		Solves.Add(L.IdealSolveSec);
 		DetourS.Add(L.DetourRatioSpray);
 		DetourK.Add(L.DetourRatioKick);
+		Wander.Add(L.SolveWanderRatio);
+		Decisions.Add(float(L.SolveDecisionCount));
 		RegenSum += L.RegenAttempts;
 		HardFails += (L.RegenAttempts >= 10) ? 1 : 0;
 	}
@@ -729,6 +874,10 @@ FString FDreamMazeGen::RunStats(const FDreamMazeParams& P, int32 NumSeeds, int32
 		Pct(DetourS, 0.1f), Pct(DetourS, 0.5f), Pct(DetourS, 0.9f));
 	Report += FString::Printf(TEXT("  kick detour ratio:  p10=%.2f p50=%.2f p90=%.2f\n"),
 		Pct(DetourK, 0.1f), Pct(DetourK, 0.5f), Pct(DetourK, 0.9f));
+	Report += FString::Printf(TEXT("  solve wander ratio (len/rings): p10=%.2f p50=%.2f p90=%.2f (~1 = maze doesn't resist)\n"),
+		Pct(Wander, 0.1f), Pct(Wander, 0.5f), Pct(Wander, 0.9f));
+	Report += FString::Printf(TEXT("  solve decision points: p10=%.0f p50=%.0f p90=%.0f (chunkable-by-drunk target)\n"),
+		Pct(Decisions, 0.1f), Pct(Decisions, 0.5f), Pct(Decisions, 0.9f));
 	Report += FString::Printf(TEXT("  regen attempts avg=%.2f hardfails=%d\n"), float(RegenSum) / NumSeeds, HardFails);
 	Report += FString::Printf(TEXT("  move fuzz: violations=%d (must be 0) exit-touches=%d\n"), FuzzViolations, FuzzExitTouches);
 	return Report;
