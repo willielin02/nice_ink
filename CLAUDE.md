@@ -101,7 +101,10 @@
   tri-cache、換睡姿網格、眼睛開閉）、GameMode（回合狀態機）、GameState（相位/受害者/計時）、
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/視錐/導航/旋轉）。
 - 場地＝`L_Dojo`（道場 25 獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；L_Sauna 保留）；
-  光照＝fullbright 均勻環境光（唯一亮度旋鈕=SaunaSkyLight Intensity，曝光 bias 5.2 是承重值）。
+  光照＝fullbright 均勻環境光（環境亮度旋鈕=SaunaSkyLight Intensity，曝光 bias 5.2 是承重值）；
+  皮膚質感＝M_InkBodyChar 材質內假光（SPEC 定案 #37：全啞光＋頭燈假光＋掃描色度血色場；
+  旋鈕全是 Scalar Parameter：Headlight*/SkinBrightness/SkinDesat/ChromaStrength/SkinSpecular；
+  血色場再生=Tools/AssetPrep/sumo_body_chroma_*；**皮膚零烘焙陰影鐵律不破，勿再提案皮膚陰影/AO**）。
 - 墨水圖集 UV0＝**均勻紋素密度**0.898 px/mm@2048（`Tools/AssetPrep/uv0_uniform.py`，
   四個匯出腳本都會呼叫）；筆寬 `MarkerUvRadius 0.00085`＝3.8mm 全身一致；跨縫縫合＝螢幕空間
   4px 細分。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
