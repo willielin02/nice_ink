@@ -22,3 +22,11 @@
   （受害者＝主機停靠視口）＋ctypes SetForegroundWindow 聚焦＋HighResShot 四態連拍
   （原點/走廊/旋轉中/旋轉後），結果檔寫 Saved/robo_lightring_result.txt。
   舊 `robo_maze_shots.py`（seat1 浮動視窗版）不可靠——HighResShot 只有聚焦視窗會處理。
+
+## 出口死鎖迴歸（2026-07-15）
+
+- `robo_exit_seating_repro.py`＝「入座階段衝到出口→Drawing 推門」迴歸：
+  重現 2026-07-15 user 抓到的死鎖（Seating 停門檻＋RailNavigate 端點無 Exit 分支
+  ＝永遠卡死）；期望 VERDICT: EXITED。跑前把腳本裡 OUT 路徑改到可寫位置。
+  儀器：DebugPlaceAtExitCell（傳送不觸發）＋DebugRoboNavTo（強制導航走真實
+  RailNavigate 路徑——robo 無法注入滑鼠/左鍵，自然出場只有這條驗法）。

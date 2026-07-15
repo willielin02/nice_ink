@@ -76,6 +76,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugTriggerExit();
 
+	// 傳送到出口格中心並重掛軌道（不觸發甦醒——自然導航走出出口的重現用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugPlaceAtExitCell();
+
+	// 傳送到出口對面的封閉外緣格（呈現對照實驗：封閉外緣 vs 出口看起來必須可分辨）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugPlaceAtRimOpposite();
+
+	// 強制導航：Seconds 秒內每 tick 以 MazeTarget 為游標目標，走真實 RailNavigate/
+	// FreeMove 路徑（robo 無法注入滑鼠與左鍵——自然出場唯一可自動化的驗法）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboNavTo(FVector2D MazeTarget, float Seconds);
+
 	// 機器可讀摘要（robo 斷言用）：狀態/位置/角度/重生點/陷阱表/存檔點/出口/統計
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString GetDebugSummary() const;
@@ -134,6 +147,12 @@ private:
 	int32 PendingDebugTrap = INDEX_NONE;
 	int32 PendingDebugCheckpoint = INDEX_NONE;
 	bool bPendingDebugExit = false;
+	bool bPendingDebugPlaceExit = false;
+	bool bPendingDebugPlaceRimOpposite = false;
+	FVector2D ForcedNavTarget = FVector2D::ZeroVector; // DebugRoboNavTo 的強制游標目標
+	float ForcedNavRemaining = 0.0f;
+	float StuckLogCooldown = 0.0f;   // 卡死診斷 log 節流（無聲失敗必須開口）
+	float ExitLogCooldown = 0.0f;
 
 	ANiceInkCharacter* OwnerChar() const;
 	void TickWalking(float DeltaTime);

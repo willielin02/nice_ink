@@ -8,6 +8,7 @@
 #include "InputCoreTypes.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameState.h"
+#include "NiceInkHUD.h"
 
 namespace
 {
@@ -202,11 +203,37 @@ void UDreamMazeComponent::TickWalking(float DeltaTime)
 		TriggerExit();
 		return;
 	}
+	if (bPendingDebugPlaceExit)
+	{
+		bPendingDebugPlaceExit = false;
+		if (Layout.ExitCell != INDEX_NONE)
+		{
+			PlaceAtCell(Layout.ExitCell);
+		}
+	}
+	if (bPendingDebugPlaceRimOpposite)
+	{
+		bPendingDebugPlaceRimOpposite = false;
+		if (Layout.ExitCell != INDEX_NONE && Layout.Sectors.Num() > 0)
+		{
+			const int32 Outer = Layout.Sectors.Num() - 1;
+			int32 ExitRing, ExitSector;
+			Layout.CellCoords(Layout.ExitCell, ExitRing, ExitSector);
+			const int32 Opposite = (ExitSector + Layout.Sectors[Outer] / 2) % Layout.Sectors[Outer];
+			PlaceAtCell(Layout.CellIndex(Outer, Opposite));
+		}
+	}
 
 	// --- 走路（游標/視錐更新在 UpdateCursorHeading，死亡序列也活著；這裡只管移動）：
 	//     按住左鍵才走路（旋轉/死亡序列中本函式不會被呼叫＝人物鎖定不可移動） ---
+	const bool bForcedNav = ForcedNavRemaining > 0.0f;
+	if (bForcedNav)
+	{
+		ForcedNavRemaining -= DeltaTime;
+		CursorMazeTarget = ForcedNavTarget; // 蓋掉 UpdateCursorHeading（robo 沒有滑鼠）
+	}
 	APlayerController* PC = C ? Cast<APlayerController>(C->GetController()) : nullptr;
-	if (PC && PC->IsInputKeyDown(EKeys::LeftMouseButton))
+	if ((PC && PC->IsInputKeyDown(EKeys::LeftMouseButton)) || bForcedNav)
 	{
 		const float DistTarget = (CursorMazeTarget - Pos).Size();
 		if (DistTarget > 0.12f)
@@ -247,7 +274,9 @@ void UDreamMazeComponent::TickWalking(float DeltaTime)
 		}
 		bInsideSpray = bInside;
 	}
-	if (Layout.CheckpointKickCell != INDEX_NONE)
+	// 拳腳暫時移除（GNiceInkKickEnabled）：拾取點仍由生成器產出（種子/統計不變），
+	// 但不偵測、不繪製、不授予——玩家面零痕跡
+	if (GNiceInkKickEnabled && Layout.CheckpointKickCell != INDEX_NONE)
 	{
 		const bool bInside = (Pos - Layout.CellCenter(Layout.CheckpointKickCell)).Size() < CheckpointTouchRadius;
 		if (bInside && !bInsideKick)
@@ -293,18 +322,30 @@ void UDreamMazeComponent::HandleCheckpointTouched(int32 CheckpointType)
 
 void UDreamMazeComponent::TriggerExit()
 {
+	const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	if (bExitSent)
 	{
+		if (Now > ExitLogCooldown)
+		{
+			ExitLogCooldown = Now + 1.0f;
+			UE_LOG(LogTemp, Warning, TEXT("[MazeNav] TriggerExit ignored: already sent (server accepted? eyes should be open)"));
+		}
 		return;
 	}
 	// 出口只在作畫階段有效（Seating 的入座演出秒數內走不完；防禦性擋掉）
 	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
 	if (!GS || GS->CurrentPhase != ENiceInkPhase::Drawing)
 	{
+		if (Now > ExitLogCooldown)
+		{
+			ExitLogCooldown = Now + 1.0f;
+			UE_LOG(LogTemp, Warning, TEXT("[MazeNav] TriggerExit blocked: phase=%d"), GS ? static_cast<int32>(GS->CurrentPhase) : -1);
+		}
 		return;
 	}
 	if (ANiceInkCharacter* C = OwnerChar())
 	{
+		UE_LOG(LogTemp, Warning, TEXT("[MazeNav] TriggerExit SENT %s"), *GetDebugSummary());
 		C->ServerMazeExited();
 		bExitSent = true;
 	}
@@ -341,15 +382,14 @@ void UDreamMazeComponent::PlaceAtCell(int32 Cell)
 
 void UDreamMazeComponent::UpdateCursorHeading()
 {
-	// 滑鼠增量推虛擬游標；按住右鍵＝瞄準模式（滑鼠讓回轉頭——PollLook 同一約定）。
-	// 死亡序列中也照常執行（2026-07-13：旋轉中不可移動、但視錐跟游標）
+	// 滑鼠增量推虛擬游標——滑鼠永久屬於迷宮（2026-07-15：頭/瞄準改方向鍵分軸，
+	// RMB 瞄準模式退役）。死亡序列中也照常執行（旋轉中不可移動、但視錐跟游標）
 	ANiceInkCharacter* C = OwnerChar();
 	APlayerController* PC = C ? Cast<APlayerController>(C->GetController()) : nullptr;
 	if (!PC)
 	{
 		return;
 	}
-	if (!PC->IsInputKeyDown(EKeys::RightMouseButton))
 	{
 		float MouseX = 0.0f;
 		float MouseY = 0.0f;
@@ -480,6 +520,26 @@ void UDreamMazeComponent::RailNavigate(const FVector2D& Target, float Dist)
 			return; // 已站在游標腳下
 		}
 
+		// 出口門檻帶：在出口軌上、距出口端 < 0.18 格、游標指向門外＝直接走出。
+		// 不能靠增益機制——NavMinGain(0.03) 會把末端前 1-3cm 判成「不值得走」而凍住
+		//（2026-07-15 log 實錄：s=0.49/0.50 no-move，user 站在門檻上推不出去）
+		for (int32 Dir = 1; Dir >= -1; Dir -= 2)
+		{
+			const FDreamMazeRailEndpoint& End = Dir > 0 ? Rail.EndB : Rail.EndA;
+			const float Reach = Dir > 0 ? Rail.Len - RailS : RailS;
+			if (End.Type == EDreamMazeRailEnd::Exit && Reach < 0.18f)
+			{
+				FVector2D EndPos, EndTan;
+				Rail.Sample(Dir > 0 ? Rail.Len : 0.0f, EndPos, EndTan);
+				const FVector2D Outward = EndTan * static_cast<float>(Dir);
+				if (FVector2D::DotProduct(Target - Here, Outward) > 0.0f)
+				{
+					TriggerExit();
+					return;
+				}
+			}
+		}
+
 		int32 BestMoveDir = 0;
 		FDreamMazeRailRef BestJump;
 		bool bJump = false;
@@ -543,6 +603,7 @@ void UDreamMazeComponent::RailNavigate(const FVector2D& Target, float Dist)
 						BestMoveDir = 0;
 					}
 				}
+				// Exit 端點：由迴圈開頭的「出口門檻帶」先行處理（距末端 <0.18 即走出）
 			}
 		}
 
@@ -561,7 +622,15 @@ void UDreamMazeComponent::RailNavigate(const FVector2D& Target, float Dist)
 		}
 		if (BestMoveDir == 0)
 		{
-			return; // 沒有任何走法更接近游標＝這裡就是你指的地方的最近點
+			// 沒有任何走法更接近游標＝這裡就是你指的地方的最近點。
+			// 無聲失敗開口（2026-07-15 出口卡死診斷）：原地不動時每秒報告一次現場
+			const float Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			if (Now > StuckLogCooldown)
+			{
+				StuckLogCooldown = Now + 1.0f;
+				UE_LOG(LogTemp, Warning, TEXT("[MazeNav] no-move D0=%.2f %s"), D0, *GetDebugSummary());
+			}
+			return;
 		}
 
 		const float Reach = BestMoveDir > 0 ? Rail.Len - RailS : RailS;
@@ -645,6 +714,22 @@ void UDreamMazeComponent::DebugTriggerCheckpoint(int32 CheckpointType)
 	PendingDebugCheckpoint = FMath::Clamp(CheckpointType, 0, 1);
 }
 
+void UDreamMazeComponent::DebugPlaceAtExitCell()
+{
+	bPendingDebugPlaceExit = true;
+}
+
+void UDreamMazeComponent::DebugPlaceAtRimOpposite()
+{
+	bPendingDebugPlaceRimOpposite = true;
+}
+
+void UDreamMazeComponent::DebugRoboNavTo(FVector2D MazeTarget, float Seconds)
+{
+	ForcedNavTarget = MazeTarget;
+	ForcedNavRemaining = Seconds;
+}
+
 void UDreamMazeComponent::DebugTriggerExit()
 {
 	bPendingDebugExit = true;
@@ -663,14 +748,23 @@ FString UDreamMazeComponent::GetDebugSummary() const
 	const FVector2D SprayCp = Layout.CheckpointSprayCell != INDEX_NONE ? Layout.CellCenter(Layout.CheckpointSprayCell) : FVector2D::ZeroVector;
 	const FVector2D KickCp = Layout.CheckpointKickCell != INDEX_NONE ? Layout.CellCenter(Layout.CheckpointKickCell) : FVector2D::ZeroVector;
 	const FVector2D ExitCenter = Layout.ExitCell != INDEX_NONE ? Layout.CellCenter(Layout.ExitCell) : FVector2D::ZeroVector;
+	// 軌道行走狀態（出口導航診斷）：rail=索引 s=里程/全長 endA/endB=端點型別(0=Node 1=Free 2=Exit)
+	FString RailInfo = TEXT(" rail=off");
+	if (bOnRail && Net.Rails.IsValidIndex(RailIdx))
+	{
+		const FDreamMazeRail& Rail = Net.Rails[RailIdx];
+		RailInfo = FString::Printf(TEXT(" rail=%d s=%.2f/%.2f endA=%d endB=%d"),
+			RailIdx, RailS, Rail.Len, static_cast<int32>(Rail.EndA.Type), static_cast<int32>(Rail.EndB.Type));
+	}
 	return FString::Printf(
-		TEXT("active=%d state=%s pos=(%.2f,%.2f) angle=%.1f respawn=(%.2f,%.2f) cells=%d solve=%d ideal=%.1fs regen=%d traps=[%s] cpS=(%.2f,%.2f) cpK=(%.2f,%.2f) exit=(%.2f,%.2f) visitedS=%d visitedK=%d exitSent=%d killer=%d"),
+		TEXT("active=%d state=%s pos=(%.2f,%.2f) angle=%.1f respawn=(%.2f,%.2f) cells=%d solve=%d ideal=%.1fs regen=%d traps=[%s] cpS=(%.2f,%.2f) cpK=(%.2f,%.2f) exit=(%.2f,%.2f) visitedS=%d visitedK=%d exitSent=%d killer=%d%s cur=(%.2f,%.2f)"),
 		bMazeActive ? 1 : 0,
 		StateNames[FMath::Clamp(static_cast<int32>(SimState), 0, 4)],
 		Pos.X, Pos.Y, DisplayAngleDeg, RespawnPos.X, RespawnPos.Y,
 		Layout.NumCells(), Layout.SafeSolveLen, Layout.IdealSolveSec, Layout.RegenAttempts,
 		*Traps, SprayCp.X, SprayCp.Y, KickCp.X, KickCp.Y, ExitCenter.X, ExitCenter.Y,
-		bSprayVisited ? 1 : 0, bKickVisited ? 1 : 0, bExitSent ? 1 : 0, LastKillerId);
+		bSprayVisited ? 1 : 0, bKickVisited ? 1 : 0, bExitSent ? 1 : 0, LastKillerId,
+		*RailInfo, CursorMazeTarget.X, CursorMazeTarget.Y);
 }
 
 // --- 繪製 ---
@@ -828,10 +922,14 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		{
 			const float A0 = 2.0f * PI * i / GlowSegs;
 			const float A1 = 2.0f * PI * (i + 1) / GlowSegs;
+			const FVector2D D0(FMath::Cos(A0), FMath::Sin(A0));
+			const FVector2D D1(FMath::Cos(A1), FMath::Sin(A1));
+			// 地面光同樣鉗在盤緣（EdgeT）——站在外緣時光不得溢出外緣牆外：
+			// 溢出＝把虛空畫成可走的地板＝封閉外緣看起來像出口（2026-07-15 user 兩度實測撞死的觀感謊言）
 			FCanvasUVTri Tri;
 			Tri.V0_Pos = EyePx;
-			Tri.V1_Pos = ToPx(Eye + FVector2D(FMath::Cos(A0), FMath::Sin(A0)) * LightR);
-			Tri.V2_Pos = ToPx(Eye + FVector2D(FMath::Cos(A1), FMath::Sin(A1)) * LightR);
+			Tri.V1_Pos = ToPx(Eye + D0 * FMath::Min(LightR, EdgeT(D0)));
+			Tri.V2_Pos = ToPx(Eye + D1 * FMath::Min(LightR, EdgeT(D1)));
 			Tri.V0_Color = FloorGlowInner;
 			Tri.V1_Color = Tri.V2_Color = FloorGlowOuter;
 			Tris.Add(Tri);
@@ -839,17 +937,10 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		Canvas->K2_DrawTriangle(nullptr, Tris); // nullptr＝引擎白紋理
 	}
 
-	// ①-b 出口光與技能點：先全額畫好——圈外的部分由③的遮罩塗黑，
+	// ①-b 技能點：先全額畫好——圈外的部分由③的遮罩塗黑，
 	// 不做逐點可見性判斷（黑暗中零地標的守則由遮罩實現）
 	if (SimState != EDreamMazeSimState::Inactive)
 	{
-		const float Rim = Layout.RimRadius();
-		const float ExitPhis[2] = { Layout.ExitPhi0, Layout.ExitPhi1 };
-		for (const float Phi : ExitPhis)
-		{
-			const FVector2D Pt(Rim * FMath::Cos(Phi), Rim * FMath::Sin(Phi));
-			Canvas->K2_DrawPolygon(nullptr, ToPx(Pt), FVector2D(0.1f * Scale, 0.1f * Scale), 8, ExitGlowColor);
-		}
 		auto DrawCheckpoint = [&](int32 Cell, const FLinearColor& Color, bool bVisited, const TCHAR* Label)
 		{
 			if (Cell == INDEX_NONE)
@@ -872,7 +963,10 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 			Canvas->DrawItem(Text);
 		};
 		DrawCheckpoint(Layout.CheckpointSprayCell, SprayCpColor, bSprayVisited, TEXT("S"));
-		DrawCheckpoint(Layout.CheckpointKickCell, KickCpColor, bKickVisited, TEXT("K"));
+		if (GNiceInkKickEnabled)
+		{
+			DrawCheckpoint(Layout.CheckpointKickCell, KickCpColor, bKickVisited, TEXT("K"));
+		}
 
 	}
 
@@ -905,6 +999,20 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		if (WallTris.Num() > 0)
 		{
 			Canvas->K2_DrawTriangle(nullptr, WallTris);
+		}
+	}
+
+	// ②-b 出口門柱：畫在牆之上（畫在①會被外緣牆端蓋蓋掉——第三輪截圖抓到）、
+	// 遮罩之下（沒照到的門照樣沉黑＝不做地標守則不破）。
+	// 門柱加大（0.1→0.22）：找到出口要一眼確定是出口（封閉外緣誤讀事故的另一半解）
+	if (SimState != EDreamMazeSimState::Inactive)
+	{
+		const float Rim = Layout.RimRadius();
+		const float ExitPhis[2] = { Layout.ExitPhi0, Layout.ExitPhi1 };
+		for (const float Phi : ExitPhis)
+		{
+			const FVector2D Pt(Rim * FMath::Cos(Phi), Rim * FMath::Sin(Phi));
+			Canvas->K2_DrawPolygon(nullptr, ToPx(Pt), FVector2D(0.22f * Scale, 0.22f * Scale), 8, ExitGlowColor);
 		}
 	}
 
@@ -964,7 +1072,8 @@ void UDreamMazeComponent::DrawMazePanel(UCanvas* Canvas, const FVector2D& Center
 		Canvas->K2_DrawTriangle(nullptr, MaskTris);
 	}
 
-	// 版本戳（排除「跑到舊 binary」的變數；驗收後可拆）
+	// 版本戳（排除「跑到舊 binary」的變數）——開發者遙測，只在 ni.DebugHud 1 顯示
+	if (CVarNiDebugHud.GetValueOnGameThread() != 0)
 	{
 		FCanvasTextItem Ver(FVector2D(CenterPx.X - RadiusPx, CenterPx.Y + RadiusPx + 4.0f),
 			FText::FromString(TEXT("maze-r18-aa")), GEngine->GetSmallFont(), FLinearColor(0.5f, 0.5f, 0.62f, 0.6f));
