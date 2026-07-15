@@ -62,6 +62,7 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UPoseableMeshComponent> BowBody;
 
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
 	TObjectPtr<USkeletalMesh> BowMesh;
 
@@ -82,6 +83,43 @@ public:
 	// 沉睡中（受害者入座～現身之間）。移動鎖定；閉眼與否看 bEyesOpen。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Asleep, Category = "Nice Ink")
 	bool bAsleep = false;
+
+	// --- 甦醒轉頭參數（playtest 域）---
+	// 操作制（2026-07-15 user 終版定案）：方向鍵分軸控制——左右＝扭轉、下＝低頭、
+	// 上＝撤回低頭（不仰頭）；單擊 1°、按住連發；滑鼠永久屬於迷宮游標。
+	// 貓頭鷹扭轉上限：順/逆各 270°（user 定值：再多脖子形變撐不住）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "90", ClampMax = "360"))
+	float SleepTwistMaxDeg = 270.0f;
+
+	// 低頭上限（0=安睡朝向；域 [0,上限]＝天生不可能向後仰進枕頭）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "150"))
+	float SleepBendMaxDeg = 110.0f;
+
+	// 按住連發的角速度（度/秒）；單擊固定 1°
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "10", ClampMax = "360"))
+	float SleepHeadTurnRate = 75.0f;
+
+	// 頸骨前/後彎上限：頸骨支點在脖根＝彎多少頭就沿弧抬多高（伸脖本體）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "80"))
+	float SleepNeckBendCapDeg = 50.0f;
+
+	// 頸骨的扭轉分擔比：把貓頭鷹的皮膚剪切攤開在整段脖子（0=全在頭頸交界）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "0.5"))
+	float SleepNeckTwistShare = 0.25f;
+
+	// 伸脖額外量（cm，隨彎角比例給）：轆轤首檔（2026-07-16 user 解禁拉伸量：
+	// 「我想要玩家在醒來後的頭可以拉長」）——48cm＝相機站上肚頂（z85）之上、
+	// 視線過水平線俯視自己的肚皮與腳邊；力學模型維持脖根捲曲弧（user 定案），
+	// 軀幹凍結＝畫布不動＝shift 偵測經濟不破。穿膜由姿勢層眉護束飽和擋死。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "80"))
+	float SleepNeckMaxStretch = 72.0f;
+
+
+
+	// 翻身（2026-07-15 user 定案）：非 ragdoll——作畫者之一提出、其餘作畫者
+	// 全數同意後執行；正面/背面均為固定姿勢。醒來（現身）自動回正面。
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_FaceDown, Category = "Nice Ink")
+	bool bBodyFaceDown = false;
 
 	// --- 貼臉鎖定（SPEC v3.1 定案 #19/#23）---
 
@@ -105,9 +143,21 @@ public:
 	bool bPeeking = false;
 
 	// 無聲甦醒（定案 #8）：走出迷宮出口後睜眼。零系統提示——
-	// 其他玩家能觀察到的破綻只有睜眼貼圖（頭部轉動待骨骼版身體）。
+	// 其他玩家能觀察到的破綻＝睜眼貼圖＋頭部轉動（睡姿替身驅動，2026-07-15）。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_EyesOpen, Category = "Nice Ink")
 	bool bEyesOpen = false;
+
+	// 睡姿頭部姿態（複製給其他端擺骨；閉眼不送＝盲瞄不洩漏）。
+	// Twist＝繞脊椎軸的貓頭鷹扭轉（±SleepTwistMaxDeg）；Bend＝低頭量（≥0，繞當前臉的耳軸）。
+	// 兩者完整決定臉方向；輸入即狀態（方向鍵分軸）——無任何方向反解/分支/纏繞機器。
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepTwistDeg = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepBendDeg = 0.0f;
+
+	UFUNCTION(Server, Unreliable)
+	void ServerUpdateSleepLook(float TwistDeg, float BendDownDeg);
 
 	// 反制工具庫存（迷宮存檔點發放；睜眼即過期——SPEC 定案 #6/#7）。
 	// 只複製給本人：作畫者不該從網路層讀到「受害者拿到技能了」。
@@ -195,6 +245,20 @@ public:
 	// 沉睡中按 WASD＝請求現身（server 驗證已無聲甦醒＝bEyesOpen）
 	UFUNCTION(Server, Reliable)
 	void ServerRequestEmerge();
+
+	// --- 翻身提案（作畫者 → 伺服器；GameMode 計票） ---
+
+	UFUNCTION(Server, Reliable)
+	void ServerProposeFlip();
+
+	UFUNCTION(Server, Reliable)
+	void ServerAgreeFlip();
+
+	// 伺服器端直接執行翻身（GameMode 票數到齊時呼叫；現身時回正）
+	void ServerSetFaceDown(bool bNewFaceDown);
+
+	// 本地：這輪提案我是否已表態（HUD 顯示「等待中」）；提案編號變更時重置
+	int32 FlipAgreedProposalSerial = INDEX_NONE;
 
 	// --- 醉夢圓形迷宮 RPC（SPEC v3.3 定案 #30/#31）---
 	// 信任模型沿用既有：client 判定、server 驗身分/相位/上限（party game 取捨）。
@@ -320,6 +384,11 @@ public:
 	UFUNCTION(Exec)
 	void NiMazeStats(int32 NumSeeds, int32 Cup);
 
+	// robo：模擬沉睡受害者轉頭（本地受害者於下一 tick 消化＝設相機視線＋走真實
+	// ServerUpdateSleepLook RPC 鏈——頭轉破綻的端到端驗法；滑鼠不可注入）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboSleepLook(float Yaw, float Pitch);
+
 	UFUNCTION(Server, Reliable)
 	void ServerRequestStartMatch();
 
@@ -327,7 +396,6 @@ public:
 
 private:
 	float CameraPitch = 0.0f;
-	float SleepCameraYaw = 0.0f; // 沉睡時滑鼠只轉頭（相機），不轉身
 	int32 AppliedAvatarIndex = INDEX_NONE;
 
 	// 作畫中（本地端）
@@ -353,6 +421,9 @@ private:
 	void OnRep_Blinded();
 
 	UFUNCTION()
+	void OnRep_FaceDown();
+
+	UFUNCTION()
 	void OnRep_Lean();
 
 	UFUNCTION()
@@ -369,6 +440,46 @@ private:
 
 	void PollLeanEnter(APlayerController* PC);
 	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
+
+	// --- 睡姿替身（頭部轉動破綻，2026-07-15）---
+	// lean-lock 同構：一具替身全員可見（含本人）、姿勢是唯一真相、
+	// 本人相機放在眉間騎著頭骨（轉視野＝轉頭、視野恆與臉同向、自己的頭在鏡頭後）。
+	// 靜態 Body 只藏不關碰撞——畫墨/噴射的 UV 解算照打靜態網格。
+	bool EnsureBowBodyAsset() { return EnsurePoseableAsset(BowBody); }
+	bool EnsurePoseableAsset(UPoseableMeshComponent* Poseable); // SK 惰性載入＋皮膚 MID 共享
+	void UpdateSleepBodyDouble();       // 每 tick（所有端）：替身開關＋擺頭骨＋本人相機騎頭
+	bool bSleepDoubleActive = false;
+	float SleepLookSendAccum = 0.0f;    // 姿態上報節流（本人端）
+	float LastSentSleepTwist = 0.0f;
+	float LastSentSleepBend = 0.0f;
+	float SleepTwistLocal = 0.0f;       // 本人端扭轉狀態（方向鍵直加、±上限 clamp）
+	float SleepBendLocal = 0.0f;        // 本人端低頭狀態（[0,上限]）
+	bool bHasPendingDebugSleepLook = false; // DebugRoboSleepLook 待消化（本地受害者 tick）
+	FVector2D PendingDebugSleepLook = FVector2D::ZeroVector;
+
+	// 方向鍵轉頭輪詢：單擊 1°、按住 0.25s 後以 SleepHeadTurnRate 連發、斜向可同按
+	void PollSleepHead(APlayerController* PC, float DeltaSeconds);
+	float SleepKeyHeldTime[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // L/R/U/D 按住時間
+
+	// 睡姿替身姿勢快取（止血：姿態沒變不寫骨——每 tick 歸零重擺=假移動=動態模糊糊臉）
+	bool bSleepPoseDirty = true;
+	float LastPoseTwist = 1e9f;
+	float LastPoseBend = 1e9f;
+	bool bLastPoseEyes = false;
+	FTransform SleepNeckRefCS;          // 替身啟用時捕捉的參考姿勢（分析式擺骨用）
+	FTransform SleepHeadRefCS;
+	bool bSleepRefCaptured = false;
+
+	// 穿膜鐵律的解算器：給定扭轉角與想要的低頭角，眉護束（罩住相機與臉前皮膚、
+	// 與頭剛體共動的射線組）沿低頭弧線從 0 行進，回傳「不穿越自己軀幹表面／
+	// 世界靜態物表面」的最大可行低頭角。共動＝對自己頭皮零相對位移＝永不誤擋；
+	// 約束打在姿勢＝頭骨永遠不進身體＝第一/第三人稱由構造保證同一顆頭。
+	float SolveSleepBendLimit(float TwistDeg, float DesiredBendDeg);
+	FVector SleepGuardPointWS(float TwistRad, float BendDeg, const FTransform& CompT, const FVector& HeadLocalOffset) const;
+	float SleepLimitCacheTwist = 1e9f;  // 解算快取（同輸入同身姿不重算——march 有成本）
+	float SleepLimitCacheBend = 1e9f;
+	FTransform SleepLimitCacheCompT;
+	float SleepLimitCacheResult = 0.0f;
 	bool ResolveCursorToTargetUV(APlayerController* PC, const FVector2D& ScreenPx, FVector2D& OutUV) const;
 	void ApplyBowPose();     // 程式化硬彎腰（所有端；解算頭到落筆點、臉對準目標）
 	void ResetBowPose();
@@ -396,6 +507,7 @@ private:
 	void PollLobby(APlayerController* PC);
 	void PollAccusation(APlayerController* PC);
 	void PollCounterplay(APlayerController* PC);
+	void PollFlip(APlayerController* PC);
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);

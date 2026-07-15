@@ -23,6 +23,10 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, RevealedAuthorId);
 	DOREPLIFETIME(ANiceInkGameState, LoserPlayerId);
 	DOREPLIFETIME(ANiceInkGameState, PhaseEndServerTime);
+	DOREPLIFETIME(ANiceInkGameState, FlipProposerId);
+	DOREPLIFETIME(ANiceInkGameState, FlipAgreeCount);
+	DOREPLIFETIME(ANiceInkGameState, FlipAgreeNeeded);
+	DOREPLIFETIME(ANiceInkGameState, FlipProposalSerial);
 }
 
 void ANiceInkGameState::SetPhase(ENiceInkPhase NewPhase, float DurationSeconds)

@@ -331,6 +331,7 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	GS->ResolutionWorkId = INDEX_NONE;
 
 	ForceExitAllLeans();
+	ClearFlipProposal(); // 翻身提案不跨回合
 
 	// 掛著的轉盤跨回合作廢（防禦：正常流程死亡序列內不會切相位）
 	GetWorldTimerManager().ClearTimer(DialFailsafeHandle);
@@ -408,6 +409,7 @@ void ANiceInkGameMode::EnterTour()
 	ANiceInkCharacter* Victim = GetVictimCharacter();
 
 	ForceExitAllLeans(); // 他醒了——所有埋著的頭都得抬起來
+	ClearFlipProposal(); // 作畫收束＝未決的翻身提案作廢
 
 	TourWorkIds.Reset();
 	if (Victim && Victim->InkCanvas)
@@ -813,6 +815,85 @@ FString ANiceInkGameMode::DebugMazeStats(int32 NumSeeds, int32 Cup)
 	const FString Report = FDreamMazeGen::RunStats(Params, NumSeeds, /*TrapCount=*/4);
 	UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
 	return Report;
+}
+
+// --- 翻身提案（2026-07-15 user 定案）---
+
+void ANiceInkGameMode::HandleFlipPropose(ANiceInkCharacter* Proposer)
+{
+	ANiceInkGameState* GS = NIState();
+	const APlayerState* PS = Proposer ? Proposer->GetPlayerState() : nullptr;
+	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		PS->GetPlayerId() == GS->VictimPlayerId || Proposer->bAsleep ||
+		GS->FlipProposerId != INDEX_NONE) // 一次一案
+	{
+		return;
+	}
+
+	GS->FlipProposerId = PS->GetPlayerId();
+	GS->FlipProposalSerial++;
+	FlipAgreedIds.Reset();
+	FlipAgreedIds.Add(PS->GetPlayerId()); // 提案人＝自動同意
+	GS->FlipAgreeNeeded = GS->PlayerArray.Num() - 1; // 「其餘的人」＝全體非受害者
+	GS->FlipAgreeCount = FlipAgreedIds.Num();
+
+	// 逾時作廢（有人不表態＝否決；不設反對鍵，沉默即否）
+	GetWorldTimerManager().SetTimer(FlipTimeoutHandle, this, &ANiceInkGameMode::ClearFlipProposal, 10.0f, false);
+	MaybeExecuteFlip(); // 兩人房：提案人＝唯一作畫者，當場過票
+}
+
+void ANiceInkGameMode::HandleFlipAgree(ANiceInkCharacter* Agreer)
+{
+	ANiceInkGameState* GS = NIState();
+	const APlayerState* PS = Agreer ? Agreer->GetPlayerState() : nullptr;
+	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		GS->FlipProposerId == INDEX_NONE || PS->GetPlayerId() == GS->VictimPlayerId || Agreer->bAsleep)
+	{
+		return;
+	}
+	FlipAgreedIds.Add(PS->GetPlayerId());
+	GS->FlipAgreeCount = FlipAgreedIds.Num();
+	MaybeExecuteFlip();
+}
+
+void ANiceInkGameMode::MaybeExecuteFlip()
+{
+	ANiceInkGameState* GS = NIState();
+	if (!GS || GS->FlipProposerId == INDEX_NONE || GS->FlipAgreeCount < GS->FlipAgreeNeeded)
+	{
+		return;
+	}
+	if (ANiceInkCharacter* Victim = GetVictimCharacter())
+	{
+		ForceExitAllLeans(); // 畫布翻面＝所有鎖定作廢（表面法線全變）
+		Victim->ServerSetFaceDown(!Victim->bBodyFaceDown);
+	}
+	ClearFlipProposal();
+}
+
+void ANiceInkGameMode::ClearFlipProposal()
+{
+	GetWorldTimerManager().ClearTimer(FlipTimeoutHandle);
+	FlipAgreedIds.Reset();
+	if (ANiceInkGameState* GS = NIState())
+	{
+		GS->FlipProposerId = INDEX_NONE;
+		GS->FlipAgreeCount = 0;
+		GS->FlipAgreeNeeded = 0;
+	}
+}
+
+void ANiceInkGameMode::DebugRoboFlip()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkCharacter* Victim = GetVictimCharacter())
+		{
+			ForceExitAllLeans();
+			Victim->ServerSetFaceDown(!Victim->bBodyFaceDown);
+		}
+	}), 0.1f, false);
 }
 
 void ANiceInkGameMode::DebugRoboKick(float AimYawWorld)

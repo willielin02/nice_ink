@@ -107,6 +107,11 @@ public:
 	// 場間大廳：雷射自己最舊的碳黑一級（自費；三級清除；永久無效）
 	void HandleLaserRequest(ANiceInkCharacter* Requester);
 
+	// 翻身提案（2026-07-15 user 定案）：作畫者之一提出、「其餘的人」＝
+	// 全體非受害者玩家全數同意後翻身；一次一案、逾時作廢；非 ragdoll。
+	void HandleFlipPropose(ANiceInkCharacter* Proposer);
+	void HandleFlipAgree(ANiceInkCharacter* Agreer);
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Economy")
 	int32 LaserCostPerPass = 2000;
 
@@ -137,6 +142,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboMazeDial(float AngleDeg);
 
+	// 翻身：跳過表決直接執行（timer-deferred；robo 驗證背面姿勢/翻面後作畫用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboFlip();
+
 	// 迷宮生成統計（純計算、無 RPC——python 可直呼）；報表字串回傳＋進 log
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString DebugMazeStats(int32 NumSeeds, int32 Cup);
@@ -162,6 +171,12 @@ private:
 	TWeakObjectPtr<ANiceInkCharacter> PendingDialVictim;
 	FTimerHandle DialFailsafeHandle;
 	void ResolveTrapDial(float AngleDeg);
+
+	// 翻身表決（server-only；顯示位在 GameState）
+	TSet<int32> FlipAgreedIds;
+	FTimerHandle FlipTimeoutHandle;
+	void MaybeExecuteFlip();
+	void ClearFlipProposal();
 
 	ANiceInkGameState* NIState() const;
 	ANiceInkCharacter* GetVictimCharacter() const;

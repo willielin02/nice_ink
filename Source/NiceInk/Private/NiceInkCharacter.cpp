@@ -104,6 +104,10 @@ ANiceInkCharacter::ANiceInkCharacter()
 	BowBody->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	BowBody->SetCollisionResponseToAllChannels(ECR_Ignore);
 	BowBody->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+	// 止血（2026-07-15 頭糊成一團）：poseable 手擺骨的前一幀緩衝不可靠，
+	// per-bone motion blur 把姿勢寫入當成高速移動塗抹——整件關閉
+	BowBody->bPerBoneMotionBlur = false;
+
 
 	// 實體麥克筆（細圓柱＋深色 MID）：筆尖對著墨點、筆身指向作畫者頭部
 	PenMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PenMesh"));
@@ -157,6 +161,9 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkCharacter, bAsleep);
 	DOREPLIFETIME(ANiceInkCharacter, bEyesOpen);
+	// 頭部轉動破綻：姿態只發給他端（本人端用本地連續角零延遲）
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepTwistDeg, COND_SkipOwner);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepBendDeg, COND_SkipOwner);
 	// 技能庫存只給本人：作畫者不該從網路層讀到「受害者拿到技能／進度」
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SprayCharges, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, KickCharges, COND_OwnerOnly);
@@ -167,6 +174,7 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkCharacter, LeanNormal);
 	DOREPLIFETIME(ANiceInkCharacter, LeanTarget);
 	DOREPLIFETIME(ANiceInkCharacter, bPeeking);
+	DOREPLIFETIME(ANiceInkCharacter, bBodyFaceDown);
 }
 
 void ANiceInkCharacter::Tick(float DeltaSeconds)
@@ -175,6 +183,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	EnsureAvatarApplied();
 	UpdatePenVisual(); // 所有端：筆尖跟著墨點走
+	UpdateSleepBodyDouble(); // 所有端：睡姿替身＋頭部轉動破綻
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	if (!PC || !IsLocallyControlled())
@@ -182,16 +191,51 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 		return;
 	}
 
+	// robo 轉頭鉤子：只有本地受害者消化——直設（扭轉,低頭）狀態、同輸入鏈的鉗位
+	if (bHasPendingDebugSleepLook)
+	{
+		bHasPendingDebugSleepLook = false;
+		if (bAsleep)
+		{
+			SleepTwistLocal = FMath::Clamp(PendingDebugSleepLook.X, -SleepTwistMaxDeg, SleepTwistMaxDeg);
+			SleepBendLocal = FMath::Clamp(PendingDebugSleepLook.Y, 0.0f, SleepBendMaxDeg);
+		}
+	}
+
+	PollSleepHead(PC, DeltaSeconds);
 	PollLook(PC, DeltaSeconds);
 	PollMove(PC);
 	PollTrapDial(PC);
 	PollCounterplay(PC);
+	PollFlip(PC);
 	PollAccusation(PC);
 	PollLobby(PC);
 	PollPalette(PC);
 	PollLeanEnter(PC);
 	PollLockedDraw(PC, DeltaSeconds);
 	UpdateCinematicCamera(PC);
+}
+
+void ANiceInkCharacter::PollFlip(APlayerController* PC)
+{
+	// 翻身提案（user 定案 2026-07-15）：作畫階段、作畫者限定；F＝提出／同意。
+	// 鎖定作畫中也可表態（F 不與 lean 輸入衝突）。
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::Drawing || bAsleep ||
+		GetInkAuthorId() == GS->VictimPlayerId || !PC->WasInputKeyJustPressed(EKeys::F))
+	{
+		return;
+	}
+	if (GS->FlipProposerId == INDEX_NONE)
+	{
+		FlipAgreedProposalSerial = GS->FlipProposalSerial + 1; // 我提的＝自動同意
+		ServerProposeFlip();
+	}
+	else if (FlipAgreedProposalSerial != GS->FlipProposalSerial)
+	{
+		FlipAgreedProposalSerial = GS->FlipProposalSerial;
+		ServerAgreeFlip();
+	}
 }
 
 void ANiceInkCharacter::PollLobby(APlayerController* PC)
@@ -494,7 +538,7 @@ void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
 	{
 		ServerSpray(SelectedSprayOrigin, AimYawWorld);
 	}
-	if (PC->WasInputKeyJustPressed(EKeys::E) && KickCharges > 0)
+	if (GNiceInkKickEnabled && PC->WasInputKeyJustPressed(EKeys::E) && KickCharges > 0)
 	{
 		ServerKick(AimYawWorld);
 	}
@@ -514,6 +558,59 @@ void ANiceInkCharacter::EnsureAvatarApplied()
 	AppliedAvatarIndex = PS->AvatarIndex;
 }
 
+void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
+{
+	// 方向鍵分軸轉頭（2026-07-15 user 終版定案）：左右＝扭轉（±SleepTwistMaxDeg）、
+	// 下＝低頭、上＝撤回低頭（域 [0,上限]＝不可能向後仰）。單擊 1°、按住 0.25s 後連發、
+	// 斜向可同按。輸入即狀態——無方向反解/分支/纏繞機器（那台機器的墳墓見記憶檔）。
+	// 閉眼時同鍵盲瞄（狀態照改、骨頭不動＝瞄準不成為破綻）。
+	if (!bAsleep)
+	{
+		SleepKeyHeldTime[0] = SleepKeyHeldTime[1] = SleepKeyHeldTime[2] = SleepKeyHeldTime[3] = 0.0f;
+		return;
+	}
+
+	static const FKey Keys[4] = { EKeys::Left, EKeys::Right, EKeys::Up, EKeys::Down };
+	float Step[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+	for (int32 i = 0; i < 4; ++i)
+	{
+		if (PC->IsInputKeyDown(Keys[i]))
+		{
+			if (SleepKeyHeldTime[i] == 0.0f)
+			{
+				Step[i] = 1.0f; // 單擊＝精準 1°
+			}
+			else if (SleepKeyHeldTime[i] > 0.25f)
+			{
+				Step[i] = SleepHeadTurnRate * DeltaSeconds; // 按住連發
+			}
+			SleepKeyHeldTime[i] += DeltaSeconds;
+		}
+		else
+		{
+			SleepKeyHeldTime[i] = 0.0f;
+		}
+	}
+
+	SleepTwistLocal = FMath::Clamp(SleepTwistLocal - Step[0] + Step[1], -SleepTwistMaxDeg, SleepTwistMaxDeg);
+	SleepBendLocal = FMath::Clamp(SleepBendLocal + Step[3] - Step[2], 0.0f, SleepBendMaxDeg);
+
+	// 頭部轉動破綻：睜眼後的姿態節流上報（閉眼不送＝盲瞄不洩漏）
+	if (bEyesOpen)
+	{
+		SleepLookSendAccum += DeltaSeconds;
+		if (SleepLookSendAccum >= 0.05f &&
+			(FMath::Abs(SleepTwistLocal - LastSentSleepTwist) > 0.5f ||
+			 FMath::Abs(SleepBendLocal - LastSentSleepBend) > 0.5f))
+		{
+			SleepLookSendAccum = 0.0f;
+			LastSentSleepTwist = SleepTwistLocal;
+			LastSentSleepBend = SleepBendLocal;
+			ServerUpdateSleepLook(SleepTwistLocal, SleepBendLocal);
+		}
+	}
+}
+
 void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 {
 	if (bLeanLocked)
@@ -527,16 +624,8 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 
 	if (bAsleep)
 	{
-		// 2026-07-13 操作改版：迷宮持有滑鼠（虛擬游標走迷宮，DreamMazeComponent 消化增量）；
-		// 按住右鍵＝瞄準模式，滑鼠讓回轉頭（Q/E 瞄準＝頭部視野方向，沿用）
-		if (DreamMaze && DreamMaze->IsMazeActive() && !bEyesOpen && !PC->IsInputKeyDown(EKeys::RightMouseButton))
-		{
-			return;
-		}
-		// 沉睡轉頭（瞄準模式／睜眼後）：滑鼠僅控制頭部視野（SPEC 定案 #8）；身體不動
-		SleepCameraYaw = FMath::Clamp(SleepCameraYaw + MouseX * LookSensitivity, -110.0f, 110.0f);
-		CameraPitch = FMath::Clamp(CameraPitch + MouseY * LookSensitivity, -89.0f, 89.0f);
-		FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, SleepCameraYaw, 0.0f));
+		// 沉睡中滑鼠永久屬於迷宮游標（2026-07-15 終版：頭改方向鍵分軸控制，
+		// RMB 瞄準模式退役——待定 #15 一併解決）；相機由睡姿替身統一放置
 		return;
 	}
 
@@ -849,6 +938,8 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 	if (bNewAsleep)
 	{
 		bEyesOpen = false;
+		SleepTwistDeg = 0.0f;  // 頭部轉動破綻：新回合姿態歸零
+		SleepBendDeg = 0.0f;
 		SprayCharges = 0;
 		KickCharges = 0;
 		bMazeSprayGranted = false; // 技能授予去重：每回合每存檔點一次
@@ -863,10 +954,44 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 		// 睜眼即過期：未用完的噴射／拳腳作廢（SPEC 定案 #6/#7）
 		SprayCharges = 0;
 		KickCharges = 0;
+		bBodyFaceDown = false; // 現身站起＝翻身狀態自然結束
 		SetActorTransform(SeatTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 	}
 
+	ApplySleepVisual();
+}
+
+// --- 翻身提案（2026-07-15 user 定案：非 ragdoll、提案＋全員同意、兩固定姿勢）---
+
+void ANiceInkCharacter::ServerProposeFlip_Implementation()
+{
+	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		GM->HandleFlipPropose(this);
+	}
+}
+
+void ANiceInkCharacter::ServerAgreeFlip_Implementation()
+{
+	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		GM->HandleFlipAgree(this);
+	}
+}
+
+void ANiceInkCharacter::ServerSetFaceDown(bool bNewFaceDown)
+{
+	if (!HasAuthority() || bBodyFaceDown == bNewFaceDown)
+	{
+		return;
+	}
+	bBodyFaceDown = bNewFaceDown;
+	ApplySleepVisual();
+}
+
+void ANiceInkCharacter::OnRep_FaceDown()
+{
 	ApplySleepVisual();
 }
 
@@ -944,7 +1069,7 @@ void ANiceInkCharacter::ServerMazeCheckpointReached_Implementation(uint8 Checkpo
 		bMazeSprayGranted = true;
 		++SprayCharges;
 	}
-	else if (CheckpointType == 1 && !bMazeKickGranted)
+	else if (GNiceInkKickEnabled && CheckpointType == 1 && !bMazeKickGranted)
 	{
 		bMazeKickGranted = true;
 		++KickCharges;
@@ -1131,6 +1256,11 @@ void ANiceInkCharacter::ApplySleepVisual()
 
 	Body->SetEyesClosed(bAsleep && !bEyesOpen);
 
+	// 無聲甦醒＝睜眼看得到自己的身體與正在落下的筆跡（2026-07-15 user 定案：
+	// 抓現行要有畫面——誰低頭、跪在哪、筆落在哪）。現身站起恢復 owner-no-see
+	//（SPEC 視角規則不變；巡禮仍是「全貌」初見——躺姿只看得到自己的局部）
+	Body->SetOwnerNoSee(!(bAsleep && bEyesOpen));
+
 	// 醒了（現身或睜眼後回合收束）：迷宮收工。終局昏死沒有迷宮（server 不發），
 	// 元件維持 Inactive——HUD 畫「昏死不醒」。
 	if (!bAsleep && DreamMaze)
@@ -1149,8 +1279,24 @@ void ANiceInkCharacter::ApplySleepVisual()
 		Body->SwapBodyMesh(WantedMesh);
 	}
 
-	Body->SetRelativeLocation(bAsleep ? BodyLieRelLoc : BodyStandRelLoc);
-	Body->SetRelativeRotation(bAsleep ? BodyLieRelRot : BodyStandRelRot);
+	if (bAsleep && bBodyFaceDown)
+	{
+		// 背面固定姿勢＝同一網格繞身體長軸（capsule 本地 X）翻 180°；
+		// pivot 在腳跟線上不在體軸上→翻完會沉地，用包圍盒底差把 Z 補回地板
+		const FQuat ProneQ = FQuat(FVector::XAxisVector, PI) * BodyLieRelRot.Quaternion();
+		const FTransform CapT = GetCapsuleComponent()->GetComponentTransform();
+		const float UpBottom = Body->CalcBounds(FTransform(BodyLieRelRot.Quaternion(), BodyLieRelLoc) * CapT).GetBox().Min.Z;
+		const float DnBottom = Body->CalcBounds(FTransform(ProneQ, BodyLieRelLoc) * CapT).GetBox().Min.Z;
+		FVector ProneLoc = BodyLieRelLoc;
+		ProneLoc.Z += UpBottom - DnBottom; // capsule 直立：世界 Z 差＝相對 Z 差
+		Body->SetRelativeLocation(ProneLoc);
+		Body->SetRelativeRotation(ProneQ.Rotator());
+	}
+	else
+	{
+		Body->SetRelativeLocation(bAsleep ? BodyLieRelLoc : BodyStandRelLoc);
+		Body->SetRelativeRotation(bAsleep ? BodyLieRelRot : BodyStandRelRot);
+	}
 
 	// 沉睡時膠囊不再跟隨控制器 yaw——躺姿朝向由 LieTransform 決定，
 	// 不受受害者入睡前的視角污染
@@ -1161,15 +1307,16 @@ void ANiceInkCharacter::ApplySleepVisual()
 		if (bAsleep)
 		{
 			bEmergeRequested = false;
-			// 相機移到躺姿頭部、預設仰望天花板；睜眼後就是實景視野
-			SleepCameraYaw = 0.0f;
-			CameraPitch = 55.0f;
+			// 頭部姿態歸零（安睡朝向）；相機由睡姿替身函式接管
+			SleepTwistLocal = 0.0f;
+			SleepBendLocal = 0.0f;
+			bSleepPoseDirty = true;
+			CameraPitch = bBodyFaceDown ? -55.0f : 55.0f;
 			FirstPersonCamera->SetRelativeLocation(BodyLieRelLoc + FVector(172.0f, 0.0f, 22.0f));
 			FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
 		}
 		else
 		{
-			SleepCameraYaw = 0.0f;
 			CameraPitch = 0.0f;
 			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f)); // 與建構子一致（sumo 眼高）
 			FirstPersonCamera->SetRelativeRotation(FRotator::ZeroRotator);
@@ -1312,6 +1459,48 @@ namespace
 	}
 }
 
+bool ANiceInkCharacter::EnsurePoseableAsset(UPoseableMeshComponent* Poseable)
+{
+	// 骨骼資產惰性載入＋共用身體 MID（缺席時機制照跑、姿勢不演）。
+	// lean-lock 彎腰（BowBody）與睡姿替身（BowBody/FpSleepBody）共用。
+	if (!Poseable)
+	{
+		return false;
+	}
+	if (Poseable->GetSkinnedAsset())
+	{
+		return true;
+	}
+	if (!BowMesh)
+	{
+		BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo.SK_Sumo"));
+	}
+	if (BowMesh)
+	{
+		Poseable->SetSkinnedAssetAndUpdate(BowMesh);
+		if (Body && Body->GetDynamicMaterial())
+		{
+			// 皮膚 MID 按槽名指派：SK 匯入的槽序與 SM 相反（褌在 0）——
+			// 寫死 index 0 會把皮膚材質糊到褌上。褌槽保留資產上的 M_Fundoshi。
+			const TArray<FSkeletalMaterial>& SkMats = BowMesh->GetMaterials();
+			for (int32 i = 0; i < SkMats.Num(); ++i)
+			{
+				if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
+				{
+					Poseable->SetMaterial(i, Body->GetDynamicMaterial());
+				}
+			}
+		}
+	}
+	return Poseable->GetSkinnedAsset() != nullptr;
+}
+
+void ANiceInkCharacter::DebugRoboSleepLook(float Yaw, float Pitch)
+{
+	bHasPendingDebugSleepLook = true;
+	PendingDebugSleepLook = FVector2D(Yaw, Pitch);
+}
+
 void ANiceInkCharacter::ApplyBowPose()
 {
 	if (!BowBody)
@@ -1319,32 +1508,7 @@ void ANiceInkCharacter::ApplyBowPose()
 		return;
 	}
 
-	// 骨骼資產惰性載入＋共用身體 MID（缺席時機制照跑、姿勢不演）
-	if (!BowBody->GetSkinnedAsset())
-	{
-		if (!BowMesh)
-		{
-			BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo.SK_Sumo"));
-		}
-		if (BowMesh)
-		{
-			BowBody->SetSkinnedAssetAndUpdate(BowMesh);
-			if (Body && Body->GetDynamicMaterial())
-			{
-				// 皮膚 MID 按槽名指派：SK 匯入的槽序與 SM 相反（褌在 0）——
-				// 寫死 index 0 會把皮膚材質糊到褌上。褌槽保留資產上的 M_Fundoshi。
-				const TArray<FSkeletalMaterial>& SkMats = BowMesh->GetMaterials();
-				for (int32 i = 0; i < SkMats.Num(); ++i)
-				{
-					if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
-					{
-						BowBody->SetMaterial(i, Body->GetDynamicMaterial());
-					}
-				}
-			}
-		}
-	}
-	if (!BowBody->GetSkinnedAsset())
+	if (!EnsureBowBodyAsset())
 	{
 		return;
 	}
@@ -1508,8 +1672,303 @@ void ANiceInkCharacter::UpdatePenVisual()
 	}
 }
 
+void ANiceInkCharacter::UpdateSleepBodyDouble()
+{
+	// 睡姿替身（頭部轉動破綻，2026-07-15 user 定案）：
+	// - 本人＝看靜態身體（OnlyOwnerSee）：頭不追鏡頭、不擋視野，身上的墨照看
+	// - 他人＝看替身（OwnerNoSee）：睜眼後臉直接硬掰到視線方向（美術語言：
+	//   玩家看哪、臉就掰到哪；360° 無鉗、趴著也能回頭）
+	// 靜態 Body 碰撞照舊＝畫墨/貼臉鎖定/噴射的 UV 解算不動。
+	// 每 tick 冪等重申視形（ForceExitLean 等會經 ResetBowPose 動到替身狀態）。
+	if (!Body || !BowBody)
+	{
+		return;
+	}
+	if (bAsleep && !bSleepDoubleActive && EnsureBowBodyAsset())
+	{
+		bSleepDoubleActive = true;
+		// 捕捉參考姿勢（分析式擺骨的基底；姿勢快取歸零）
+		BowBody->ResetBoneTransformByName(TEXT("Neck"));
+		BowBody->ResetBoneTransformByName(TEXT("Head"));
+		BowBody->RefreshBoneTransforms();
+		SleepNeckRefCS = BowBody->GetBoneTransformByName(TEXT("Neck"), EBoneSpaces::ComponentSpace);
+		SleepHeadRefCS = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace);
+		bSleepRefCaptured = true;
+		bSleepPoseDirty = true;
+		SleepLimitCacheTwist = 1e9f; // 參考姿勢重捕＝穿膜解算快取作廢
+	}
+	else if (!bAsleep && bSleepDoubleActive)
+	{
+		bSleepDoubleActive = false;
+		BowBody->SetVisibility(false);
+		BowBody->SetOwnerNoSee(true); // 還給 lean-lock 的預設（彎腰不演給自己看）
+		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
+		BowBody->ResetBoneTransformByName(TEXT("Neck"));
+		BowBody->ResetBoneTransformByName(TEXT("Head"));
+		Body->SetVisibility(true);
+		Body->SetOnlyOwnerSee(false);
+		Body->SetOwnerNoSee(true); // 站姿恢復第一人稱慣例
+	}
+	if (!bSleepDoubleActive)
+	{
+		return;
+	}
+
+	// 一具替身、全員可見（含本人）。姿態模型（2026-07-15 user 終版定案）：
+	// 扭轉（貓頭鷹，±270）＝頭 75%/頸 25% 攤開皮膚剪切；
+	// 低頭＝頸骨吃到上限（支點在脖根→頭沿弧抬起＝伸脖本體）＋頭骨補餘；
+	// 相機騎眉間、視野恆＝臉方向。
+	Body->SetVisibility(false); // 碰撞保留：畫墨/lean/噴射 UV 解算照打
+	BowBody->SetVisibility(true);
+	BowBody->SetOwnerNoSee(false);
+	// 跟隨睡姿 transform（含翻身的背面姿勢與 Z 補償——ApplySleepVisual 是唯一真相）
+	BowBody->SetRelativeLocationAndRotation(Body->GetRelativeLocation(), Body->GetRelativeRotation());
+
+	// 姿態來源（本人＝本地狀態零延遲；他端＝複製值）；BendDown ≥0＝低頭量
+	const float TwistDeg = IsLocallyControlled() ? SleepTwistLocal : SleepTwistDeg;
+	float BendDown = IsLocallyControlled() ? SleepBendLocal : SleepBendDeg;
+
+	// 穿膜鐵律（2026-07-15 user 定案：無論任何 bug 都不得穿膜——擋板是刻意設計）：
+	// 約束打在「姿勢」上——眉護球沿低頭弧線行進，碰到自己軀幹/世界靜態物前一步飽和。
+	// 頭骨永遠不進身體 → 第三人稱不埋頭；相機恆＝眉間（下方零 clamp）→ 1P/3P 同一顆頭。
+	// 各端各自解算（同身姿同碰撞體＝決定性一致）；閉眼骨頭不動、盲瞄保留全域。
+	if (bEyesOpen && BendDown > 0.0f)
+	{
+		BendDown = SolveSleepBendLimit(TwistDeg, BendDown);
+		if (IsLocallyControlled())
+		{
+			// input-is-state：按到皮膚＝狀態停在皮膚上（不累積死區，上鍵一按就有反應）
+			SleepBendLocal = FMath::Min(SleepBendLocal, BendDown);
+		}
+	}
+
+	// 總旋轉（CS）：先繞脊椎軸（CS+Z）扭轉，再繞扭轉後的耳軸（X'）低頭（負向＝朝腳）
+	const float TwistRad = FMath::DegreesToRadians(TwistDeg);
+	const float BendRad = FMath::DegreesToRadians(-BendDown);
+	const FVector XAfterTwist = FQuat(FVector::ZAxisVector, TwistRad).RotateVector(FVector::XAxisVector);
+	const FQuat Total = bEyesOpen
+		? FQuat(XAfterTwist, BendRad) * FQuat(FVector::ZAxisVector, TwistRad)
+		: FQuat::Identity; // 閉眼＝頭不動（盲瞄不成為破綻）
+
+	// 止血：姿態沒變不寫骨——每 tick 歸零重擺＝渲染器眼中的高速假移動＝動態模糊糊臉
+	if (bSleepRefCaptured &&
+		(bSleepPoseDirty || TwistDeg != LastPoseTwist || BendDown != LastPoseBend || bEyesOpen != bLastPoseEyes))
+	{
+		bSleepPoseDirty = false;
+		LastPoseTwist = TwistDeg;
+		LastPoseBend = BendDown;
+		bLastPoseEyes = bEyesOpen;
+
+		// 頸骨份額：扭轉 ×Share、低頭吃到 Cap——頸骨支點在脖根＝頭自然沿弧抬離（伸脖本體）。
+		// 低頭軸＝頭的全扭軸（不是頸的半扭軸）：半扭軸在貓頭鷹 180 時是斜對角，
+		// 會把頭往「側面＋貼地」帶（實測頭骨側滑 17cm 沉到地板邊）；全扭軸讓
+		// 弧線留在身體中線、往上翻過背＝視線真的掃到自己的背；twist 0 兩軸重合＝仰躺不變
+		const float NeckBendRad = FMath::DegreesToRadians(-FMath::Min(BendDown, SleepNeckBendCapDeg));
+		const float NeckTwistRad = TwistRad * SleepNeckTwistShare;
+		const FQuat NeckDelta = bEyesOpen
+			? FQuat(XAfterTwist, NeckBendRad) * FQuat(FVector::ZAxisVector, NeckTwistRad)
+			: FQuat::Identity;
+
+		// 分析式擺骨（無中間態、無讀回）：頸＝參考位原地轉；頭＝繞頸樞軌道＋臉旋轉全額，
+		// 再沿當前頸軸外推伸脖量（皮膚等比拉伸、UV 不動＝刺青不破圖）
+		FTransform NeckCS = SleepNeckRefCS;
+		NeckCS.SetRotation(NeckDelta * SleepNeckRefCS.GetRotation());
+		FTransform HeadCS = SleepHeadRefCS;
+		HeadCS.SetLocation(SleepNeckRefCS.GetLocation() +
+			NeckDelta.RotateVector(SleepHeadRefCS.GetLocation() - SleepNeckRefCS.GetLocation()));
+		HeadCS.SetRotation(Total * SleepHeadRefCS.GetRotation());
+		const float StretchCm = bEyesOpen
+			? SleepNeckMaxStretch * FMath::Clamp(BendDown / 45.0f, 0.0f, 1.0f) : 0.0f; // 45°拿滿＝快爬：45°時頭已在肚頂上方 15cm+，射線高空通過、90°後才下壓看肚（慢爬曲線實測在山腰 46° 撞牆）
+		if (StretchCm > 0.01f)
+		{
+			// 拉伸拆兩段：頸根平移吃 30%（肩頸過渡帶分攤）、頭骨拿全額。
+			// 【已試錯勿重來】頸骨沿軸非均勻縮放（stretchy-rig）在此網格不可用——
+			// 下顎/臉頰頂點帶部分頸權重，S≈3 直接把臉拖成橫向拖尾（截圖存證）；
+			// 截面保真的治本＝Blender 頸段鏈骨（見記憶檔），運行時無解。
+			const FVector NeckAxisCS = (HeadCS.GetLocation() - NeckCS.GetLocation()).GetSafeNormal();
+			NeckCS.AddToTranslation(NeckAxisCS * (StretchCm * 0.3f));
+			HeadCS.AddToTranslation(NeckAxisCS * StretchCm);
+		}
+		BowBody->SetBoneTransformByName(TEXT("Neck"), NeckCS, EBoneSpaces::ComponentSpace);
+		BowBody->RefreshBoneTransforms(); // 頭骨 CS 寫入的父鏈快取要先更新（poseable 快取陷阱）
+		BowBody->SetBoneTransformByName(TEXT("Head"), HeadCS, EBoneSpaces::ComponentSpace);
+		BowBody->RefreshBoneTransforms();
+	}
+
+	// 本人相機＝眉間騎（抬起＋轉好＋伸長的）頭骨，朝向恆＝臉方向（由姿態組合，恆等由構造保證）
+	if (IsLocallyControlled())
+	{
+		const FTransform CompT = BowBody->GetComponentTransform();
+		const FQuat PoseQ = bEyesOpen ? Total : FQuat::Identity;
+		const FVector FaceDirW = CompT.TransformVectorNoScale(PoseQ.RotateVector(FVector::YAxisVector)).GetSafeNormal();
+		const FVector CrownDirW = CompT.TransformVectorNoScale(PoseQ.RotateVector(FVector::ZAxisVector)).GetSafeNormal();
+		// 閉眼盲瞄的「瞄準方向」＝姿態組合方向（骨頭不動、相機隱形轉）——Q 噴射讀相機 yaw
+		const FQuat FullQ = FQuat(XAfterTwist, BendRad) * FQuat(FVector::ZAxisVector, TwistRad);
+		const FVector AimDirW = CompT.TransformVectorNoScale(FullQ.RotateVector(FVector::YAxisVector)).GetSafeNormal();
+		const FVector AimCrownW = CompT.TransformVectorNoScale(FullQ.RotateVector(FVector::ZAxisVector)).GetSafeNormal();
+
+		// 相機＝眉間，嚴格、無任何 clamp（教訓：相機層擋板一觸發就把鏡頭拎離頭＝
+		// 1P/3P 脫鉤＝雙重穿膜假象）。不穿膜由上方的姿勢層飽和保證：低頭角本身
+		// 已被解算成「眉護球（罩住相機＋近裁剪面）永不侵入軀幹」的值。
+		// 朝向＝頭骨座標系固定角度（前＝臉、上＝頭頂，含 roll）——2026-07-16 user 定案：
+		// 頭歪畫面就歪、頭倒畫面就倒（let it be），不做任何自動轉正／分段處理。
+		// 舊 AimDirW.Rotation() 的 roll 永遠歸零＝隱藏的自動水平化＋視線過天頂 yaw 突翻。
+		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector CamPos = HeadPos + FaceDirW * 13.0f + CrownDirW * 8.0f;
+		const FQuat CamQ = FRotationMatrix::MakeFromXZ(AimDirW, AimCrownW).ToQuat();
+		FirstPersonCamera->SetWorldLocationAndRotation(CamPos, CamQ);
+	}
+}
+
+
+FVector ANiceInkCharacter::SleepGuardPointWS(float TwistRad, float BendDeg, const FTransform& CompT, const FVector& HeadLocalOffset) const
+{
+	// 與 UpdateSleepBodyDouble 的擺骨數學逐項同構（含伸脖）——解算出的角度
+	// 寫進骨頭後，護束點位置就是這裡算的位置，約束才真的成立
+	const float BendRad = FMath::DegreesToRadians(-BendDeg);
+	const FVector XAfterTwist = FQuat(FVector::ZAxisVector, TwistRad).RotateVector(FVector::XAxisVector);
+	const FQuat Total = FQuat(XAfterTwist, BendRad) * FQuat(FVector::ZAxisVector, TwistRad);
+
+	const float NeckBendRad = FMath::DegreesToRadians(-FMath::Min(BendDeg, SleepNeckBendCapDeg));
+	const float NeckTwistRad = TwistRad * SleepNeckTwistShare;
+	const FQuat NeckDelta = FQuat(XAfterTwist, NeckBendRad) * FQuat(FVector::ZAxisVector, NeckTwistRad); // 低頭軸＝頭的全扭軸（與擺骨同構）
+
+	FVector HeadLocCS = SleepNeckRefCS.GetLocation() +
+		NeckDelta.RotateVector(SleepHeadRefCS.GetLocation() - SleepNeckRefCS.GetLocation());
+	const float StretchCm = SleepNeckMaxStretch * FMath::Clamp(BendDeg / 45.0f, 0.0f, 1.0f); // 與擺骨同構（45°拿滿）
+	if (StretchCm > 0.01f)
+	{
+		HeadLocCS += (HeadLocCS - SleepNeckRefCS.GetLocation()).GetSafeNormal() * StretchCm;
+	}
+	return CompT.TransformPosition(HeadLocCS + Total.RotateVector(HeadLocalOffset));
+}
+
+float ANiceInkCharacter::SolveSleepBendLimit(float TwistDeg, float DesiredBendDeg)
+{
+	if (!bSleepRefCaptured || !Body || !BowBody)
+	{
+		return DesiredBendDeg; // 替身未起（不該發生）：不假裝有護欄
+	}
+	const FTransform CompT = BowBody->GetComponentTransform();
+	if (TwistDeg == SleepLimitCacheTwist && DesiredBendDeg == SleepLimitCacheBend &&
+		CompT.Equals(SleepLimitCacheCompT, 0.1))
+	{
+		return SleepLimitCacheResult; // 同輸入同身姿（翻身/移動會改 CompT）＝直接取快取
+	}
+
+	// 護束（頭骨座標系，cm）：相機（臉前 13/頂軸 8）＋鼻前＋下巴前＋兩頰前。
+	// 每個點都取在自己頭皮外（|偏移|≈15 > 頭皮半徑 ~11-12）——射線與頭剛體共動，
+	// 對自己頭皮零相對位移＝頭永遠不會誤擋自己；會被穿越的只有軀幹/地板表面。
+	static const FVector GuardOffsets[] = {
+		FVector(0.0f, 13.0f, 8.0f),    // 相機本體
+		FVector(0.0f, 13.5f, 0.0f),    // 鼻前（近裁剪面正前）
+		FVector(0.0f, 12.5f, -6.5f),   // 下巴前（低頭最先觸胸）
+		FVector(7.0f, 13.0f, 2.0f),    // 右頰前（扭轉側向覆蓋）
+		FVector(-7.0f, 13.0f, 2.0f),   // 左頰前
+	};
+	constexpr int32 NumGuards = UE_ARRAY_COUNT(GuardOffsets);
+	constexpr float StepDeg = 2.0f;    // 步距≈1.6cm ≪ 前瞻餘裕＝不會隧穿
+	constexpr float MarginCm = 5.0f;   // 前瞻餘裕：在表面前 ~5cm 就飽和（＞近裁剪面 4）
+
+	const float MaxBend = FMath::Min(DesiredBendDeg, SleepBendMaxDeg);
+	const float TwistRad = FMath::DegreesToRadians(TwistDeg);
+	FCollisionQueryParams BodyParams(SCENE_QUERY_STAT(SleepBrowGuard), /*bTraceComplex=*/true, this);
+	FCollisionQueryParams WorldParams(SCENE_QUERY_STAT(SleepBrowGuardWorld), false, this);
+	const FCollisionObjectQueryParams StaticObjects(ECC_WorldStatic);
+
+	// 碰撞網格上有一顆「凍在安睡姿勢的頭/頸」（視覺的頭＝替身骨骼會動，碰撞的頭不動）。
+	// 護束與視覺頭共動＝視覺頭永不誤擋；但凍結碰撞頭會攔住每一條低頭路徑（實測：
+	// 仰躺假飽和、趴姿貓頭鷹鎖死 0°；球形泡泡追不上髮髻/耳朵的不規則輪廓——18.5、
+	// 21.5cm 兩次刺穿校準）。分界改用「組件空間頸基平面」：站姿 CS 裡頸基以上只有
+	// 頭＋頭髮（胸/肩/背全在平面下），整顆凍結頭乾淨排除、真軀幹一點不吞，
+	// 且 CS 平面是常數＝仰躺/趴姿/翻身全自動成立。被排除的區域正是與相機剛體
+	// 共動的那顆頭，構造上本來就不可能被自己穿膜。
+	const float NeckPlaneZCS = SleepNeckRefCS.GetLocation().Z;
+	auto InFrozenHeadZone = [&](const FVector& PWorld) -> bool
+	{
+		return CompT.InverseTransformPosition(PWorld).Z > NeckPlaneZCS;
+	};
+	auto BodyBlocked = [&](const FVector& From, const FVector& To) -> bool
+	{
+		FVector Start = From;
+		for (int32 Seg = 0; Seg < 4; ++Seg)
+		{
+			FHitResult Hit;
+			if (!Body->LineTraceComponent(Hit, Start, To, BodyParams))
+			{
+				return false;
+			}
+			if (!InFrozenHeadZone(Hit.Location))
+			{
+				return true; // 頸基平面以下的命中＝真軀幹表面
+			}
+			Start = Hit.Location + (To - Start).GetSafeNormal() * 1.0f;
+			if (FVector::DistSquared(Start, To) < 1.0f)
+			{
+				return false;
+			}
+		}
+		return false; // 連續命中都在泡泡裡＝全是自己的凍結頭皮
+	};
+
+	FVector PrevPts[NumGuards];
+	for (int32 i = 0; i < NumGuards; ++i)
+	{
+		PrevPts[i] = SleepGuardPointWS(TwistRad, 0.0f, CompT, GuardOffsets[i]);
+	}
+	float Allowed = 0.0f;
+	float PrevBend = 0.0f;
+	while (PrevBend < MaxBend)
+	{
+		const float NextBend = FMath::Min(PrevBend + StepDeg, MaxBend);
+		bool bBlocked = false;
+		FVector NextPts[NumGuards];
+		for (int32 i = 0; i < NumGuards; ++i)
+		{
+			NextPts[i] = SleepGuardPointWS(TwistRad, NextBend, CompT, GuardOffsets[i]);
+			FVector Dir = NextPts[i] - PrevPts[i];
+			const FVector End = NextPts[i] + Dir.GetSafeNormal() * MarginCm;
+			FHitResult Hit;
+			// ①自己軀幹表面（complex＝墨水系統天天打的同一套三角形，凍結頭頸泡泡除外）
+			// ②世界靜態物（地板/牆——趴姿臉朝下往地板鑽＝飽和在 0，先扭轉再低頭）
+			if (BodyBlocked(PrevPts[i], End) ||
+				GetWorld()->LineTraceSingleByObjectType(Hit, PrevPts[i], End, StaticObjects, WorldParams))
+			{
+				bBlocked = true;
+				break;
+			}
+		}
+		if (bBlocked)
+		{
+			break; // Allowed 停在上一個乾淨候選
+		}
+		Allowed = NextBend;
+		PrevBend = NextBend;
+		FMemory::Memcpy(PrevPts, NextPts, sizeof(PrevPts));
+	}
+
+	SleepLimitCacheTwist = TwistDeg;
+	SleepLimitCacheBend = DesiredBendDeg;
+	SleepLimitCacheCompT = CompT;
+	SleepLimitCacheResult = Allowed;
+	return Allowed;
+}
+
+void ANiceInkCharacter::ServerUpdateSleepLook_Implementation(float TwistDeg, float BendDownDeg)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const APlayerState* PS = GetPlayerState();
+	if (!GS || !PS || PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || !bEyesOpen)
+	{
+		return;
+	}
+	SleepTwistDeg = FMath::Clamp(TwistDeg, -SleepTwistMaxDeg, SleepTwistMaxDeg); // server 端不信任 client 的上限
+	SleepBendDeg = FMath::Clamp(BendDownDeg, 0.0f, SleepBendMaxDeg);
+}
+
 void ANiceInkCharacter::ResetBowPose()
 {
+	bSleepPoseDirty = true; // 替身骨可能被動過——下次 tick 重擺
 	if (BowBody)
 	{
 		BowBody->SetVisibility(false);

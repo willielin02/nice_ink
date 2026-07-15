@@ -63,6 +63,22 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	float PhaseEndServerTime = 0.0f;
 
+	// --- 翻身提案（2026-07-15 user 定案：作畫者之一提出、其餘作畫者同意後翻身）---
+	// 一次一案；INDEX_NONE＝無提案。表決細節在 GameMode（server-only），這裡只放 HUD 顯示位。
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 FlipProposerId = INDEX_NONE;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 FlipAgreeCount = 0;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 FlipAgreeNeeded = 0;
+
+	// 每開一案 +1：client 用來對「這一案」表態去重
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 FlipProposalSerial = 0;
+
 	// v3.3 註：往復指標小遊戲參數已退役——醉夢迷宮的參數只發給受害者本人
 	// （ClientStartMaze），不進 GameState：其餘玩家一無所知是規則本體。
 
