@@ -1,5 +1,15 @@
 # Robo-test harness（自駕 PIE 測試）
 
+## Play 模式切換（2026-07-17 起有兩種工作流）
+
+- **party 模式**（開發試玩預設）：`play_mode_party.ps1`——編輯器開機＝主選單圖，
+  Play＝**4 個獨立行程視窗**從主選單起跑（真 ServerTravel＋真 LAN 搜房＝完整
+  happy path：選單→建房/加入→大廳→ENTER 開局）。獨立行程較重（每窗一次引擎啟動）。
+- **robo 模式**（跑本目錄任何測試前必切）：`play_mode_robo.ps1`——道場圖＋
+  3 客戶端 listen 單行程 PIE（tick harness 的 python 只搆得到同行程的 PIE 世界）。
+- 兩支腳本都要**編輯器關閉時**跑（編輯器退出會回寫 play 設定）。
+
+
 編輯器啟動時自動：開 PIE（3 客戶端 listen）→ 等 Drawing → 驅動 lean-lock
 全鏈驗證（湊近複寫/細筆筆劃/踹飛中斷/彎腰擺拍連拍）→ 結果寫到 stdout log。
 

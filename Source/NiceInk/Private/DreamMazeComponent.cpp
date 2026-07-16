@@ -7,6 +7,7 @@
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
 
@@ -233,7 +234,9 @@ void UDreamMazeComponent::TickWalking(float DeltaTime)
 		CursorMazeTarget = ForcedNavTarget; // 蓋掉 UpdateCursorHeading（robo 沒有滑鼠）
 	}
 	APlayerController* PC = C ? Cast<APlayerController>(C->GetController()) : nullptr;
-	if ((PC && PC->IsInputKeyDown(EKeys::LeftMouseButton)) || bForcedNav)
+	const bool bWalkInput = PC && PC->IsInputKeyDown(EKeys::LeftMouseButton) &&
+		!(C && C->IsSystemMenuOpen()); // ESC 選單開著＝點按屬於選單
+	if (bWalkInput || bForcedNav)
 	{
 		const float DistTarget = (CursorMazeTarget - Pos).Size();
 		if (DistTarget > 0.12f)
@@ -390,13 +393,20 @@ void UDreamMazeComponent::UpdateCursorHeading()
 	{
 		return;
 	}
+	if (C->IsSystemMenuOpen())
+	{
+		return; // ESC 選單開著：滑鼠屬於選單，游標與航向凍結
+	}
 	{
 		float MouseX = 0.0f;
 		float MouseY = 0.0f;
 		PC->GetInputMouseDelta(MouseX, MouseY);
+		// 設計基準值 × 玩家偏好倍率（設定選單）
+		const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
+		const float Sens = MazeCursorSensitivity * (GI ? GI->GetMouseScale() : 1.0f);
 		const float Lim = FMath::Max(80.0f, LastPanelRadius * 1.15f);
-		CursorPanel.X = FMath::Clamp(CursorPanel.X + MouseX * MazeCursorSensitivity, -Lim, Lim);
-		CursorPanel.Y = FMath::Clamp(CursorPanel.Y - MouseY * MazeCursorSensitivity, -Lim, Lim); // 螢幕 y 向下
+		CursorPanel.X = FMath::Clamp(CursorPanel.X + MouseX * Sens, -Lim, Lim);
+		CursorPanel.Y = FMath::Clamp(CursorPanel.Y - MouseY * Sens, -Lim, Lim); // 螢幕 y 向下
 	}
 	// 游標（盤面像素）→ 迷宮座標：除以縮放、y 翻轉、顯示旋轉逆變換——
 	// 被轉之後玩家操縱的是「他看到的」；旋轉動畫中每幀用當下角度重解＝視錐黏著螢幕游標

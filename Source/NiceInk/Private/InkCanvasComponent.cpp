@@ -11,6 +11,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "NiceInkAudio.h"
 #include "TextureResource.h"
 
 namespace
@@ -101,6 +102,9 @@ void UInkCanvasComponent::BeginStroke(int32 AuthorId, FLinearColor Color, FVecto
 	}
 
 	EndStroke(AuthorId);
+
+	// 落筆聲（每客戶端本地重放時各自播；閉眼沉睡者在音效層被全域靜音）
+	NiAudio::Play(this, ENiSound::StrokeStart, 0.7f);
 
 	UV = ClampUV(UV);
 	Color.A = 1.0f; // 麥克筆＝不透明墨水
@@ -222,6 +226,9 @@ bool UInkCanvasComponent::ConvertWorkToCarbon(int32 WorkId)
 			It.RemoveCurrent();
 		}
 	}
+
+	// 刺青上身的重量（Resolution 演出全員在看；各端本地播）
+	NiAudio::Play(this, ENiSound::CarbonStamp);
 
 	Work->State = EInkWorkState::Carbon;
 	Work->LaserLevel = 0;

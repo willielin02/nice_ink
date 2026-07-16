@@ -109,3 +109,7 @@ SourceAssets/char19_work.blend
 SourceAssets/char19_warped.blend
 SourceAssets/char19_warped.ble
 SourceAssets/**/*.blend1
+
+# Packaged build output (regenerable via RunUAT BuildCookRun)
+/Packaged/
+/PackagedShipping/

@@ -7,6 +7,7 @@
 #include "InkTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
 #include "NiceInkPlayerState.h"
@@ -26,16 +27,48 @@ ANiceInkGameMode::ANiceInkGameMode()
 	MazeParamsPerCup.Add(FDreamMazeGen::DefaultParamsForCup(2));
 }
 
+FString ANiceInkGameMode::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
+	const FString& Options, const FString& Portal)
+{
+	// 引擎在 Super 裡消化 ?Name=（客戶端旅行 URL 帶來的玩家名）
+	const FString Error = Super::InitNewPlayer(NewPlayerController, UniqueId, Options, Portal);
+
+	if (ANiceInkPlayerState* PS = NewPlayerController ? NewPlayerController->GetPlayerState<ANiceInkPlayerState>() : nullptr)
+	{
+		if (UGameplayStatics::HasOption(Options, TEXT("Avatar")))
+		{
+			PS->DesiredAvatarIndex = UGameplayStatics::GetIntOption(Options, TEXT("Avatar"), INDEX_NONE);
+		}
+	}
+	return Error;
+}
+
 void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 {
-	// 席位＝入場順序；avatar 依席位輪流取用內建名冊。要在 Super 之前指定，
+	// 席位＝入場順序；avatar 先看玩家意向、被佔用則輪派。要在 Super 之前指定，
 	// SpawnDefaultPawnFor 讀 SeatIndex 決定出生位置。
 	if (ANiceInkPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<ANiceInkPlayerState>() : nullptr)
 	{
 		if (PS->SeatIndex == INDEX_NONE)
 		{
 			PS->SeatIndex = NextSeatIndex++;
-			PS->AvatarIndex = PS->SeatIndex % FNiceInkAvatars::Num();
+
+			// listen 主機本人不經 ?Name=（沒有重登入）：從 GameInstance 讀主選單設定。
+			// 只在 standalone/packaged（Game world）生效——PIE 維持引擎派名，robo 不受擾。
+			if (NewPlayer->IsLocalController() && GetWorld() && GetWorld()->WorldType == EWorldType::Game)
+			{
+				if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+				{
+					const FString Wanted = UNiceInkGameInstance::SanitizePlayerName(GI->PlayerDisplayName);
+					if (!Wanted.IsEmpty())
+					{
+						ChangeName(NewPlayer, Wanted, false);
+					}
+					PS->DesiredAvatarIndex = GI->PreferredAvatar;
+				}
+			}
+
+			PS->AvatarIndex = PickAvatarFor(PS);
 		}
 	}
 
@@ -56,6 +89,113 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 	}
 
 	MaybeScheduleAutoStart();
+}
+
+void ANiceInkGameMode::PreLogin(const FString& Options, const FString& Address,
+	const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage)
+{
+	Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
+	if (!ErrorMessage.IsEmpty())
+	{
+		return;
+	}
+
+	// 開賽中不收新客（session 層 bAllowJoinInProgress=false 已擋；
+	// 這裡防直連 IP 繞過 session 的路徑）
+	const ANiceInkGameState* GS = NIState();
+	if (GS && GS->CurrentPhase != ENiceInkPhase::Lobby && GS->CurrentPhase != ENiceInkPhase::PostGame)
+	{
+		ErrorMessage = TEXT("match in progress");
+		return;
+	}
+	if (GS && GS->PlayerArray.Num() >= 6)
+	{
+		ErrorMessage = TEXT("room is full");
+	}
+}
+
+void ANiceInkGameMode::Logout(AController* Exiting)
+{
+	const ANiceInkPlayerState* PS = Exiting ? Exiting->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	const int32 LeavingId = PS ? PS->GetPlayerId() : INDEX_NONE;
+
+	// 恩怨博物館不因斷線蒸發：離場前持久化（麥克筆本來就不入檔）
+	if (ANiceInkCharacter* Char = Exiting ? Cast<ANiceInkCharacter>(Exiting->GetPawn()) : nullptr)
+	{
+		PersistCharacter(Char);
+	}
+
+	Super::Logout(Exiting);
+
+	ANiceInkGameState* GS = NIState();
+	if (!GS || LeavingId == INDEX_NONE)
+	{
+		return;
+	}
+
+	// 剩餘人數（PlayerArray 移除時序不可靠，顯式排除離開者）
+	int32 Remaining = 0;
+	for (const APlayerState* Other : GS->PlayerArray)
+	{
+		if (Other && Other->GetPlayerId() != LeavingId)
+		{
+			++Remaining;
+		}
+	}
+
+	const ENiceInkPhase Phase = GS->CurrentPhase;
+	const bool bInRound = Phase == ENiceInkPhase::Seating || Phase == ENiceInkPhase::Drawing ||
+		Phase == ENiceInkPhase::Tour || Phase == ENiceInkPhase::Accusation;
+	// Resolution/Finale 有計時器自走且對缺席者 null-safe（EnterSeating 會重轉）；
+	// 卡死風險只在無計時器的 Drawing/Accusation 與受害者鏈上——一律作廢本回合。
+	if (bInRound && (Remaining < 2 || GS->VictimPlayerId == LeavingId))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("Logout: player %d left mid-round (victim=%d, remaining=%d) — aborting round"),
+			LeavingId, GS->VictimPlayerId, Remaining);
+		AbortRound(Remaining >= 2);
+	}
+}
+
+void ANiceInkGameMode::AbortRound(bool bEnoughPlayers)
+{
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return;
+	}
+
+	SetPhaseTimer(0.0f, nullptr);
+	GetWorldTimerManager().ClearTimer(DialFailsafeHandle);
+	PendingDialKillerId = INDEX_NONE;
+	PendingDialVictim = nullptr;
+	ForceExitAllLeans();
+	ClearFlipProposal();
+	RoundCleanupAllCharacters();
+
+	// 殘留的沉睡者拉起來（受害者中離時不會有；防禦寫法）
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		if (It->bAsleep)
+		{
+			It->ServerSetAsleep(false, FTransform::Identity);
+		}
+	}
+
+	GS->VictimPlayerId = INDEX_NONE;
+	GS->TourWorkId = INDEX_NONE;
+	GS->TourWorkIdList.Reset();
+	GS->TourWorkCount = 0;
+	GS->ResolutionWorkId = INDEX_NONE;
+
+	if (bEnoughPlayers)
+	{
+		GS->CurrentRound++;
+		EnterBottleSpin(); // 人夠：重新轉瓶續攤
+	}
+	else
+	{
+		GS->SetPhase(ENiceInkPhase::Lobby, 0.0f); // 人不夠：回大廳等人
+	}
 }
 
 // --- 跨場持久化 ---
@@ -129,6 +269,42 @@ void ANiceInkGameMode::PersistAllCharacters()
 	{
 		PersistCharacter(*It);
 	}
+}
+
+int32 ANiceInkGameMode::PickAvatarFor(const ANiceInkPlayerState* PS) const
+{
+	const int32 N = FNiceInkAvatars::Num();
+	if (!PS || N <= 0)
+	{
+		return 0;
+	}
+
+	TSet<int32> Taken;
+	if (GameState)
+	{
+		for (APlayerState* Other : GameState->PlayerArray)
+		{
+			const ANiceInkPlayerState* O = Cast<ANiceInkPlayerState>(Other);
+			if (O && O != PS && O->SeatIndex != INDEX_NONE)
+			{
+				Taken.Add(O->AvatarIndex);
+			}
+		}
+	}
+
+	if (PS->DesiredAvatarIndex >= 0 && PS->DesiredAvatarIndex < N && !Taken.Contains(PS->DesiredAvatarIndex))
+	{
+		return PS->DesiredAvatarIndex;
+	}
+	for (int32 k = 0; k < N; ++k)
+	{
+		const int32 Candidate = (PS->SeatIndex + k) % N;
+		if (!Taken.Contains(Candidate))
+		{
+			return Candidate;
+		}
+	}
+	return PS->SeatIndex % N; // 七人以上理論值：名冊耗盡時允許重臉
 }
 
 APawn* ANiceInkGameMode::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
@@ -206,8 +382,11 @@ void ANiceInkGameMode::SetPhaseTimer(float Seconds, void (ANiceInkGameMode::*Han
 
 void ANiceInkGameMode::MaybeScheduleAutoStart()
 {
+	// 自動開局只服務 PIE（robo 測試流程靠它）；正式流程＝大廳主機手動開始
+	//（HUD start 按鈕／NiStart）——派對房不該在湊滿兩人時把後到的朋友關在門外。
+	const bool bPieWorld = GetWorld() && GetWorld()->WorldType == EWorldType::PIE;
 	ANiceInkGameState* GS = NIState();
-	if (!bAutoStart || !GS || GS->CurrentPhase != ENiceInkPhase::Lobby)
+	if (!bAutoStart || !bPieWorld || !GS || GS->CurrentPhase != ENiceInkPhase::Lobby)
 	{
 		return;
 	}

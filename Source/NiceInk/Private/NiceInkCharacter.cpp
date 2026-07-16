@@ -19,6 +19,8 @@
 #include "Materials/MaterialInterface.h"
 #include "NeckStretchComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "NiceInkAudio.h"
+#include "NiceInkGameInstance.h"
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkPlayerState.h"
@@ -221,10 +223,15 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 				SleepBendLocal = FMath::Clamp(PendingDebugSleepLook.Y, 0.0f, SleepBendMaxDeg);
 			}
 		}
-		PollSleepHead(PC, DeltaSeconds); // 視線輸入先於替身更新＝相機零延遲
+		if (!bSystemMenuOpen)
+		{
+			PollSleepHead(PC, DeltaSeconds); // 視線輸入先於替身更新＝相機零延遲
+		}
 	}
 
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
+	UpdateWalkAnim(DeltaSeconds);        // 所有端：站立移動的程式化步伐
+	UpdateLeanArm();                     // 所有端：貼臉鎖定的握筆右臂（跟著實體筆）
 
 	// 伸縮脖：所有擺骨完成後解銜接曲面（顯式順序；lean-lock 事件驅動的擺骨
 	// 由下一 tick 的變化偵測接住，一幀延遲不可感）
@@ -235,6 +242,14 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	if (!bLocal)
 	{
+		return;
+	}
+
+	PollSystemMenu(PC);
+	if (bSystemMenuOpen)
+	{
+		// 選單開著＝遊戲輸入全停（滑鼠屬於選單按鈕）；系統演出鏡頭照常
+		UpdateCinematicCamera(PC);
 		return;
 	}
 
@@ -249,6 +264,39 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollLeanEnter(PC);
 	PollLockedDraw(PC, DeltaSeconds);
 	UpdateCinematicCamera(PC);
+}
+
+void ANiceInkCharacter::PollSystemMenu(APlayerController* PC)
+{
+	if (PC->WasInputKeyJustPressed(EKeys::Escape))
+	{
+		SetSystemMenuOpen(!bSystemMenuOpen);
+	}
+}
+
+void ANiceInkCharacter::SetSystemMenuOpen(bool bOpen)
+{
+	bSystemMenuOpen = bOpen;
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+	PC->bShowMouseCursor = bOpen;
+	if (bOpen)
+	{
+		FInputModeGameAndUI Mode;
+		Mode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
+		Mode.SetHideCursorDuringCapture(false);
+		PC->SetInputMode(Mode);
+		int32 VX = 0, VY = 0;
+		PC->GetViewportSize(VX, VY);
+		PC->SetMouseLocation(VX / 2, VY / 2);
+	}
+	else
+	{
+		PC->SetInputMode(FInputModeGameOnly());
+	}
 }
 
 void ANiceInkCharacter::PollFlip(APlayerController* PC)
@@ -276,7 +324,19 @@ void ANiceInkCharacter::PollFlip(APlayerController* PC)
 void ANiceInkCharacter::PollLobby(APlayerController* PC)
 {
 	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
-	if (!GS || GS->CurrentPhase != ENiceInkPhase::PostGame)
+	if (!GS)
+	{
+		return;
+	}
+
+	// 主機手動開局（大廳與場間大廳）；伺服器端再驗一次主機身分
+	if ((GS->CurrentPhase == ENiceInkPhase::Lobby || GS->CurrentPhase == ENiceInkPhase::PostGame) &&
+		GetWorld()->GetNetMode() != NM_Client && PC->WasInputKeyJustPressed(EKeys::Enter))
+	{
+		ServerRequestStartMatch();
+	}
+
+	if (GS->CurrentPhase != ENiceInkPhase::PostGame)
 	{
 		return;
 	}
@@ -614,8 +674,8 @@ void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
 			PC->GetInputMouseDelta(MouseX, MouseY);
 			// 號誌待驗：右滑＝＋az；上撥＝抬（tilt 減，FPS 慣例）——viewport 驗手感後可反轉
 			SleepAimAzLocal = FMath::Fmod(FMath::Fmod(
-				SleepAimAzLocal + MouseX * LookSensitivity, 360.0f) + 360.0f, 360.0f);
-			SleepAimTiltLocal = FMath::Clamp(SleepAimTiltLocal - MouseY * LookSensitivity,
+				SleepAimAzLocal + MouseX * EffectiveLookSensitivity(), 360.0f) + 360.0f, 360.0f);
+			SleepAimTiltLocal = FMath::Clamp(SleepAimTiltLocal - MouseY * EffectiveLookSensitivity(),
 				0.0f, SleepAimMaxTiltDeg(SleepAimAzLocal));
 		}
 
@@ -682,8 +742,8 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 	// 俯仰也走 control rotation：滑鼠改的是控制器姿態，
 	// 相機每 tick 對齊 pitch（yaw 由 bUseControllerRotationYaw 轉動膠囊）
 	FRotator Ctrl = PC->GetControlRotation();
-	Ctrl.Yaw += MouseX * LookSensitivity;
-	Ctrl.Pitch = FMath::ClampAngle(Ctrl.Pitch + MouseY * LookSensitivity, -89.0f, 89.0f);
+	Ctrl.Yaw += MouseX * EffectiveLookSensitivity();
+	Ctrl.Pitch = FMath::ClampAngle(Ctrl.Pitch + MouseY * EffectiveLookSensitivity(), -89.0f, 89.0f);
 	Ctrl.Roll = 0.0f;
 	PC->SetControlRotation(Ctrl);
 
@@ -853,8 +913,9 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	int32 ViewX = 0;
 	int32 ViewY = 0;
 	PC->GetViewportSize(ViewX, ViewY);
-	LeanCursorPx.X = FMath::Clamp(LeanCursorPx.X + MouseX * LeanCursorSpeed * 6.0f, 0.0f, static_cast<float>(ViewX));
-	LeanCursorPx.Y = FMath::Clamp(LeanCursorPx.Y - MouseY * LeanCursorSpeed * 6.0f, 0.0f, static_cast<float>(ViewY));
+	const float CursorScale = LeanCursorSpeed * 6.0f * (EffectiveLookSensitivity() / FMath::Max(0.1f, LookSensitivity));
+	LeanCursorPx.X = FMath::Clamp(LeanCursorPx.X + MouseX * CursorScale, 0.0f, static_cast<float>(ViewX));
+	LeanCursorPx.Y = FMath::Clamp(LeanCursorPx.Y - MouseY * CursorScale, 0.0f, static_cast<float>(ViewY));
 
 	// 偷瞄中或鏡頭未到位不落筆
 	const float Now = GetWorld()->GetTimeSeconds();
@@ -1235,6 +1296,8 @@ void ANiceInkCharacter::MulticastAddEvidence_Implementation(EInkEvidenceType Typ
 	{
 		InkCanvas->AddEvidenceMark(Type, UV, Seed);
 	}
+	// 噴漬命中聲（沉睡者本人在音效層被靜音＝「無命中回饋」照舊成立）
+	NiAudio::Play(this, ENiSound::SpraySplat);
 }
 
 void ANiceInkCharacter::ServerApplyBlind(EInkEvidenceType Type)
@@ -2182,10 +2245,159 @@ void ANiceInkCharacter::ServerSubmitAccusation_Implementation(int32 WorkId, int3
 
 void ANiceInkCharacter::ServerRequestStartMatch_Implementation()
 {
+	// 只有主機（listen server 本人）能開局——客戶端的 NiStart/ENTER 一律拒絕
+	const APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !PC->IsLocalController())
+	{
+		return;
+	}
 	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
 	{
 		GM->RequestStartMatch();
 	}
+}
+
+void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
+{
+	// 站立移動時 Body 疊步伐；睡姿/貼臉鎖定（Body 隱藏或被睡姿接管）一律不碰。
+	if (!Body)
+	{
+		return;
+	}
+	const bool bEligible = bWalkAnimEnabled && !bAsleep && !bLeanLocked && Body->IsVisible();
+	const float Speed2D = bEligible ? GetVelocity().Size2D() : 0.0f;
+
+	if (Speed2D < 20.0f)
+	{
+		if (bWalkAnimApplied)
+		{
+			bWalkAnimApplied = false;
+			WalkAnimPhase = 0.0f;
+			// 停步＝硬還原站姿基準（美術語言：硬切）。
+			// 例外：睡姿已接管 Body 變換（lie/prone），還原會把睡姿蓋掉——
+			// 甦醒路徑自己會寫回站姿。lean 只藏不動 Body，照樣還原。
+			if (!bAsleep)
+			{
+				Body->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
+			}
+		}
+		return;
+	}
+
+	const float MaxSpeed = GetCharacterMovement() ? FMath::Max(1.0f, GetCharacterMovement()->MaxWalkSpeed) : 300.0f;
+	const float SpeedRatio = FMath::Clamp(Speed2D / MaxSpeed, 0.0f, 1.0f);
+	const float StepsPerSecond = 2.0f + 1.4f * SpeedRatio; // 力士碎步
+	WalkAnimPhase = FMath::Fmod(WalkAnimPhase + DeltaSeconds * StepsPerSecond, 1.0f);
+
+	// 三角波側傾（線性折返＝硬轉、不做平滑正弦）＋步點彈跳
+	const float Tri = 4.0f * FMath::Abs(WalkAnimPhase - 0.5f) - 1.0f; // -1..1..-1
+	const float RollDeg = WalkWaddleDeg * Tri * SpeedRatio;
+	const float BobZ = WalkBobCm * (1.0f - FMath::Abs(Tri)) * SpeedRatio;
+
+	// 側傾繞角色前軸（父空間左乘）；基準相對變換每幀重組＝零累積
+	const FQuat WaddleQ(FRotator(0.0f, 0.0f, RollDeg));
+	Body->SetRelativeLocationAndRotation(
+		BodyStandRelLoc + FVector(0.0f, 0.0f, BobZ),
+		(WaddleQ * FQuat(BodyStandRelRot)).Rotator());
+	bWalkAnimApplied = true;
+}
+
+void ANiceInkCharacter::UpdateLeanArm()
+{
+	static const FName ArmBone(TEXT("RightArm"));
+	static const FName ForeBone(TEXT("RightForeArm"));
+	static const FName HandBone(TEXT("RightHand"));
+
+	const bool bActive = bPenArmIkEnabled && bLeanLocked && BowBody && BowBody->IsVisible();
+	if (!bActive)
+	{
+		if (bLeanArmApplied && BowBody)
+		{
+			BowBody->ResetBoneTransformByName(ArmBone);
+			BowBody->ResetBoneTransformByName(ForeBone);
+			BowBody->ResetBoneTransformByName(HandBone);
+			BowBody->RefreshBoneTransforms();
+			bLeanArmApplied = false;
+		}
+		return;
+	}
+	if (BowBody->GetBoneIndex(ArmBone) == INDEX_NONE ||
+		BowBody->GetBoneIndex(ForeBone) == INDEX_NONE ||
+		BowBody->GetBoneIndex(HandBone) == INDEX_NONE)
+	{
+		return; // 骨架缺鏈＝安靜跳過（姿勢不演，機制照跑）
+	}
+
+	// 每 tick 重置→解 IK（冪等；姿勢寫→讀之間必須 RefreshBoneTransforms——poseable 快取陷阱）
+	BowBody->ResetBoneTransformByName(ArmBone);
+	BowBody->ResetBoneTransformByName(ForeBone);
+	BowBody->ResetBoneTransformByName(HandBone);
+	BowBody->RefreshBoneTransforms();
+
+	const FTransform ArmT = BowBody->GetBoneTransformByName(ArmBone, EBoneSpaces::WorldSpace);
+	const FTransform ForeT = BowBody->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
+	const FTransform HandT = BowBody->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
+	const FVector S = ArmT.GetLocation();
+	const FVector E = ForeT.GetLocation();
+	const FVector H = HandT.GetLocation();
+
+	// 目標＝實體筆（筆尖已釘在墨點；未落筆時退回鎖定點）；握上段＝往筆桿上抬 6cm
+	FVector Target = (PenMesh && PenMesh->IsVisible())
+		? PenMesh->GetComponentLocation() + FVector(0, 0, 6.0f)
+		: FVector(LeanPoint);
+
+	const float UpperLen = FVector::Dist(S, E);
+	const float LowerLen = FVector::Dist(E, H);
+	FVector ToTarget = Target - S;
+	const float Dist = FMath::Clamp(static_cast<float>(ToTarget.Size()),
+		FMath::Abs(UpperLen - LowerLen) + 1.0f, (UpperLen + LowerLen) * 0.999f);
+	const FVector N = ToTarget.GetSafeNormal();
+	if (N.IsNearlyZero() || UpperLen < 1.0f || LowerLen < 1.0f)
+	{
+		return;
+	}
+
+	// 肘極向：右外側（本地 -X＝右，GetEvidenceUVForHit 同一慣例）偏向世界下
+	const FTransform CompT = BowBody->GetComponentTransform();
+	FVector Pole = CompT.TransformVectorNoScale(FVector(-1, 0, 0)) - FVector(0, 0, 0.6f);
+	Pole = (Pole - FVector::DotProduct(Pole, N) * N);
+	if (!Pole.Normalize())
+	{
+		Pole = FVector::CrossProduct(N, FVector::UpVector).GetSafeNormal();
+	}
+
+	// 兩骨解析解（餘弦定理）：肘的面內位置
+	const float CosShoulder = FMath::Clamp(
+		(UpperLen * UpperLen + Dist * Dist - LowerLen * LowerLen) / (2.0f * UpperLen * Dist), -1.0f, 1.0f);
+	const float SinShoulder = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosShoulder * CosShoulder));
+	const FVector NewElbow = S + N * (UpperLen * CosShoulder) + Pole * (UpperLen * SinShoulder);
+	const FVector NewHand = S + N * Dist;
+
+	// 上臂：把 S→E 轉到 S→NewElbow（世界空間旋轉、位置不動）
+	const FQuat Q1 = FQuat::FindBetweenNormals((E - S).GetSafeNormal(), (NewElbow - S).GetSafeNormal());
+	FTransform NewArmT = ArmT;
+	NewArmT.SetRotation(Q1 * ArmT.GetRotation());
+	BowBody->SetBoneTransformByName(ArmBone, NewArmT, EBoneSpaces::WorldSpace);
+	BowBody->RefreshBoneTransforms();
+
+	// 前臂：轉完上臂後重讀（子骨已被帶走），再把 E'→H' 轉向 E'→NewHand
+	const FTransform ForeT2 = BowBody->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
+	const FTransform HandT2 = BowBody->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
+	const FVector E2 = ForeT2.GetLocation();
+	const FQuat Q2 = FQuat::FindBetweenNormals(
+		(HandT2.GetLocation() - E2).GetSafeNormal(), (NewHand - E2).GetSafeNormal());
+	FTransform NewForeT = ForeT2;
+	NewForeT.SetRotation(Q2 * ForeT2.GetRotation());
+	BowBody->SetBoneTransformByName(ForeBone, NewForeT, EBoneSpaces::WorldSpace);
+	BowBody->RefreshBoneTransforms();
+
+	bLeanArmApplied = true;
+}
+
+float ANiceInkCharacter::EffectiveLookSensitivity() const
+{
+	const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
+	return LookSensitivity * (GI ? GI->GetMouseScale() : 1.0f);
 }
 
 // --- 除錯 exec ---

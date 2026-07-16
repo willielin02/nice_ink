@@ -24,11 +24,29 @@
 4. `NiHost`／`NiJoin` 的程式碼呼叫把 `bLan` 改為 false（[NiceInkCharacter.cpp](../Source/NiceInk/Private/NiceInkCharacter.cpp) 的 `NiHost`/`NiJoin`），或日後做主選單時暴露成選項。
 5. 打包（或 standalone）測試——EOS P2P 不支援 PIE 內多客戶端。
 
-## 語音（之後）
+## 語音（憑證填好後的接線步驟，B2 文件化 2026-07-17）
 
-Session 已設 `bUseLobbiesIfAvailable`（EOS lobby）；全房無方位語音要再啟用
-`EOSVoiceChat` plugin 並在 lobby 上開 RTC room，屬下一階段工作——SPEC 的
-語音規格（無方位、全房廣播、內容可說謊）在 EOS RTC 預設行為下即成立。
+Session 已設 `bUseLobbiesIfAvailable`（EOS lobby）。SPEC 語音規格（**無方位、
+全房廣播、內容可說謊**）＝ EOS Lobby RTC 的預設行為，不需要任何空間化程式。
+
+1. `NiceInk.uproject` 加 plugin：`{"Name": "EOSVoiceChat", "Enabled": true}`
+   （隨 OnlineSubsystemEOS 出貨，不用另裝）。
+2. Dev Portal 的 Client Policy 要含 **Voice** 權限（RTC）。
+3. `DefaultEngine.ini` EOS 段加：
+   ```ini
+   [EOSVoiceChat]
+   bEnabled=true
+   ```
+   並在 `+Artifacts=(...)` 同段確認 EncryptionKey 已換自己的值。
+4. 建房參數改一行（[NiceInkSessionSubsystem.cpp](../Source/NiceInk/Private/NiceInkSessionSubsystem.cpp)
+   `HostSession`）：`Settings.bUseLobbiesVoiceChatIfAvailable = !bLan;` ——
+   lobby 建立時自動開 RTC room，成員進房即入語音。
+5. 入房後每個 client 用 `IVoiceChat::Get()` / `EOSVoiceChatUser` 確認
+   `JoinChannel` 由 lobby 自動觸發（OnlineSubsystemEOS 的 lobby RTC 整合會代辦；
+   若沒有，手動在 PostLogin 後 `JoinChannel(LobbyRTCRoomName, ...)`）。
+6. 音量／靜音 UI：之後掛在 ESC 選單（`IVoiceChatUser::SetPlayersListenVolume`）。
+7. **驗收清單**：兩台真機（EOS P2P 不支援 PIE）互說話；確認「沉睡者聽得到全房」
+   （沉睡端不做任何 voice mute——遮蔽的是視覺不是聽覺）；確認無 3D 衰減。
 
 ## 已知邊界
 

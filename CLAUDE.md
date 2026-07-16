@@ -9,7 +9,8 @@
 派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
 （沉睡＝醉夢圓形迷宮小遊戲），其他人用麥克筆在他身上畫畫；醒來後巡禮指認作者，
 猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。
-**設計的唯一權威是 `SPEC.md`**（v3.4）。
+**設計的唯一權威是 `SPEC.md`**（v3.6）。上架衝刺（主選單/配對/大廳/音效/打包）的
+工作帳本與待使用者項在 `Docs/SHIP_PLAN.md`。
 
 ## 鐵律（違反任何一條都是嚴重事故）
 
@@ -30,13 +31,23 @@
   Get-Process UnrealEditor -ErrorAction SilentlyContinue | Stop-Process -Force -Confirm:$false; Start-Sleep -Seconds 4
   & "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" NiceInkEditor Win64 Development -Project="c:\games\Unreal Engine\nice_ink\NiceInk.uproject" -WaitMutex 2>&1 | Select-String "error C|error LNK|Result:"
   ```
+- **開發試玩（2026-07-17 起）**：`Tools/play_full_flow.bat`＝4 視窗 -game 從主選單跑
+  完整 happy path（真 ServerTravel/LAN 搜房）；`Tools/play_ingame.bat`＝2 視窗直連道場
+  跳過選單。都用編輯器二進位跑未 cook 資產——**重編譯前要先關掉這些遊戲視窗**。
+  正式流程＝大廳主機 ENTER 開局；PIE 自動開局只服務 robo。
 - **自駕測試（robo-test）**：`Tools/RoboTest/robo_leanlock_test.py` 是範本＋README。流程：
+  0. **先切 robo play 模式**：`Tools/RoboTest/play_mode_robo.ps1`（編輯器關閉時跑）——
+     道場啟動圖＋3 客戶端 listen 單行程 PIE；測完用 `play_mode_party.ps1` 切回
+     開發試玩模式（主選單啟動圖＋Play=4 獨立視窗）。
   1. 把 `+StartupScripts=<腳本絕對路徑>` 掛進 `Config/DefaultEngine.ini` 的
-     `[/Script/PythonScriptPlugin.PythonScriptPluginSettings]`；
-  2. 啟動 UnrealEditor.exe（GUI 版），腳本自動開 PIE（3 客戶端 listen server，
-     設定在 EditorPerProjectUserSettings.ini，已配好）→ tick 狀態機驅動 → 寫結果檔；
+     `[/Script/PythonScriptPlugin.PythonScriptPluginSettings]`（**用 Edit 精準替換，
+     禁用 PS 的 -replace|Set-Content 重寫整檔——ASCII 編碼會毀掉中文註解**）；
+  2. 啟動 UnrealEditor.exe（GUI 版）前**先刪 Saved/Autosaves**（PackageRestoreData
+     殘留＝Restore 對話框擋死一切，含 headless），腳本自動開 PIE → tick 狀態機驅動
+     → 寫結果檔（一律寫到專案 Saved/，別寫 session scratchpad——會過期）；
   3. 用 `until [ -f 結果檔 ] && grep -qE "DONE|EXC|FAIL"` 的背景迴圈等結果；
-  4. **測完把 ini 那行移除——提交的 config 永遠不能帶著它。**
+  4. **測完把 ini 那行移除——提交的 config 永遠不能帶著它；UAT 打包期間 ini 也絕不能
+     帶著它（staging 會把它打進包裡）。**
 - **資產重匯入用一次性 headless session**：`UnrealEditor-Cmd.exe <uproject> -ExecutePythonScript=<腳本>`。
   **重匯入前必須把 robo StartupScripts 行註解掉**，否則 harness 空轉堵死整個 session
   （症狀：編輯器 40% CPU 燒著、log 死寂、永不完成）。
@@ -96,10 +107,18 @@
 
 ## 技術地圖
 
-- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/彎腰/鏡頭/筆）、`InkCanvasComponent`
-  （筆劃=真相、RT=快取、作者 ID/碳黑/雷射/洗掉）、`InkBodyComponent`（世界↔UV 雙向解算、
-  tri-cache、換睡姿網格、眼睛開閉）、GameMode（回合狀態機）、GameState（相位/受害者/計時）、
-  `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/視錐/導航/旋轉）。
+- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/彎腰/鏡頭/筆/程式化走路/
+  握筆右臂 IK/ESC 系統選單）、`InkCanvasComponent`（筆劃=真相、RT=快取、作者 ID/碳黑/
+  雷射/洗掉）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache、換睡姿網格、眼睛開閉）、
+  GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
+  `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/導航/旋轉）。
+- **前端與配對（2026-07-17 上架衝刺）**：`NiceInkMenuGameMode/PlayerController/HUD`
+  （L_MainMenu canvas 主選單：名字/臉選擇/lan-online/建房/搜房列表/設定/授權頁）、
+  `NiceInkGameInstance`（偏好持久化 NiceInk_Settings 槽＋斷線回選單）、
+  `NiceInkSessionSubsystem`（UI 狀態機＋?Name=?Avatar= 上服）、`NiceInkAudio`
+  （11 個合成音；**閉眼沉睡全域靜音＝感官規格、無任何甦醒音**）、
+  `NiceInkUiTokens.h`（HUD 調色盤共用）。打包＝RunUAT BuildCookRun（cook 白名單在
+  DefaultGame.ini；**只被 C++ 字串路徑引用的資產要 AlwaysCook**）。
 - 場地＝`L_Dojo`（道場 25 獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；L_Sauna 保留）；
   光照＝fullbright 均勻環境光（環境亮度旋鈕=SaunaSkyLight Intensity，曝光 bias 5.2 是承重值）；
   皮膚質感＝M_InkBodyChar 材質內假光（SPEC 定案 #37：全啞光＋頭燈假光＋掃描色度血色場；
@@ -114,9 +133,11 @@
 - Blender 5.1：`"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --background <blend> --python <腳本>`；
   角色源正本＝`SourceAssets/sumo_character_master.blend`（char17 已退役；迭代檔 previews/masters/retopo
   已 gitignore 留本地）。
-- 下一批已知工作：手臂握筆 IK（刻意延後）、噴射出口與褌的視覺（SPEC 待定 #11）、
-  平台小號實測（待定 #12）、開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、
-  EOS 憑證＋語音接入、頭部轉動破綻、走路動畫。
+- 下一批已知工作：噴射出口與褌的視覺（SPEC 待定 #11）、平台小號實測（待定 #12）、
+  開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、EOS 憑證＋語音接入
+  （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
+  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、握筆右臂 IK（bPenArmIkEnabled）、
+  音效組（MasterVolume）——都可一鍵關。
 
 ## 收尾紀律
 

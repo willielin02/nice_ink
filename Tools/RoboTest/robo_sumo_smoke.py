@@ -5,7 +5,7 @@
 # 產出：scratchpad/robo_sumo_smoke_result.txt + Saved/Screenshots 連拍
 import unreal, time, os, traceback
 
-OUT = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\b7f4b587-3934-40cb-ad6c-122b34e41c3b\scratchpad\robo_sumo_smoke_result.txt"
+OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_sumo_smoke_result.txt"
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 LINES = []
 

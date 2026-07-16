@@ -83,6 +83,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Input", meta = (ClampMin = "0.1", ClampMax = "10.0"))
 	float LookSensitivity = 1.6f;
 
+	// 設計基準值 × 玩家偏好倍率（設定選單，GameInstance 持久化）——
+	// 所有滑鼠輪詢點（視角／臉指向／畫筆游標）一律經過這裡
+	float EffectiveLookSensitivity() const;
+
+	// --- 程式化走路（美術語言：硬轉、突兀即目標；消滅 A-pose 滑行）---
+	// 站立移動時 Body 在站姿基準上疊「側傾三角波＋步點彈跳」；停步即硬還原。
+	// 全端本地模擬（速度已複寫，無需同步）。不喜歡＝bWalkAnimEnabled 一鍵關。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk")
+	bool bWalkAnimEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "15"))
+	float WalkWaddleDeg = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "10"))
+	float WalkBobCm = 2.5f;
+
+	// --- 握筆手臂（貼臉鎖定中右臂兩骨 IK 伸向實體筆；此前刻意延後項的保守版）---
+	// 純幾何解、每 tick 冪等、不碰 Spine/Neck/Head；不喜歡＝一鍵關回 A-pose。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk")
+	bool bPenArmIkEnabled = true;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
@@ -417,9 +438,25 @@ public:
 
 	static ANiceInkCharacter* FindByPlayerId(UWorld* World, int32 PlayerId);
 
+	// --- ESC 系統選單（本地、不複寫；開著時吞掉全部遊戲輸入、放出滑鼠游標）---
+	bool IsSystemMenuOpen() const { return bSystemMenuOpen; }
+	void SetSystemMenuOpen(bool bOpen);
+
 private:
 	float CameraPitch = 0.0f;
 	int32 AppliedAvatarIndex = INDEX_NONE;
+
+	bool bSystemMenuOpen = false;
+	void PollSystemMenu(APlayerController* PC);
+
+	// 程式化走路內部狀態（本地）
+	float WalkAnimPhase = 0.0f;
+	bool bWalkAnimApplied = false;
+	void UpdateWalkAnim(float DeltaSeconds);
+
+	// 握筆手臂內部狀態
+	bool bLeanArmApplied = false;
+	void UpdateLeanArm();
 
 	// 作畫中（本地端）
 	bool bPainting = false;

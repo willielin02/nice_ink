@@ -26,6 +26,11 @@ public:
 	ANiceInkGameMode();
 
 	virtual void PostLogin(APlayerController* NewPlayer) override;
+	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId,
+		FString& ErrorMessage) override;
+	virtual void Logout(AController* Exiting) override;
+	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
+		const FString& Options, const FString& Portal = TEXT("")) override;
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
 	// --- 場地配置（座標系沿用桑拿房實測；L_Dojo 道場已以地板探針驗證全席位落在開放地板，
@@ -186,6 +191,9 @@ private:
 	FTransform GetVictimLieTransform() const;
 	float ProbeFloorZ(const FVector& At) const;
 
+	// avatar 派發：優先玩家意向（DesiredAvatarIndex），被佔用則從席位起輪派空位
+	int32 PickAvatarFor(const class ANiceInkPlayerState* PS) const;
+
 	void MaybeScheduleAutoStart();
 	void EnterBottleSpin();
 	void OnBottleSpinDone();
@@ -200,6 +208,10 @@ private:
 
 	// 回合結算清場：全員洗麥克筆與證據標記、解除致盲（SPEC：指認結算時一同洗掉）
 	void RoundCleanupAllCharacters();
+
+	// 斷線兜底：受害者中離／人數不足＝本回合作廢（洗掉、清 pending），
+	// 人夠→重新轉瓶續攤；不夠→回大廳等人。
+	void AbortRound(bool bEnoughPlayers);
 
 	// 相位切換時全員強制起身（貼臉鎖定不跨相位）
 	void ForceExitAllLeans();

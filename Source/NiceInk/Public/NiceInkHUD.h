@@ -21,8 +21,9 @@ public:
 	virtual void BeginPlay() override;
 	virtual void DrawHUD() override;
 
-private:
+protected:
 	// ---- 設計 token：字階（Slate 字級，乘 UiScale）／對齊 ----
+	// （protected：主選單 HUD 繼承共用同一套 token helpers——樣式只有一套）
 	enum class ETextTier : uint8 { Display, Title, Body, Small };
 	enum class EHAlign : uint8 { Left, Center, Right };
 
@@ -52,9 +53,39 @@ private:
 	void DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, const FLinearColor& Tint);
 	void DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align = EHAlign::Left);
 
+	// ---- 即時模式 UI 互動（主選單／ESC 選單共用；每幀 BeginUiFrame 後才可用）----
+	FVector2D MousePos = FVector2D::ZeroVector;
+	bool bClickThisFrame = false;
+	bool bClickConsumed = false;
+	double LastUiClickTime = -1.0;
+
+	void BeginUiFrame();
+
+	// 即時模式按鈕：畫＋判定一次完成；回傳「本幀被點下」
+	bool Button(const FString& Label, float CenterX, float Y, float W, float H,
+		bool bEnabled = true, bool bAccent = false);
+
+	// 左右調整列：回傳 -1／0／+1
+	int32 AdjustRow(const FString& Label, const FString& Value, float CenterX, float Y,
+		bool bLeftEnabled = true, bool bRightEnabled = true);
+
+	void DrawBigTitle(const FString& Text, float CenterX, float Y, float SizePx, const FLinearColor& Color);
+
 	// ---- 畫面（相位 × 角色）----
 	void DrawTopBar(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS, class ANiceInkCharacter* MyChar);
 	void DrawCenterBanners(const ANiceInkGameState* GS);
+
+	// 相位轉換音效（client 端輪詢偵測；無聲甦醒相關轉換刻意無音）
+	void TickAudioCues(const ANiceInkGameState* GS);
+	ENiceInkPhase LastPhaseSeen = static_cast<ENiceInkPhase>(0); // Lobby
+	int32 LastTourWorkSeen = INDEX_NONE;
+	bool bPhaseSeeded = false;
+
+	// 大廳（Lobby 相位）：玩家列表＋主機開始提示
+	void DrawLobbyPanel(const ANiceInkGameState* GS);
+
+	// ESC 系統選單：繼續／靈敏度／音量／離開房間（任何相位可開）
+	void DrawSystemMenu(class ANiceInkCharacter* MyChar);
 	void DrawAccusePanel(const ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
 	void DrawPostGamePanel(class ANiceInkCharacter* MyChar);
 	void DrawBottomHint(const FString& Text, const FLinearColor& Color);

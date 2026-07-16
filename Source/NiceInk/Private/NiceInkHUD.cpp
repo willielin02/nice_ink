@@ -11,28 +11,19 @@
 #include "Framework/Application/SlateApplication.h"
 #include "GameFramework/PlayerState.h"
 #include "InkCanvasComponent.h"
+#include "NiceInkAudio.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkTypes.h"
+#include "NiceInkUiTokens.h"
 
 TAutoConsoleVariable<int32> CVarNiDebugHud(
 	TEXT("ni.DebugHud"), 0,
 	TEXT("1 = show developer HUD telemetry (console hints, seat/id, version stamps)."));
 
-// ---- 調色盤：全部取自遊戲世界（墨、紙、酒、皮膚、迷宮薰衣草）----
-// FromSRGBColor 鐵律：FLinearColor 直塞 0-1 顯示值會被 gamma 校正洗亮。
-namespace NiHudColor
-{
-	static const FLinearColor Ink      = FLinearColor::FromSRGBColor(FColor(24, 19, 15));
-	static const FLinearColor Paper    = FLinearColor::FromSRGBColor(FColor(242, 232, 214));
-	static const FLinearColor PaperDim = FLinearColor::FromSRGBColor(FColor(168, 156, 138));
-	static const FLinearColor Amber    = FLinearColor::FromSRGBColor(FColor(232, 163, 61));
-	static const FLinearColor Red      = FLinearColor::FromSRGBColor(FColor(217, 79, 61));
-	static const FLinearColor Green    = FLinearColor::FromSRGBColor(FColor(134, 176, 108));
-	static const FLinearColor Skin     = FLinearColor::FromSRGBColor(FColor(238, 195, 168));
-	static const FLinearColor Lavender = FLinearColor::FromSRGBColor(FColor(169, 163, 207));
-}
+// 調色盤搬進 NiceInkUiTokens.h（主選單 HUD 共用同一組 token）
 
 void ANiceInkHUD::BeginPlay()
 {
@@ -149,6 +140,102 @@ void ANiceInkHUD::DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, con
 		FVector2D::ZeroVector, FVector2D::UnitVector, Tint, BLEND_Translucent);
 }
 
+// ---- 即時模式 UI 互動（主選單／ESC 選單共用）----
+
+void ANiceInkHUD::BeginUiFrame()
+{
+	MousePos = FVector2D::ZeroVector;
+	bClickThisFrame = false;
+	bClickConsumed = false;
+	if (PlayerOwner)
+	{
+		float MX = 0.0f, MY = 0.0f;
+		PlayerOwner->GetMousePosition(MX, MY);
+		MousePos = FVector2D(MX, MY);
+		bClickThisFrame = PlayerOwner->WasInputKeyJustPressed(EKeys::LeftMouseButton);
+
+		// 去抖：實測同一實體點擊可在連續兩幀都讀成 just-pressed（打包版 60fps，
+		// 雙重建房的元凶之一）——150ms 內的第二擊一律吞掉
+		if (bClickThisFrame && GetWorld())
+		{
+			const double Now = GetWorld()->GetRealTimeSeconds();
+			if (Now - LastUiClickTime < 0.15)
+			{
+				bClickThisFrame = false;
+			}
+			else
+			{
+				LastUiClickTime = Now;
+			}
+		}
+	}
+}
+
+bool ANiceInkHUD::Button(const FString& Label, float CenterX, float Y, float W, float H,
+	bool bEnabled, bool bAccent)
+{
+	const float X = CenterX - W * 0.5f;
+	const bool bHover = bEnabled &&
+		MousePos.X >= X && MousePos.X <= X + W && MousePos.Y >= Y && MousePos.Y <= Y + H;
+
+	// 面板底＋hover 反白：美術語言＝硬切，不做漸變
+	FLinearColor Fill = NiHudColor::Ink;
+	Fill.A = bHover ? 0.95f : 0.72f;
+	DrawRect(Fill, X, Y, W, H);
+	const FLinearColor Edge = !bEnabled ? NiHudColor::PaperDim :
+		(bHover ? NiHudColor::Amber : (bAccent ? NiHudColor::Amber : NiHudColor::Paper));
+	const float B = FMath::Max(1.0f, 2.0f * UiScale);
+	DrawRect(Edge, X, Y, W, B);
+	DrawRect(Edge, X, Y + H - B, W, B);
+	DrawRect(Edge, X, Y, B, H);
+	DrawRect(Edge, X + W - B, Y, B, H);
+
+	const FLinearColor TextColor = bEnabled ? (bHover ? NiHudColor::Amber : NiHudColor::Paper) : NiHudColor::PaperDim;
+	const FVector2D TextSize = MeasureTok(Label, ETextTier::Title, bAccent);
+	DrawTok(Label, CenterX, Y + (H - TextSize.Y) * 0.5f, ETextTier::Title, TextColor, EHAlign::Center, bAccent);
+
+	if (bHover && bClickThisFrame && !bClickConsumed)
+	{
+		bClickConsumed = true;
+		NiAudio::Play(this, ENiSound::UiClick);
+		return true;
+	}
+	return false;
+}
+
+int32 ANiceInkHUD::AdjustRow(const FString& Label, const FString& Value, float CenterX, float Y,
+	bool bLeftEnabled, bool bRightEnabled)
+{
+	const float RowH = 40.0f * UiScale;
+	DrawTok(Label, CenterX - 40.0f * UiScale, Y + 8.0f * UiScale, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Right, false);
+	DrawTok(Value, CenterX + 170.0f * UiScale, Y + 8.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
+
+	int32 Delta = 0;
+	if (Button(TEXT("<"), CenterX + 30.0f * UiScale, Y, 36.0f * UiScale, RowH, bLeftEnabled))
+	{
+		Delta = -1;
+	}
+	if (Button(TEXT(">"), CenterX + 310.0f * UiScale, Y, 36.0f * UiScale, RowH, bRightEnabled))
+	{
+		Delta = +1;
+	}
+	return Delta;
+}
+
+void ANiceInkHUD::DrawBigTitle(const FString& Text, float CenterX, float Y, float SizePx, const FLinearColor& Color)
+{
+	if (!Canvas || !UiFont)
+	{
+		return;
+	}
+	const FSlateFontInfo Info(UiFont, FMath::RoundToInt(SizePx * UiScale), FName("Bold"));
+	FCanvasTextItem Item(FVector2D(0, 0), FText::FromString(Text), Info, Color);
+	Item.bCentreX = true;
+	Item.Position = FVector2D(CenterX, Y);
+	Item.EnableShadow(FLinearColor(0, 0, 0, 0.6f), FVector2D(2.0f, 2.0f) * UiScale);
+	Canvas->DrawItem(Item);
+}
+
 void ANiceInkHUD::DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align)
 {
 	const float Step = CupSize * 1.18f;
@@ -193,11 +280,23 @@ void ANiceInkHUD::DrawHUD()
 	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
 	const ANiceInkPlayerState* MyPS = PlayerOwner ? PlayerOwner->GetPlayerState<ANiceInkPlayerState>() : nullptr;
 
+	BeginUiFrame(); // ESC 選單的按鈕判定
+	TickAudioCues(GS);
+
 	// 沉睡端：視覺全遮蔽——黑屏＋醉夢迷宮＋姿勢面板，其他 HUD 一概不畫
 	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
 		DrawVictimSleepUI(MyChar, GS, MyPS);
 		DrawTrapDial(MyChar);
+		DrawSystemMenu(MyChar);
+		DrawDebugPanel(GS, MyPS, MyChar);
+		return;
+	}
+
+	// ESC 選單開著＝只畫選單（醒著沒有遮蔽義務；底層面板文字互疊會打架）
+	if (MyChar && MyChar->IsSystemMenuOpen())
+	{
+		DrawSystemMenu(MyChar);
 		DrawDebugPanel(GS, MyPS, MyChar);
 		return;
 	}
@@ -205,6 +304,11 @@ void ANiceInkHUD::DrawHUD()
 	DrawBlindOverlay(MyChar);
 	DrawTopBar(GS, MyPS, MyChar);
 	DrawCenterBanners(GS);
+
+	if (GS && GS->CurrentPhase == ENiceInkPhase::Lobby)
+	{
+		DrawLobbyPanel(GS);
+	}
 
 	const bool bIsVictim = GS && MyPS && GS->VictimPlayerId == MyPS->GetPlayerId();
 	if (GS && GS->CurrentPhase == ENiceInkPhase::Accusation && bIsVictim && MyChar)
@@ -362,6 +466,165 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 	}
 }
 
+void ANiceInkHUD::TickAudioCues(const ANiceInkGameState* GS)
+{
+	if (!GS)
+	{
+		return;
+	}
+	const ENiceInkPhase Phase = GS->CurrentPhase;
+	if (!bPhaseSeeded)
+	{
+		// 首幀（含中途加入）：記狀態不發聲
+		bPhaseSeeded = true;
+		LastPhaseSeen = Phase;
+		LastTourWorkSeen = GS->TourWorkId;
+		return;
+	}
+
+	if (Phase != LastPhaseSeen)
+	{
+		switch (Phase)
+		{
+		case ENiceInkPhase::BottleSpin: NiAudio::Play(this, ENiSound::BottleSpin); break;
+		case ENiceInkPhase::Seating:    NiAudio::Play(this, ENiSound::DrinkGulp); break; // 入座酒
+		case ENiceInkPhase::Resolution:
+			NiAudio::Play(this, GS->LastAccusationResult == ENiceInkAccusationResult::Correct
+				? ENiSound::AccuseCorrect : ENiSound::AccuseWrong);
+			break;
+		case ENiceInkPhase::Finale:     NiAudio::Play(this, ENiSound::FinaleGong); break;
+		// Drawing/Tour/Accusation/PostGame 的入場不發聲（Tour 由逐幅 chime 承擔；
+		// Drawing 開始＝沉睡開始，甦醒側零提示鐵律的另一半）
+		default: break;
+		}
+		LastPhaseSeen = Phase;
+	}
+
+	if (GS->TourWorkId != LastTourWorkSeen)
+	{
+		if (Phase == ENiceInkPhase::Tour && GS->TourWorkId != INDEX_NONE)
+		{
+			NiAudio::Play(this, ENiSound::TourChime);
+		}
+		LastTourWorkSeen = GS->TourWorkId;
+	}
+}
+
+void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
+{
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+	const float CX = W * 0.5f;
+
+	const int32 NumIn = GS->PlayerArray.Num();
+	const float PanelW = 480.0f * UiScale;
+	const float RowH = 30.0f * UiScale;
+	const float PanelH = (110.0f + 30.0f * FMath::Max(1, NumIn)) * UiScale;
+	const float X = CX - PanelW * 0.5f;
+	const float Y = H * 0.30f;
+	DrawPanelBox(X, Y, PanelW, PanelH, 0.72f);
+
+	float LineY = Y + 16.0f * UiScale;
+	DrawTok(FString::Printf(TEXT("DOJO LOBBY  ·  %d / 6"), NumIn), CX, LineY, ETextTier::Title, NiHudColor::Paper, EHAlign::Center, true);
+	LineY += 44.0f * UiScale;
+
+	// 名單按席位排序（席位＝入場順序）
+	TArray<const ANiceInkPlayerState*> Sorted;
+	for (const APlayerState* PS : GS->PlayerArray)
+	{
+		if (const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+		{
+			Sorted.Add(NIPS);
+		}
+	}
+	Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
+	for (const ANiceInkPlayerState* PS : Sorted)
+	{
+		DrawTok(FString::Printf(TEXT("seat %d"), PS->SeatIndex + 1),
+			CX - 150.0f * UiScale, LineY, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Left, false);
+		DrawTok(PS->GetPlayerName(), CX - 40.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
+		DrawTok(FText::AsNumber(PS->Cash).ToString(), CX + 190.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Right, false);
+		LineY += RowH;
+	}
+
+	// 主機（listen server 本人）手動開始；其他人等待——自動開局只活在 PIE（robo）
+	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
+	if (bIsHost)
+	{
+		DrawBottomHint(NumIn >= 2
+			? TEXT("ENTER — start the match")
+			: TEXT("waiting for players — need at least 2 to start"),
+			NumIn >= 2 ? NiHudColor::Amber : NiHudColor::PaperDim);
+	}
+	else
+	{
+		DrawBottomHint(TEXT("waiting for the host to start the match"), NiHudColor::PaperDim);
+	}
+}
+
+void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
+{
+	if (!MyChar || !MyChar->IsSystemMenuOpen())
+	{
+		return;
+	}
+	const float W = Canvas->ClipX;
+	const float H = Canvas->ClipY;
+	const float CX = W * 0.5f;
+
+	// 壓暗全畫面（menu 在最上層；沉睡黑屏之上也可讀）
+	FLinearColor Dim = NiHudColor::Ink;
+	Dim.A = 0.62f;
+	DrawRect(Dim, 0, 0, W, H);
+
+	DrawBigTitle(TEXT("MENU"), CX, H * 0.22f, 44.0f, NiHudColor::Paper);
+
+	UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
+	const float RowX = CX - 40.0f * UiScale;
+	float Y = H * 0.22f + 96.0f * UiScale;
+	const float Step = 64.0f * UiScale;
+
+	if (GI)
+	{
+		const int32 SensDelta = AdjustRow(TEXT("mouse sensitivity"),
+			FString::Printf(TEXT("%.1f"), GI->MouseSensitivityScale), RowX, Y,
+			GI->MouseSensitivityScale > 0.25f, GI->MouseSensitivityScale < 2.95f);
+		if (SensDelta != 0)
+		{
+			GI->MouseSensitivityScale = FMath::Clamp(GI->MouseSensitivityScale + SensDelta * 0.1f, 0.2f, 3.0f);
+			GI->SaveSettings();
+		}
+		Y += Step;
+
+		const int32 VolDelta = AdjustRow(TEXT("master volume"),
+			FString::Printf(TEXT("%d%%"), FMath::RoundToInt(GI->MasterVolume * 100.0f)), RowX, Y,
+			GI->MasterVolume > 0.01f, GI->MasterVolume < 0.99f);
+		if (VolDelta != 0)
+		{
+			GI->MasterVolume = FMath::Clamp(GI->MasterVolume + VolDelta * 0.05f, 0.0f, 1.0f);
+			GI->SaveSettings();
+		}
+		Y += Step + 24.0f * UiScale;
+	}
+
+	const float BtnW = 300.0f * UiScale;
+	const float BtnH = 52.0f * UiScale;
+	if (Button(TEXT("resume"), CX, Y, BtnW, BtnH, true, true))
+	{
+		MyChar->SetSystemMenuOpen(false);
+	}
+	Y += BtnH + 14.0f * UiScale;
+	if (Button(TEXT("leave the room"), CX, Y, BtnW, BtnH))
+	{
+		if (GI)
+		{
+			GI->ReturnToMainMenu(FString());
+		}
+	}
+	Y += BtnH + 18.0f * UiScale;
+	DrawTok(TEXT("esc — resume"), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
+}
+
 void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
 {
 	const float W = Canvas->ClipX;
@@ -398,7 +661,11 @@ void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
 	// 場間大廳：端詳刺青、自費雷射、開下一場
 	DrawTok(FString::Printf(TEXT("your ink:  %d carbon (laserable)  ·  %d permanent"), CarbonCount, PermanentCount),
 		W * 0.5f, H - 96.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
-	DrawBottomHint(TEXT("L — laser oldest carbon (2000, 3rd pass removes)   ·   NiStart — next match"), NiHudColor::PaperDim);
+	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
+	DrawBottomHint(bIsHost
+		? TEXT("L — laser oldest carbon (2000, 3rd pass removes)   ·   ENTER — next match")
+		: TEXT("L — laser oldest carbon (2000, 3rd pass removes)   ·   host starts the next match"),
+		NiHudColor::PaperDim);
 }
 
 void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)

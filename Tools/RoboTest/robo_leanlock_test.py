@@ -2,7 +2,7 @@
 # 產出：scratchpad/robo_leanlock_result.txt + Saved/InkQA/leanlock_*.png
 import unreal, time, os, traceback
 
-OUT = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\437eeebd-9de3-4c5c-a294-f05d7c315ce1\scratchpad\robo_leanlock_result.txt"
+OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_leanlock_result.txt"
 LINES = []
 
 def log(msg):
@@ -63,6 +63,9 @@ class Test:
         elif s == "wait_pie":
             server = get_world("UEDPIE_0")
             if server and unreal.GameplayStatics.get_game_mode(server):
+                # 受害者強制 seat1（遠端 client）：主機留著當攝影師——
+                # HighResShot 只認聚焦視窗，受害者若落在主機＝拍到迷宮黑屏
+                unreal.GameplayStatics.get_game_mode(server).set_editor_property("DebugForcedVictimSeat", 1)
                 self.advance("wait_drawing")
         elif s == "wait_drawing":
             server = get_world("UEDPIE_0")
@@ -155,10 +158,8 @@ class Test:
             server = get_world("UEDPIE_0")
             artist = find_char(server, self.artist_pid)
             artist.call_method("ServerSetPeeking", (False,))
-            # 給受害者兩次小遊戲成功 → 踹飛鎖定中的作畫者
-            victim = find_char(server, self.victim_pid)
-            victim.call_method("ServerMinigameHit", ())
-            victim.call_method("ServerMinigameHit", ())
+            # 2026-07-17：ServerMinigameHit 已隨 v3.3 迷宮改制退役——
+            # DebugRoboKick 是 timer-deferred 直通鉤子，不需要先授能量
             self.advance("kick_interrupt")
         elif s == "kick_interrupt":
             if self.elapsed() < 1.0:
@@ -218,8 +219,16 @@ class Test:
             host = unreal.GameplayStatics.get_player_pawn(server, 0)
             pc = unreal.GameplayStatics.get_player_controller(server, 0)
             if model and host and pc:
+                import math
+                # 攝影師自己的身體藏掉（自身可見＋俯視＝鏡頭穿自己胸腹拍＝整片肉牆）
+                for prop in ("Body", "BowBody"):
+                    comp = host.get_editor_property(prop)
+                    if comp:
+                        comp.set_visibility(False, True)
                 mloc = model.get_actor_location()
-                cam = unreal.Vector(mloc.x + 150.0, mloc.y + 130.0, mloc.z + 60.0)
+                # 環繞八角度、半徑 300：拉遠免得旁人身體塞滿畫面（2026-07-17）
+                ang = math.radians(self.shot_count * 45.0)
+                cam = unreal.Vector(mloc.x + 300.0 * math.cos(ang), mloc.y + 300.0 * math.sin(ang), mloc.z + 130.0)
                 host.set_actor_location(cam, False, True)
                 look = unreal.MathLibrary.find_look_at_rotation(
                     unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z - 40.0))

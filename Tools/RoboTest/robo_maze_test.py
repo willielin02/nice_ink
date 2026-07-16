@@ -3,14 +3,14 @@
 #       → 只有兇手收到轉盤（第三人零通知）→ DebugRoboMazeDial 送度數 → 受害者旋轉
 #       精確收斂＋重生回原點 → 存檔點授 SprayCharges → 再踩陷阱重生回存檔點
 #       → 出口睜眼 → 現身進巡禮 → 生成器統計（fuzz violations=0）。
-# 產出：scratchpad/robo_maze_result.txt
+# 產出：Saved/robo_maze_result.txt（2026-07-17 改：舊值指向已消失的 session scratchpad）
 import re
 import time
 import traceback
 
 import unreal
 
-OUT = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\9463ca47-69c8-4642-8bfc-b7fd02de08bd\scratchpad\robo_maze_result.txt"
+OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_maze_result.txt"
 import os
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 LINES = []

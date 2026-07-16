@@ -21,6 +21,10 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 AvatarIndex = 0;
 
+	// 玩家在主選單選的臉（?Avatar= travel option／主機從 GameInstance 讀）。
+	// server-only 意向值：PostLogin 派發 AvatarIndex 時優先採用（被佔用則輪派）。
+	int32 DesiredAvatarIndex = INDEX_NONE;
+
 	// 連續罰酒杯數（只數罰酒；猜對離座歸零；第三杯＝終局）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 PenaltyCups = 0;
