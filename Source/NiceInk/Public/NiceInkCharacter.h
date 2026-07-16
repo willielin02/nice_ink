@@ -12,6 +12,7 @@ class UCameraComponent;
 class UDreamMazeComponent;
 class UInkBodyComponent;
 class UInkCanvasComponent;
+class UNeckStretchComponent;
 class UPoseableMeshComponent;
 class USkeletalMesh;
 
@@ -62,6 +63,11 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UPoseableMeshComponent> BowBody;
 
+	// 轆轤首伸縮脖（2026-07-16 user 定案）：頭身沿手標 seam 真切開，銜接曲面每幀重新
+	// 解出（無材料身分＝素色下無扭曲概念）。掛在 BowBody 下、擺骨完成後顯式更新。
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
+	TObjectPtr<UNeckStretchComponent> NeckStretch;
+
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
 	TObjectPtr<USkeletalMesh> BowMesh;
@@ -85,12 +91,13 @@ public:
 	bool bAsleep = false;
 
 	// --- 甦醒轉頭參數（playtest 域）---
-	// 環繞軌道制（2026-07-16 user 定案，取代視線制）：
-	// 睜眼＝滑鼠左右 = 單一自由度 φ（環繞角）；頭部位置＋朝向＝軌道(φ) 的純函數
-	//（繞脖底切面法線軸剛轉＋量測烘入的抬頭曲線）；相機嚴格＝眉心＋臉朝向（含 roll）。
-	// 「看得到的」≡「臉表達的」≡「旁人讀到的破綻」——視線制的頭頂盲區洩漏由構造封死。
-	// 網格層：脖底切面已真切開（Blender 手術 2026-07-16：斜切面 20°/z1.41、
-	// 雙斷面實心蓋、上殼 Head=1.0 硬權重）——旋轉＝兩剛體沿切面乾淨錯位滑移，零剪切。
+	// 臉指向制（2026-07-16 三改版 user 定案：一維軌道「簡單但難用」→ 2-DOF 直接指向）：
+	// 睜眼＝滑鼠 X/Y 直接操縱「臉指向」的方位/俯仰（FPS 肌肉記憶：滑鼠往哪撥臉朝哪）；
+	// 頭部姿勢＝指向的純函數（yaw∘pitch 構造、零 roll 框架），玩家仍不持有姿勢自由度——
+	// 俯仰域鉗在量測表（每方位最大俯角）、抬升＝頭總旋轉角的純函數（平台制）。
+	// 相機嚴格＝眉心＋臉朝向——「看得到的」≡「臉表達的」≡「旁人讀到的破綻」，
+	// 且指向語義比軌道制更強（把人轉到畫面中央＝刻意動作＝抓現行訊號更鋒利）。
+	// 網格層：頭身沿 user 手標 cut_seam_head 真切開；銜接＝UNeckStretch 每幀生成。
 	// 閉眼＝方向鍵盲瞄照舊（滑鼠仍屬迷宮、骨頭不動、Q 噴射讀相機 yaw）。
 
 	// 閉眼盲瞄低頭上限（僅閉眼瞄準域；睜眼軌道無此參數）
@@ -101,19 +108,26 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "10", ClampMax = "360"))
 	float SleepHeadTurnRate = 75.0f;
 
-	// 睜眼裝睡的廣角 FOV（站姿預設 90）：躺地視點＋貼近的作畫者＝廣角自帶壓迫感；
-	// 過寬（120+）邊緣拉伸開始廉價——質感邊界在 ~105
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "70", ClampMax = "120"))
-	float SleepWakeFov = 102.0f;
+	// 睜眼裝睡 FOV（站姿預設 90）——72＝對視保證強化（user 定案 2026-07-16）：
+	// 水平半角 36°/垂直 ~22°，餘光域比舊 102 砍三成——「看誰」≈「臉對準誰」，
+	// 且找人要多掃視＝轉頭破綻更多。代價（記帳）：廣角壓迫感淡了、貼臉作畫者不再被
+	// 邊緣放大。覆蓋保證以 72 錐重驗（v9 掃描）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "55", ClampMax = "120"))
+	float SleepWakeFov = 72.0f;
 
-	// 軌道抬頭曲線整體倍率（曲線本體＝量測烘入的表，見 SleepOrbitLiftCm；
+	// 抬升整體倍率（規則本體＝量測定案的平台制，見 SleepAimLiftCm；
 	// 此倍率只留給 viewport 口味微調，1.0＝量測原值）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "2"))
 	float SleepOrbitLiftScale = 1.0f;
 
-	// 軌道抬頭量（cm）＝φ 的純函數（逐度數量測探針烘入：頭件/相機不得穿地板、
-	// 不得埋進自己軀幹；量測基準＝仰躺。趴姿以 φ+180 查表近似——未實測，記帳）。
-	float SleepOrbitLiftCm(float PhiDeg) const;
+	// 抬升（cm）＝純函數（量測定案 2026-07-16 v8）：46×max(ss(俯仰/12°), ss((總旋轉−8°)/14°))
+	// ——俯仰立即墊高（下巴一低就要離胸）、純 yaw 給 8° 寬限（枕上小轉頭不升電梯）、
+	// 之後恆高（平台制＝掃視時脖長恆定）。Blender 全網格 BVH 全域 (az,tilt) 網格驗證零洞。
+	float SleepAimLiftCm(float TiltDeg, float TotalRotDeg) const;
+
+	// 每方位最大俯角（度）＝合法域鉗位（量測烘入：零穿透＋地板＋環間淨空；
+	// 腳側 ~100°（下巴/胸極限）、側/頭側 105–130°）。趴姿共用近似（記帳）。
+	static float SleepAimMaxTiltDeg(float AzDeg);
 
 
 
@@ -148,13 +162,17 @@ public:
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_EyesOpen, Category = "Nice Ink")
 	bool bEyesOpen = false;
 
-	// 睡姿頭部姿態＝單一環繞角 φ（複製給其他端擺骨；閉眼不送＝盲瞄不洩漏）。
-	// 各端用同一條軌道（剛轉＋抬頭表）求值＝畫面必然一致；抬頭量不複製（φ 的純函數）。
+	// 睡姿頭部姿態＝臉指向（方位＋俯仰，複製給其他端擺骨；閉眼不送＝盲瞄不洩漏）。
+	// 各端用同一套純函數（yaw∘pitch＋抬升規則）求值＝畫面必然一致；抬升不複製。
+	// 方位語義：180=腳側、0=頭頂側（與量測掃描一致）；俯仰：0=朝天、越大越壓向水平線下。
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
-	float SleepOrbitDeg = 0.0f;
+	float SleepAimAzDeg = 180.0f;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepAimTiltDeg = 0.0f;
 
 	UFUNCTION(Server, Unreliable)
-	void ServerUpdateSleepOrbit(float OrbitDeg);
+	void ServerUpdateSleepAim(float AzDeg, float TiltDeg);
 
 	// 反制工具庫存（迷宮存檔點發放；睜眼即過期——SPEC 定案 #6/#7）。
 	// 只複製給本人：作畫者不該從網路層讀到「受害者拿到技能了」。
@@ -186,6 +204,13 @@ public:
 	// 入睡：鎖移動、閉眼、身體躺到指定位置（仰躺大字，定案 #18）。
 	// 甦醒現身：站回座位、睜眼、恢復移動。
 	void ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform);
+
+	// 入睡/甦醒傳送的本端落地（2026-07-16 bug：server 對 autonomous proxy 的
+	// SetActorTransform 只有位置會被移動修正推回、yaw 是客戶端權威永不修正——
+	// 受害者自己畫面上的身體/相機保持入睡前朝向＝整個世界讀感旋轉、目光契約跨端破裂。
+	// 修=owning client 本地執行同一個傳送，之後上報移動自然帶新朝向）
+	UFUNCTION(Client, Reliable)
+	void ClientSyncPoseTransform(const FTransform& NewTransform);
 
 	// --- 貼臉鎖定 RPC ---
 
@@ -382,7 +407,7 @@ public:
 	void NiMazeStats(int32 NumSeeds, int32 Cup);
 
 	// robo：模擬沉睡受害者的頭控（本地受害者於下一 tick 消化；滑鼠不可注入）。
-	// 睜眼＝Yaw 設環繞角 φ（Pitch 忽略；走真實 ServerUpdateSleepOrbit 鏈）；
+	// 睜眼＝(Yaw,Pitch) 設臉指向 (az,tilt)（走真實 ServerUpdateSleepAim 鏈、tilt 過鉗位）；
 	// 閉眼＝(Twist,Bend) 直設盲瞄狀態（骨不動，驗噴射 yaw）。
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSleepLook(float Yaw, float Pitch);
@@ -439,25 +464,33 @@ private:
 	void PollLeanEnter(APlayerController* PC);
 	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
 
-	// --- 睡姿替身（頭部轉動破綻，2026-07-15；環繞軌道制 2026-07-16）---
-	// 單一頻道：頭部姿勢＝軌道(φ)，相機剛體錨在眉心、朝向＝臉朝向（含 roll）。
+	// --- 睡姿替身（頭部轉動破綻，2026-07-15；臉指向制 2026-07-16 三改版）---
+	// 單一頻道：頭部姿勢＝臉指向(az,tilt) 的純函數，相機剛體錨在眉心、朝向＝臉朝向。
 	// 你看到哪裡＝你的臉指向哪裡＝旁人讀到的破綻，三者恆等式由構造保證。
 	// 一具替身全員可見（含本人）。靜態 Body 只藏不關碰撞——畫墨/噴射 UV 解算照打。
 	bool EnsureBowBodyAsset() { return EnsurePoseableAsset(BowBody); }
 	bool EnsurePoseableAsset(UPoseableMeshComponent* Poseable); // SK 惰性載入＋皮膚 MID 共享
-	void UpdateSleepBodyDouble(float DeltaSeconds); // 每 tick（所有端）：替身開關＋軌道擺骨＋本人相機
+	void UpdateSleepBodyDouble(float DeltaSeconds); // 每 tick（所有端）：替身開關＋指向擺骨＋本人相機
 	bool bSleepDoubleActive = false;
 	float SleepLookSendAccum = 0.0f;    // 姿態上報節流（本人端）
-	float LastSentOrbit = 0.0f;
-	float SleepOrbitLocal = 0.0f;       // 本人端環繞角 φ（睜眼滑鼠 X 累積）
+	float LastSentAimAz = 180.0f;
+	float LastSentAimTilt = 0.0f;
+	float SleepAimAzLocal = 180.0f;     // 本人端臉指向方位（睜眼滑鼠 X 累積；180=腳側）
+	float SleepAimTiltLocal = 0.0f;     // 本人端臉指向俯仰（滑鼠 Y；0=朝天，鉗於量測表）
 	float SleepTwistLocal = 0.0f;       // 閉眼盲瞄扭轉（方向鍵；骨不動只轉隱形相機）
 	float SleepBendLocal = 0.0f;        // 閉眼盲瞄低頭（[0,上限]）
 	bool bHasPendingDebugSleepLook = false; // DebugRoboSleepLook 待消化（本地受害者 tick）
 	FVector2D PendingDebugSleepLook = FVector2D::ZeroVector;
 
-	bool bWakeGazeActive = false;       // 睜眼軌道啟用（FOV 切廣角）
+	bool bWakeGazeActive = false;       // 睜眼指向啟用（FOV 切廣角）
 
-	// 方向鍵盲瞄輪詢（閉眼）＋睜眼滑鼠 X→φ；姿態上報節流
+	// 他端指向顯示平滑（複製 20Hz 節流+無插值＝每包跳格抽動；
+	// 純視覺追趕，本人端零延遲不經此路）
+	float RemoteAimAzDeg = 180.0f;
+	float RemoteAimTiltDeg = 0.0f;
+	bool bRemoteOrbitSnap = true;
+
+	// 方向鍵盲瞄輪詢（閉眼）＋睜眼滑鼠 X/Y→(az,tilt)；姿態上報節流
 	void PollSleepHead(APlayerController* PC, float DeltaSeconds);
 	float SleepKeyHeldTime[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // L/R/U/D 按住時間
 
@@ -466,7 +499,8 @@ private:
 
 	// 睡姿替身姿勢快取（止血：姿態沒變不寫骨——每 tick 歸零重擺=假移動=動態模糊糊臉）
 	bool bSleepPoseDirty = true;
-	float LastPoseOrbit = 1e9f;
+	float LastPoseAz = 1e9f;
+	float LastPoseTilt = 1e9f;
 	bool bLastPoseEyes = false;
 	FTransform SleepNeckRefCS;          // 替身啟用時捕捉的參考姿勢（分析式擺骨用）
 	FTransform SleepHeadRefCS;

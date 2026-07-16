@@ -1,8 +1,9 @@
-# 甦醒環繞軌道測試（2026-07-16 脖底切盤軌道制，取代 robo_sleepgaze_test.py）
-# 驗證：閉眼盲瞄不動骨→睜眼 FOV 102/零代打→φ 經真實 ServerUpdateSleepOrbit 鏈
-#       →相機剛體含 roll 錨眉心→抬頭曲線（φ=180 頭升 >25cm）→他端姿勢一致
-#       →現身 FOV 還原 90；尾聲八方位截圖（號誌/外觀自查）
-# 產出：Saved/robo_orbit_result.txt ＋ Screenshots/orbitv2_phiXXX.png
+# 甦醒臉指向測試 v4（2026-07-16 三改版：滑鼠 X/Y 直接指向 (az,tilt)＋UNeckStretch）
+# 驗證：閉眼盲瞄不動骨/不漏指向→睜眼 FOV 102/零代打/rest 脖子收合隱藏
+#       →(az180,tilt100) 深壓腳側：複製、抬升 46、pitch≈-10、roll≈0、眉心錨、
+#         他端一致、脖子可見→(az0,tilt60) 頭側仰看：抬升 46、pitch≈+30
+#       →tilt 鉗位（要 170 給 100）→現身 FOV 還原；尾聲八方位截圖（aim_azXXX）
+# 產出：Saved/robo_orbit_result.txt
 import ctypes
 import math
 import os
@@ -77,6 +78,10 @@ def cam_loc(char):
 def head_w(char):
     return char.get_editor_property("bow_body").get_bone_location_by_name(
         "Head", unreal.BoneSpaces.WORLD_SPACE)
+
+
+def neck_of(char):
+    return char.get_editor_property("neck_stretch")
 
 
 def focus_editor():
@@ -178,7 +183,7 @@ class Test:
             # 鋪一筆麥克筆讓現身有巡禮可進
             self.server_gm().debug_robo_stroke(
                 unreal.Vector2D(0.45, 0.45), unreal.Vector2D(0.50, 0.47), 2)
-            # --- 閉眼盲瞄迴歸：骨頭不動、φ 不動、相機隱形轉 ---
+            # --- 閉眼盲瞄迴歸：骨頭不動、φ 不動、相機隱形轉、脖子收合 ---
             self.rest_head = head_w(self.victim_local)
             self.cam_yaw_closed0 = cam_rot(self.victim_local).yaw
             self.victim_local.debug_robo_sleep_look(45.0, 20.0)
@@ -190,12 +195,16 @@ class Test:
             dz = abs(h.z - self.rest_head.z)
             self.check("blind-aim keeps bones frozen", dz < 0.5, f"head dz={dz:.2f}")
             sv = self.server_victim()
-            orb = sv.get_editor_property("SleepOrbitDeg")
-            self.check("blind-aim does not leak orbit", abs(orb) < 0.5, f"orbit={orb:.1f}")
+            tl = sv.get_editor_property("SleepAimTiltDeg")
+            self.check("blind-aim does not leak aim", abs(tl) < 0.5, f"tilt={tl:.1f}")
             yaw1 = cam_rot(self.victim_local).yaw
             dyaw = abs(((yaw1 - self.cam_yaw_closed0 + 180.0) % 360.0) - 180.0)
             self.check("blind-aim turns invisible camera", dyaw > 20.0,
                        f"yaw {self.cam_yaw_closed0:.1f}->{yaw1:.1f}")
+            nk = neck_of(self.victim_local)
+            self.check("neck collapsed while asleep-closed",
+                       nk is not None and not nk.is_visible(),
+                       f"vis={nk.is_visible() if nk else 'None'}")
             # 歸零盲瞄再睜眼（殘值不得上骨）
             self.victim_local.debug_robo_sleep_look(0.0, 0.0)
             maze = self.victim_local.get_editor_property("DreamMaze")
@@ -207,73 +216,96 @@ class Test:
             sv = self.server_victim()
             self.check("eyes open (server)", sv.get_editor_property("bEyesOpen") is True)
             fov = cam_of(self.victim_local).get_editor_property("field_of_view")
-            self.check("wake FOV wide 102", abs(fov - 102.0) < 0.5, f"fov={fov}")
-            orb = sv.get_editor_property("SleepOrbitDeg")
+            self.check("wake FOV 72 (gaze contract)", abs(fov - 72.0) < 0.5, f"fov={fov}")
+            tl = sv.get_editor_property("SleepAimTiltDeg")
             h = head_w(self.victim_local)
             self.check("no involuntary pose at wake",
-                       abs(orb) < 0.5 and abs(h.z - self.rest_head.z) < 0.5,
-                       f"orbit={orb:.1f} head dz={h.z - self.rest_head.z:.2f}")
+                       abs(tl) < 0.5 and abs(h.z - self.rest_head.z) < 0.5,
+                       f"tilt={tl:.1f} head dz={h.z - self.rest_head.z:.2f}")
             r = cam_rot(self.victim_local)
             self.check("rest gaze = straight up (pitch 90)", abs(r.pitch - 90.0) < 2.0,
                        f"pitch={r.pitch:.1f}")
-            # φ=90：滾頭側視
-            self.victim_local.debug_robo_sleep_look(90.0, 0.0)
-            self.advance("verify_phi90")
-        elif s == "verify_phi90":
+            nk = neck_of(self.victim_local)
+            self.check("neck hidden at rest (tilt=0, chord~0)",
+                       nk is not None and not nk.is_visible(),
+                       f"vis={nk.is_visible() if nk else 'None'}")
+            # 深壓腳側：az=180、tilt=100（量測域上限）
+            self.victim_local.debug_robo_sleep_look(180.0, 100.0)
+            self.advance("verify_deep")
+        elif s == "verify_deep":
             if self.elapsed() < 1.5:
                 return
             sv = self.server_victim()
-            orb = sv.get_editor_property("SleepOrbitDeg")
-            self.check("orbit replicated to server", abs(orb - 90.0) < 1.0, f"orbit={orb:.1f}")
-            r = cam_rot(self.victim_local)
-            self.check("rigid camera rolls with head (|roll|>45)", abs(r.roll) > 45.0,
-                       f"roll={r.roll:.1f}")
-            # 相機錨眉心：|cam-head| = sqrt(13^2+8^2) = 15.26
+            az = sv.get_editor_property("SleepAimAzDeg")
+            tl = sv.get_editor_property("SleepAimTiltDeg")
+            self.check("aim replicated to server", abs(az - 180.0) < 1.0 and abs(tl - 100.0) < 1.0,
+                       f"az={az:.1f} tilt={tl:.1f}")
             h = head_w(self.victim_local)
+            rise = h.z - self.rest_head.z
+            self.check("lift at deep tilt ~= 46cm (plateau)", abs(rise - 46.0) < 3.0,
+                       f"rise={rise:.1f}")
+            r = cam_rot(self.victim_local)
+            self.check("gaze ~10deg below horizon (tilt=100)", abs(r.pitch + 10.0) < 4.0,
+                       f"pitch={r.pitch:.1f}")
+            self.check("no roll (crown stays up)", abs(r.roll) < 15.0,
+                       f"roll={r.roll:.1f}")
             c = cam_loc(self.victim_local)
             dist = math.sqrt((c.x - h.x) ** 2 + (c.y - h.y) ** 2 + (c.z - h.z) ** 2)
             self.check("camera anchored at brow (15.26cm)", abs(dist - 15.26) < 1.0,
                        f"dist={dist:.2f}")
-            # 他端一致性：server 世界的替身頭骨位置應與受害者本地一致（同軌道求值）
             hs = head_w(self.server_victim())
             dd = math.sqrt((hs.x - h.x) ** 2 + (hs.y - h.y) ** 2 + (hs.z - h.z) ** 2)
-            self.check("other-end pose matches (same track)", dd < 2.0, f"d={dd:.2f}")
-            self.victim_local.debug_robo_sleep_look(180.0, 0.0)
-            self.advance("verify_phi180")
-        elif s == "verify_phi180":
+            self.check("other-end pose matches (same functions)", dd < 2.0, f"d={dd:.2f}")
+            nk = neck_of(self.victim_local)
+            self.check("neck visible when stretched", nk is not None and nk.is_visible())
+            nks = neck_of(self.server_victim())
+            self.check("neck visible on other end too",
+                       nks is not None and nks.is_visible())
+            self.victim_local.debug_robo_sleep_look(0.0, 60.0)
+            self.advance("verify_crown")
+        elif s == "verify_crown":
             if self.elapsed() < 1.5:
                 return
             h = head_w(self.victim_local)
             rise = h.z - self.rest_head.z
-            self.check("lift curve engaged at 180 (rise>25cm)", rise > 25.0,
+            self.check("lift at crown-side ~= 46cm (plateau)", abs(rise - 46.0) < 2.5,
                        f"rise={rise:.1f}")
             r = cam_rot(self.victim_local)
-            self.check("gaze points below horizon at 180", r.pitch < -25.0,
+            self.check("gaze ~30deg above horizon (tilt=60)", abs(r.pitch - 30.0) < 4.0,
                        f"pitch={r.pitch:.1f}")
-            self.victim_local.debug_robo_sleep_look(0.0, 0.0)
+            # 鉗位：要 170 只給量測上限（az180 帶=100）
+            self.victim_local.debug_robo_sleep_look(180.0, 170.0)
+            self.advance("verify_clamp")
+        elif s == "verify_clamp":
+            if self.elapsed() < 1.5:
+                return
+            sv = self.server_victim()
+            tl = sv.get_editor_property("SleepAimTiltDeg")
+            self.check("tilt clamped to measured domain (170->100)", abs(tl - 100.0) < 1.5,
+                       f"tilt={tl:.1f}")
+            self.victim_local.debug_robo_sleep_look(180.0, 0.0)
             focus_editor()
             self.shot_i = 0
             self.shot_sub = "set"
             self.advance("shots")
         elif s == "shots":
             if self.shot_i >= len(SHOT_PHIS):
-                # 現身：FOV 還原
                 self.server_gm().debug_robo_emerge()
                 self.advance("verify_emerge")
                 return
             if self.shot_sub == "set":
-                self.victim_local.debug_robo_sleep_look(float(SHOT_PHIS[self.shot_i]), 0.0)
+                self.victim_local.debug_robo_sleep_look(float(SHOT_PHIS[self.shot_i]), 85.0)
                 self.shot_sub = "wait"
                 self.shot_t = time.monotonic()
             elif self.shot_sub == "wait":
                 if time.monotonic() - self.shot_t >= 1.0:
-                    phi = SHOT_PHIS[self.shot_i]
+                    az = SHOT_PHIS[self.shot_i]
                     sv = self.server_victim()
-                    orb = sv.get_editor_property("SleepOrbitDeg")
+                    saz = sv.get_editor_property("SleepAimAzDeg")
                     hz = head_w(self.victim_local).z
-                    log(f"SHOT phi={phi} server_orbit={orb:.1f} head_z={hz:.1f}")
+                    log(f"SHOT az={az} server_az={saz:.1f} head_z={hz:.1f}")
                     unreal.SystemLibrary.execute_console_command(
-                        self.victim_world, f"HighResShot 1280x720 filename=orbitv2_phi{phi:03d}")
+                        self.victim_world, f"HighResShot 1280x720 filename=aim_az{az:03d}")
                     self.shot_sub = "flush"
                     self.shot_t = time.monotonic()
             elif self.shot_sub == "flush":
@@ -287,6 +319,8 @@ class Test:
             self.check("emerged (asleep false)", sv.get_editor_property("bAsleep") is False)
             fov = cam_of(self.victim_local).get_editor_property("field_of_view")
             self.check("FOV restored 90", abs(fov - 90.0) < 0.5, f"fov={fov}")
+            nk = neck_of(self.victim_local)
+            self.check("neck hidden after emerge", nk is not None and not nk.is_visible())
             self.advance("done")
         elif s == "done":
             log(f"SUMMARY pass={self.pass_count} fail={self.fail_count}")

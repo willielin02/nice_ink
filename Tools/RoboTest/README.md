@@ -31,14 +31,28 @@
   儀器：DebugPlaceAtExitCell（傳送不觸發）＋DebugRoboNavTo（強制導航走真實
   RailNavigate 路徑——robo 無法注入滑鼠/左鍵，自然出場只有這條驗法）。
 
-## 甦醒環繞軌道制（2026-07-16，取代視線制）
+## 甦醒臉指向制＋轆轤首伸縮脖（2026-07-16 三改版，取代 1-DOF 環繞軌道）
 
-- `robo_orbit_test.py`＝脖底切盤 1-DOF 環繞軌道的端到端驗證（16 項）：閉眼盲瞄不動骨/
-  不漏 φ→睜眼零代打＋FOV 102→DebugRoboSleepLook 設 φ（睜眼語義＝Yaw=環繞角、Pitch 忽略；
-  閉眼語義＝盲瞄 twist/bend 不變）→φ 經真實 ServerUpdateSleepOrbit 鏈上 server→
-  相機剛體含 roll、嚴格錨眉心（15.26cm）→他端同軌道求值零誤差→抬頭曲線（φ=180 升 >25cm）
-  →現身 FOV 還原 90；尾聲八方位截圖 orbitv2_phiXXX。受害者 seat0（主機視口可截圖）；
-  結果檔 Saved/robo_orbit_result.txt。（舊 robo_sleepgaze_test.py 隨視線制退役刪除。）
+- `robo_orbit_test.py` v4＝臉指向制端到端驗證（24 項）：閉眼盲瞄不動骨/不漏指向→
+  睜眼零代打＋FOV 72→DebugRoboSleepLook 設臉指向（睜眼語義＝(Yaw,Pitch)=(az,tilt)，
+  az 180=腳側/0=頭頂側、tilt 0=朝天；閉眼語義＝盲瞄 twist/bend 不變）→
+  (az,tilt) 經真實 ServerUpdateSleepAim 鏈上 server（tilt 過量測鉗位表，170 只給 100）→
+  相機嚴格錨眉心（15.26cm）＋臉朝向、roll≈0→他端同純函數求值零誤差→
+  抬升平台制（深壓/仰看皆 46cm 恆高）→脖子（UNeckStretch）rest 收合隱藏/伸長可見→
+  現身 FOV 還原 90；尾聲八方位截圖 aim_azXXX（tilt 85）。結果檔 Saved/robo_orbit_result.txt。
+- `robo_seat1_sync_test.py`＝受害者=client 的跨端一致性＋對視鏈迴歸（11 項）：
+  入睡/回座 actor yaw 兩端一致（server 對 autonomous proxy 的傳送 yaw 永不推回
+  owning client——ClientSyncPoseTransform 修的那隻 bug 的迴歸籠）＋頭骨「旋轉」三方
+  一致（頭骨原點=旋轉樞軸、位置檢查對方位不敏感＝舊測試盲區）＋複製值逐位一致＋
+  幾何反解 (az,tilt) 對準真實玩家（相機前向誤差 <6°＝對視鏈終極驗證）。
+- `robo_neck_observer.py`＝伸縮脖外觀截圖（seat1＝主機視窗當旁觀機位、拍真複製鏈
+  外觀）：(az,tilt) 陣列 × side/close 兩機位，neckobs_azXXX_tXXX_*.png。
+- `robo_neck_probe.py`＝脖管幾何診斷（GetDebugSummary 現場數字＋DumpNeckMesh CSV
+  傾印＋A/B 隱藏對照截圖）。
 - 陷阱補充：CameraComponent 世界旋轉 python 沒有 get_component_rotation——
   用 get_socket_rotation("None")；PC 取 pawn＝get_controlled_pawn()；
   debug_robo_emerge() 無參數；set_actor_location 只吃 3 參數。
+- **GUI 編輯器崩潰後殘留 Saved/Autosaves/PackageRestoreData.json＝下次啟動被
+  Restore 對話框擋死（StartupScripts 永不執行、log 死寂）**——robo 啟動前清 Autosaves。
+- ini 的 StartupScripts 行用「git checkout 還原再 Add-Content」換腳本——直接 replace
+  容易疊行（腳本會跑兩份互咬）。
