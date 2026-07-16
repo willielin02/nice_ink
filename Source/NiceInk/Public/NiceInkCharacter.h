@@ -85,34 +85,66 @@ public:
 	bool bAsleep = false;
 
 	// --- 甦醒轉頭參數（playtest 域）---
-	// 操作制（2026-07-15 user 終版定案）：方向鍵分軸控制——左右＝扭轉、下＝低頭、
-	// 上＝撤回低頭（不仰頭）；單擊 1°、按住連發；滑鼠永久屬於迷宮游標。
-	// 貓頭鷹扭轉上限：順/逆各 270°（user 定值：再多脖子形變撐不住）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "90", ClampMax = "360"))
-	float SleepTwistMaxDeg = 270.0f;
+	// 操作制（2026-07-16 user 定案：眉心相機＋廣角＋姿勢不交給玩家）：
+	// 睜眼＝滑鼠直接操縱「視線」（世界空間，去 roll、廣角）——迷宮結束已釋放滑鼠；
+	// 頭部姿勢（貓頭鷹扭轉/低頭/微抬頭）與瞳孔方向由系統按視線自動解算＝
+	// 「看」的工作歸相機、「被看的破綻」歸臉，玩家零姿勢操作。
+	// 閉眼＝方向鍵盲瞄照舊（滑鼠仍屬迷宮、骨頭不動、Q 噴射讀相機 yaw）。
+	// 貓頭鷹扭轉＝360° 自由（2026-07-16 user 定案「脖底切盤」：從脖子底部一個
+	// 與脊椎垂直的面切開、頭沿脊椎軸自由轉——舊 ±270 上限取消；扭轉全額給
+	// 脖＋頭整體剛轉（TwistShare 1.0），皮膚剪切集中在脖底切面一圈）。
 
 	// 低頭上限（0=安睡朝向；域 [0,上限]＝天生不可能向後仰進枕頭）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "150"))
 	float SleepBendMaxDeg = 110.0f;
 
-	// 按住連發的角速度（度/秒）；單擊固定 1°
+	// 按住連發的角速度（度/秒）；單擊固定 1°（閉眼盲瞄專用——睜眼改滑鼠視線）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "10", ClampMax = "360"))
 	float SleepHeadTurnRate = 75.0f;
+
+	// 視線死區（度）：視線與臉方向差在此錐內＝頭不動、只動瞳孔（最安靜的偷瞄檔）；
+	// 超出＝頭開始追趕視線（滾頭檔）。強度分級＝破綻分級，零規則自然湧現。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "45"))
+	float SleepEyeConeDeg = 12.0f;
+
+	// 頭追趕視線的角速度（度/秒）。快而線性＝機械感硬轉（美術語言：突兀即目標）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "30", ClampMax = "720"))
+	float SleepHeadChaseRate = 280.0f;
+
+	// 睜眼裝睡的廣角 FOV（站姿預設 90）：躺地視點＋貼近的作畫者＝廣角自帶壓迫感；
+	// 過寬（120+）邊緣拉伸開始廉價——質感邊界在 ~105
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "70", ClampMax = "120"))
+	float SleepWakeFov = 102.0f;
+
+	// 瞳孔可表達的最大偏角（度）：視線與臉的殘差交給眼珠（貼圖變體顯示，資料先行）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "10", ClampMax = "60"))
+	float SleepPupilMaxDeg = 35.0f;
 
 	// 頸骨前/後彎上限：頸骨支點在脖根＝彎多少頭就沿弧抬多高（伸脖本體）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "80"))
 	float SleepNeckBendCapDeg = 50.0f;
 
-	// 頸骨的扭轉分擔比：把貓頭鷹的皮膚剪切攤開在整段脖子（0=全在頭頸交界）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "0.5"))
-	float SleepNeckTwistShare = 0.25f;
+	// 頸骨的扭轉分擔比：1.0＝脖＋頭整體剛轉（脖底切盤，user 定案）——剪切
+	// 集中在脖底一圈（頸-軀幹權重過渡帶）；調低＝把剪切攤回脖身（舊制）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "1"))
+	float SleepNeckTwistShare = 1.0f;
 
-	// 伸脖額外量（cm，隨彎角比例給）：轆轤首檔（2026-07-16 user 解禁拉伸量：
-	// 「我想要玩家在醒來後的頭可以拉長」）——48cm＝相機站上肚頂（z85）之上、
-	// 視線過水平線俯視自己的肚皮與腳邊；力學模型維持脖根捲曲弧（user 定案），
-	// 軀幹凍結＝畫布不動＝shift 偵測經濟不破。穿膜由姿勢層眉護束飽和擋死。
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "80"))
-	float SleepNeckMaxStretch = 72.0f;
+	// 微抬頭上限（cm）：抬頭量＝低頭角的純函數（20° 起步、60° 拿滿，見
+	// SleepLiftForBend）。36＝訊號高度需求（2026-07-16 user 回報：18 在甦醒者
+	// 第一人稱看似夠高、他人視角實際不夠——肚子作畫者 Shift 偷瞄必須看得到
+	// 受害者的臉越過肚頂線，對視契約才雙向成立；36 axial ≈ 臉到 z55+，蓋過
+	// 低腹作畫視線的幾何門檻 z≈40）。沿彎折後頸軸平移（頸根 0.3、頭骨全額）。
+	// 【勿回退】lift 不得做成回饋進護束的獨立狀態——護束對 lift 非單調＝極限環
+	//（探針實錄 lift 0/10/13 → allowed 65/34/26）；飽和器的輸入不能是飽和結果的函數。
+	// 頭離地＝全房遠處可見＝最兇的凝視自帶最大聲的破綻（強度計價，零規則）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|SleepLook", meta = (ClampMin = "0", ClampMax = "60"))
+	float SleepHeadLiftMaxCm = 36.0f;
+
+	// 抬頭量曲線（單一真相：march 護束、擺骨、瞳孔計算全用同一條）
+	float SleepLiftForBend(float BendDeg) const
+	{
+		return SleepHeadLiftMaxCm * FMath::Clamp((BendDeg - 20.0f) / 40.0f, 0.0f, 1.0f);
+	}
 
 
 
@@ -148,16 +180,27 @@ public:
 	bool bEyesOpen = false;
 
 	// 睡姿頭部姿態（複製給其他端擺骨；閉眼不送＝盲瞄不洩漏）。
-	// Twist＝繞脊椎軸的貓頭鷹扭轉（±SleepTwistMaxDeg）；Bend＝低頭量（≥0，繞當前臉的耳軸）。
-	// 兩者完整決定臉方向；輸入即狀態（方向鍵分軸）——無任何方向反解/分支/纏繞機器。
+	// Twist＝繞脊椎軸的貓頭鷹扭轉（360° 自由，脖底切盤）；Bend＝低頭量（≥0，繞當前臉的耳軸）；
+	// Lift＝微抬頭平移量（cm，沿彎折後頸軸）；Pupil＝視線相對臉的殘差角（貼圖顯示用，
+	// 資料先行）。姿態由本人端視線解算器產出（座標下降追趕——display-only，解錯最多
+	// 是臉慢半拍，相機恆＝視線不受影響；v1-v6 反解機器之死因＝相機綁在解出的姿勢上）。
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
 	float SleepTwistDeg = 0.0f;
 
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
 	float SleepBendDeg = 0.0f;
 
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepLiftCm = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepPupilYawDeg = 0.0f;
+
+	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink")
+	float SleepPupilPitchDeg = 0.0f;
+
 	UFUNCTION(Server, Unreliable)
-	void ServerUpdateSleepLook(float TwistDeg, float BendDownDeg);
+	void ServerUpdateSleepLook(float TwistDeg, float BendDownDeg, float LiftCm, float PupilYawDeg, float PupilPitchDeg);
 
 	// 反制工具庫存（迷宮存檔點發放；睜眼即過期——SPEC 定案 #6/#7）。
 	// 只複製給本人：作畫者不該從網路層讀到「受害者拿到技能了」。
@@ -384,8 +427,9 @@ public:
 	UFUNCTION(Exec)
 	void NiMazeStats(int32 NumSeeds, int32 Cup);
 
-	// robo：模擬沉睡受害者轉頭（本地受害者於下一 tick 消化＝設相機視線＋走真實
-	// ServerUpdateSleepLook RPC 鏈——頭轉破綻的端到端驗法；滑鼠不可注入）
+	// robo：模擬沉睡受害者的注視（本地受害者於下一 tick 消化；滑鼠不可注入）。
+	// 睜眼＝(Yaw,Pitch) 設世界空間視線（追趕解算器收斂後走真實 ServerUpdateSleepLook 鏈）；
+	// 閉眼＝(Twist,Bend) 直設盲瞄狀態（骨不動，驗噴射 yaw）。
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSleepLook(float Yaw, float Pitch);
 
@@ -441,30 +485,49 @@ private:
 	void PollLeanEnter(APlayerController* PC);
 	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
 
-	// --- 睡姿替身（頭部轉動破綻，2026-07-15）---
-	// lean-lock 同構：一具替身全員可見（含本人）、姿勢是唯一真相、
-	// 本人相機放在眉間騎著頭骨（轉視野＝轉頭、視野恆與臉同向、自己的頭在鏡頭後）。
+	// --- 睡姿替身（頭部轉動破綻，2026-07-15；視線制改版 2026-07-16）---
+	// 兩個頻道：相機＝情報（眉心錨點、朝向＝滑鼠視線、去 roll、廣角）；
+	// 臉＝訊號（頭骨追趕視線的貓頭鷹/低頭/微抬頭＋瞳孔殘差——作畫者付 Shift 讀到的
+	// 東西恆為受害者真實的注意力方向）。一具替身全員可見（含本人）。
 	// 靜態 Body 只藏不關碰撞——畫墨/噴射的 UV 解算照打靜態網格。
 	bool EnsureBowBodyAsset() { return EnsurePoseableAsset(BowBody); }
 	bool EnsurePoseableAsset(UPoseableMeshComponent* Poseable); // SK 惰性載入＋皮膚 MID 共享
-	void UpdateSleepBodyDouble();       // 每 tick（所有端）：替身開關＋擺頭骨＋本人相機騎頭
+	void UpdateSleepBodyDouble(float DeltaSeconds); // 每 tick（所有端）：替身開關＋視線追趕＋擺頭骨＋本人相機
 	bool bSleepDoubleActive = false;
 	float SleepLookSendAccum = 0.0f;    // 姿態上報節流（本人端）
 	float LastSentSleepTwist = 0.0f;
 	float LastSentSleepBend = 0.0f;
-	float SleepTwistLocal = 0.0f;       // 本人端扭轉狀態（方向鍵直加、±上限 clamp）
+	float LastSentSleepLift = 0.0f;
+	float LastSentPupilYaw = 0.0f;
+	float LastSentPupilPitch = 0.0f;
+	float SleepTwistLocal = 0.0f;       // 本人端扭轉狀態（視線解算器寫入；閉眼＝方向鍵盲瞄）
 	float SleepBendLocal = 0.0f;        // 本人端低頭狀態（[0,上限]）
+	float SleepLiftLocal = 0.0f;        // 本人端微抬頭（cm）
+	float PupilYawLocal = 0.0f;         // 視線相對臉的殘差角（±SleepPupilMaxDeg）
+	float PupilPitchLocal = 0.0f;
 	bool bHasPendingDebugSleepLook = false; // DebugRoboSleepLook 待消化（本地受害者 tick）
 	FVector2D PendingDebugSleepLook = FVector2D::ZeroVector;
 
-	// 方向鍵轉頭輪詢：單擊 1°、按住 0.25s 後以 SleepHeadTurnRate 連發、斜向可同按
+	// 睜眼視線（世界空間；滑鼠累積）。啟用時初始化＝安睡臉朝向、FOV 切廣角。
+	float SleepGazeYawW = 0.0f;
+	float SleepGazePitchW = 0.0f;
+	bool bWakeGazeActive = false;
+	bool bSleepHeadChasing = false;     // 死區遲滯（進 12° 出 3°，防邊界抖動）
+
+	// 方向鍵盲瞄輪詢（閉眼）＋睜眼滑鼠視線輸入；姿態上報節流
 	void PollSleepHead(APlayerController* PC, float DeltaSeconds);
 	float SleepKeyHeldTime[4] = { 0.0f, 0.0f, 0.0f, 0.0f }; // L/R/U/D 按住時間
+
+	// 視線追趕解算（本人端、睜眼）：座標下降一步＋眉護束飽和＋抬頭檔＋瞳孔殘差
+	void ChaseSleepGaze(float DeltaSeconds, const FTransform& CompT);
+	void ActivateWakeGaze(const FTransform& CompT);
+	void DeactivateWakeGaze();
 
 	// 睡姿替身姿勢快取（止血：姿態沒變不寫骨——每 tick 歸零重擺=假移動=動態模糊糊臉）
 	bool bSleepPoseDirty = true;
 	float LastPoseTwist = 1e9f;
 	float LastPoseBend = 1e9f;
+	float LastPoseLift = 1e9f;
 	bool bLastPoseEyes = false;
 	FTransform SleepNeckRefCS;          // 替身啟用時捕捉的參考姿勢（分析式擺骨用）
 	FTransform SleepHeadRefCS;

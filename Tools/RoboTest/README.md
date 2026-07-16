@@ -30,3 +30,13 @@
   ＝永遠卡死）；期望 VERDICT: EXITED。跑前把腳本裡 OUT 路徑改到可寫位置。
   儀器：DebugPlaceAtExitCell（傳送不觸發）＋DebugRoboNavTo（強制導航走真實
   RailNavigate 路徑——robo 無法注入滑鼠/左鍵，自然出場只有這條驗法）。
+
+## 甦醒視線制（2026-07-16）
+
+- `robo_sleepgaze_test.py`＝眉心廣角視線制的端到端驗證（22 項）：睜眼→零假破綻→FOV 102→
+  DebugRoboSleepLook 設世界視線（睜眼語義＝視線 yaw/pitch；閉眼語義＝盲瞄 twist/bend）
+  →相機朝向=視線且 roll=0→頭部姿態追趕經真實 ServerUpdateSleepLook 鏈上 server
+  →演出性微抬頭（看自己肚子）→翻身趴姿抬頭檔→現身 FOV 還原 90。
+  受害者 seat1（RPC 走真網路）；結果檔 Saved/robo_sleepgaze_result.txt。
+- 陷阱補充：CameraComponent 世界旋轉 python 沒有 get_component_rotation——
+  用 get_socket_rotation("None")；PC 取 pawn＝get_controlled_pawn()。
