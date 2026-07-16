@@ -241,7 +241,7 @@ void ANiceInkHUD::DrawHUD()
 	else if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
 	{
 		// 無聲甦醒中：實景視野；提示只給受害者本人
-		DrawBottomHint(TEXT("eyes open — arrows turn your head · WASD stands you up & ends the drawing"), NiHudColor::Amber);
+		DrawBottomHint(TEXT("eyes open — mouse turns your head · WASD stands you up & ends the drawing"), NiHudColor::Amber);
 	}
 	else if (bDrawingArtist)
 	{
