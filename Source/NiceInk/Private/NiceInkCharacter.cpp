@@ -4,6 +4,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PoseableMeshComponent.h"
+#include "DrawPoseData.h"
 #include "DreamMazeComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -233,6 +234,19 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
 	UpdateWalkAnim(DeltaSeconds);        // 所有端：站立移動的程式化步伐
+
+	// 偷瞄中受害者的真頭會動（甦醒升降/掃視/裝睡收回）——目標移動就重擺姿勢（所有端；
+	// 姿態沒變不寫骨，同睡姿替身的止血原則）
+	if (bLeanLocked && bPeeking)
+	{
+		const FVector FaceT = GetLeanFaceTargetWorld();
+		if (!FaceT.Equals(LastPeekFaceTarget, 2.0f))
+		{
+			LastPeekFaceTarget = FaceT;
+			ApplyBowPose();
+		}
+	}
+
 	UpdateLeanArm();                     // 所有端：貼臉鎖定的握筆右臂（跟著實體筆）
 
 	// 伸縮脖：所有擺骨完成後解銜接曲面（顯式順序；lean-lock 事件驅動的擺骨
@@ -364,8 +378,17 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 		UpdateLeanCamera(PC);
 		return;
 	}
-	bLeanCamActive = false;
-	bPeekCamApplied = false;
+	if (bLeanCamActive)
+	{
+		bLeanCamActive = false;
+		// 鎖定期間本體相機被世界寫入接管，相對變換已亂——還原站姿掛點（硬切）。
+		// 睡姿例外：ApplySleepVisual 擁有沉睡的相機掛點，別蓋。
+		if (!bAsleep && FirstPersonCamera)
+		{
+			FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f)); // 與建構子一致（sumo 眼高）
+			FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+		}
+	}
 
 	const bool bIsVictim = GetInkAuthorId() == GS->VictimPlayerId;
 	int32 FocusWork = INDEX_NONE;
@@ -910,8 +933,8 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 偷瞄：按住 Shift，鬆開彈回（頭頸硬轉，全房可見）
-	const bool bWantsPeek = PC->IsInputKeyDown(EKeys::LeftShift);
+	// 偷瞄：按住 Shift，鬆開彈回（頭頸硬轉，全房可見）；robo 輸入源 OR（同裝睡模式）
+	const bool bWantsPeek = PC->IsInputKeyDown(EKeys::LeftShift) || bDebugPeekHeld;
 	if (bWantsPeek != bPeeking)
 	{
 		StopPaintingLocal();
@@ -1588,13 +1611,23 @@ void ANiceInkCharacter::OnRep_Peeking()
 
 FVector ANiceInkCharacter::GetLeanFaceTargetWorld() const
 {
-	// 受害者的頭（偷瞄注視點）：sumo 腳底原點、頭在本地 +Z ~152、臉朝 +Y（UE 匯入後）
+	// 受害者的頭（偷瞄注視點）——旗艦畫面的注視真相：
+	// 睡姿替身活著＝真頭在替身骨上（甦醒升起 46cm、任意方位、裝睡收回全反映在這裡），
+	// 注視點必須追替身頭骨，否則鏡頭對著枕頭上的空位（2026-07-17 診斷實錘）。
 	const ANiceInkCharacter* Target = LeanTarget.Get();
-	if (Target && Target->Body)
+	if (Target)
 	{
-		return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 152.0f));
+		if (Target->bSleepDoubleActive && Target->BowBody && Target->BowBody->GetSkinnedAsset())
+		{
+			return Target->BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
+		}
+		if (Target->Body)
+		{
+			// 替身未啟用的退路：靜態身體的標稱頭錨（腳底原點、頭本地 +Z ~152、臉朝 +Y）
+			return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 152.0f));
+		}
 	}
-	return LeanPoint;
+	return FVector(LeanPoint);
 }
 
 namespace
@@ -1662,6 +1695,149 @@ void ANiceInkCharacter::DebugRoboFeignSleep(bool bFeign)
 	bDebugFeignHeld = bFeign;
 }
 
+void ANiceInkCharacter::DebugRoboPeekHold(bool bHold)
+{
+	// 作畫偷瞄的 robo 輸入源：與真 Shift OR、由 PollLockedDraw 的同一條 edge 消化
+	bDebugPeekHeld = bHold;
+}
+
+bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal)
+{
+	if (!Target || !GetWorld())
+	{
+		return false;
+	}
+	const FVector N = Normal.GetSafeNormal();
+	FCollisionQueryParams QP(SCENE_QUERY_STAT(NiceInkRoboLean), /*bInTraceComplex=*/true);
+	QP.AddIgnoredActor(this);
+	FHitResult Hit;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Anchor + N * 150.0f, Anchor - N * 80.0f, ECC_Visibility, QP) ||
+		Hit.GetActor() != Target)
+	{
+		return false;
+	}
+	// ServerEnterLean 的 420cm 距離守衛：先站到點旁（robo 專用便利，不影響真流程）
+	if (FVector::Dist2D(GetActorLocation(), Hit.ImpactPoint) > 300.0f)
+	{
+		SetActorLocation(FVector(Hit.ImpactPoint.X + 120.0f, Hit.ImpactPoint.Y, GetActorLocation().Z),
+			false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	ServerEnterLean(Target, Hit.ImpactPoint, Hit.ImpactNormal);
+	return true;
+}
+
+void ANiceInkCharacter::ResetBowBodyBones()
+{
+	// 基底骨集合全重置（回 SK rest）。只重置 Spine/Neck/Head 會讓蹲姿/手臂殘留
+	// 漏進下一個使用者（睡姿替身）——重置不經 CS 換算，無快取依賴，單次 refresh 收尾。
+	if (!BowBody || !BowBody->GetSkinnedAsset())
+	{
+		return;
+	}
+	for (const FDrawPoseBoneCS& B : GDrawPoseCS)
+	{
+		BowBody->ResetBoneTransformByName(FName(B.BoneName));
+	}
+	BowBody->RefreshBoneTransforms();
+}
+
+void ANiceInkCharacter::ApplyDrawBasePose()
+{
+	// 蹲踞作畫基底＝「關節位置」重定向（2026-07-17 r2）。
+	// r1 教訓：Blender 匯出的絕對旋轉跨不過 FBX 匯入的每骨軸向重映射（位置=全域鏡射可搬、
+	// 旋轉=每骨慣例不可搬）——直寫旋轉讓蒙皮攤成煎餅、關節位置卻全對（數值全綠、畫面全毀）。
+	// 正解：只信位置。每骨施最小 swing（現況子骨方向→目標子骨方向、twist 保持 rest），
+	// Hips 位置直設＋雙約束（脊椎方向＋跨髖軸）鎖 twist——全程用引擎自己的骨骼框架。
+	static TMap<FName, FVector> TargetCS;
+	if (TargetCS.Num() == 0)
+	{
+		for (const FDrawPoseBoneCS& B : GDrawPoseCS)
+		{
+			TargetCS.Add(FName(B.BoneName), B.T);
+		}
+	}
+
+	const FTransform CompT = BowBody->GetComponentTransform();
+	auto TargetW = [&](const FName& Bone) { return CompT.TransformPosition(TargetCS[Bone]); };
+	auto BoneW = [&](const FName& Bone) {
+		return BowBody->GetBoneTransformByName(Bone, EBoneSpaces::WorldSpace).GetLocation();
+	};
+	auto HasBone = [&](const TCHAR* Bone) { return BowBody->GetBoneIndex(FName(Bone)) != INDEX_NONE; };
+	for (const TCHAR* Required : { TEXT("Hips"), TEXT("Spine"), TEXT("LeftUpLeg"), TEXT("RightUpLeg") })
+	{
+		if (!HasBone(Required))
+		{
+			return; // 骨架缺骨＝安靜跳過（姿勢不演，機制照跑）
+		}
+	}
+
+	// --- Hips：位置直設＋雙約束旋轉（Spine 方向對齊＋左右髖軸扭轉對齊）---
+	{
+		const FVector HipsCur = BoneW(TEXT("Hips"));
+		const FVector HipsTgt = TargetW(TEXT("Hips"));
+		const FVector SpineCur = (BoneW(TEXT("Spine")) - HipsCur).GetSafeNormal();
+		const FVector SpineTgt = (TargetW(TEXT("Spine")) - HipsTgt).GetSafeNormal();
+		FQuat Q1 = FQuat::FindBetweenNormals(SpineCur, SpineTgt);
+		const FVector LegAxisCur = Q1.RotateVector(
+			(BoneW(TEXT("LeftUpLeg")) - BoneW(TEXT("RightUpLeg"))).GetSafeNormal());
+		FVector LegAxisTgt = (TargetW(TEXT("LeftUpLeg")) - TargetW(TEXT("RightUpLeg"))).GetSafeNormal();
+		FVector A = LegAxisCur - FVector::DotProduct(LegAxisCur, SpineTgt) * SpineTgt;
+		FVector B = LegAxisTgt - FVector::DotProduct(LegAxisTgt, SpineTgt) * SpineTgt;
+		if (A.Normalize() && B.Normalize())
+		{
+			const float Twist = FMath::Atan2(
+				FVector::DotProduct(FVector::CrossProduct(A, B), SpineTgt), FVector::DotProduct(A, B));
+			Q1 = FQuat(SpineTgt, Twist) * Q1;
+		}
+		FTransform HipsT = BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace);
+		HipsT.SetRotation(Q1 * HipsT.GetRotation());
+		HipsT.SetLocation(HipsTgt);
+		BowBody->SetBoneTransformByName(TEXT("Hips"), HipsT, EBoneSpaces::WorldSpace);
+		BowBody->RefreshBoneTransforms();
+	}
+
+	// --- 鏈骨最小 swing（root→leaf；每骨寫→讀之間 refresh＝poseable 快取陷阱）---
+	static const TCHAR* Chain[][2] = {
+		{ TEXT("Spine"), TEXT("Spine1") },
+		{ TEXT("Spine1"), TEXT("Neck") },
+		{ TEXT("Neck"), TEXT("Head") },
+		{ TEXT("LeftShoulder"), TEXT("LeftArm") },
+		{ TEXT("LeftArm"), TEXT("LeftForeArm") },
+		{ TEXT("LeftForeArm"), TEXT("LeftHand") },
+		{ TEXT("RightShoulder"), TEXT("RightArm") },
+		{ TEXT("RightArm"), TEXT("RightForeArm") },
+		{ TEXT("RightForeArm"), TEXT("RightHand") },
+		{ TEXT("LeftUpLeg"), TEXT("LeftLeg") },
+		{ TEXT("LeftLeg"), TEXT("LeftFoot") },
+		{ TEXT("LeftFoot"), TEXT("LeftToeBase") },
+		{ TEXT("RightUpLeg"), TEXT("RightLeg") },
+		{ TEXT("RightLeg"), TEXT("RightFoot") },
+		{ TEXT("RightFoot"), TEXT("RightToeBase") },
+	};
+	for (const auto& Pair : Chain)
+	{
+		const FName Bone(Pair[0]);
+		const FName Child(Pair[1]);
+		if (BowBody->GetBoneIndex(Bone) == INDEX_NONE || BowBody->GetBoneIndex(Child) == INDEX_NONE ||
+			!TargetCS.Contains(Bone) || !TargetCS.Contains(Child))
+		{
+			continue;
+		}
+		const FVector BCur = BoneW(Bone);
+		const FVector CurDir = (BoneW(Child) - BCur).GetSafeNormal();
+		const FVector TgtDir = (TargetW(Child) - TargetW(Bone)).GetSafeNormal();
+		if (CurDir.IsNearlyZero() || TgtDir.IsNearlyZero())
+		{
+			continue;
+		}
+		const FQuat Q = FQuat::FindBetweenNormals(CurDir, TgtDir);
+		FTransform T = BowBody->GetBoneTransformByName(Bone, EBoneSpaces::WorldSpace);
+		T.SetRotation(Q * T.GetRotation());
+		BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::WorldSpace);
+		BowBody->RefreshBoneTransforms();
+	}
+}
+
 void ANiceInkCharacter::ApplyBowPose()
 {
 	if (!BowBody)
@@ -1686,15 +1862,21 @@ void ANiceInkCharacter::ApplyBowPose()
 	// UPoseableMeshComponent 的 CS 快取要等 tick 才重算——每次「寫姿勢→讀骨骼」之間
 	// 都必須 RefreshBoneTransforms()，否則讀到上一幀的舊姿勢（65.9cm 誤差的元凶）。
 	BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
-	BowBody->ResetBoneTransformByName(TEXT("Spine"));
-	BowBody->ResetBoneTransformByName(TEXT("Neck"));
-	BowBody->ResetBoneTransformByName(TEXT("Head"));
-	BowBody->RefreshBoneTransforms();
+	ResetBowBodyBones();
+
+	// 臉方向的參考：rest 時臉＝元件 +Y（sumo 匯入慣例）。之後任何擺骨後的臉向
+	// ＝（當下頭骨 CS 旋轉 × rest 旋轉⁻¹）作用在 +Y 上——與擺了什麼無關，讀骨即得。
+	const FQuat HeadRestCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
+
+	// 基底＝蹲踞（2026-07-17 改制，user 手擺 DrawPose）：躺姿受害者全身落筆點的
+	// 頭高需求 25~105cm，蹲姿直立頭高 147cm 全蓋掉，且每個目標的前彎需求比站姿
+	// 少 15~40°——站姿對低位目標的「可達」是補位滑移造假出來的（腳埋地板）。
+	ApplyDrawBasePose();
 
 	const FTransform CompT = BowBody->GetComponentTransform();
 	const FVector BendAxisW = CompT.TransformVectorNoScale(FVector(1, 0, 0)).GetSafeNormal(); // 元件 X＝彎折軸
 
-	// --- Spine：解算單一硬彎角，讓「頭骨」真的抵達落筆點上方 ---
+	// --- 前彎解算：讓「頭骨」真的抵達落筆點上方 ---
 	// 目標：頭骨到 LeanPoint + 法線 × 22cm（臉貼著畫，重度近視式）
 	const FVector SpinePivot = BowBody->GetBoneTransformByName(TEXT("Spine"), EBoneSpaces::WorldSpace).GetLocation();
 	const FVector Head0 = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
@@ -1713,41 +1895,58 @@ void ANiceInkCharacter::ApplyBowPose()
 		SpineRad = FMath::Atan2(FVector::DotProduct(FVector::CrossProduct(An, Bn), BendAxisW), FVector::DotProduct(An, Bn));
 	}
 	SpineRad = FMath::Clamp(SpineRad, FMath::DegreesToRadians(-115.0f), FMath::DegreesToRadians(115.0f));
-	RotateBoneCS(BowBody, TEXT("Spine"), FQuat(FVector(1, 0, 0), SpineRad));
+
+	// 偷瞄＝先抬起來再看（2026-07-17 改制）：穿膜要修在姿勢層不是相機層——頭真的
+	// 升高，越過肚山看臉，相機照舊長在頭骨上；第三人稱破綻順勢變大聲（頭彈起來，
+	// 全房可見＝SPEC 本意）。上限 45°＝保留一點前傾（不是起身；腿仍蹲踞）。
+	if (bPeeking)
+	{
+		SpineRad = FMath::Clamp(SpineRad, FMath::DegreesToRadians(-45.0f), FMath::DegreesToRadians(45.0f));
+	}
+
+	// 彎角分攤 Spine/Spine1 各半：單骨 90°+ 的 LBS 直接摺爆肚子（第三人稱三病之三）；
+	// 每骨角度減半，蒙皮崩壞超線性下降。頭端殘差由補位滑移收斂（維持落點精確）。
+	RotateBoneCS(BowBody, TEXT("Spine"), FQuat(FVector(1, 0, 0), SpineRad * 0.5f));
+	BowBody->RefreshBoneTransforms();
+	RotateBoneCS(BowBody, TEXT("Spine1"), FQuat(FVector(1, 0, 0), SpineRad * 0.5f));
 	BowBody->RefreshBoneTransforms();
 
-	// 彎腰半徑不足以抵達 HeadTarget 時，整個 BowBody 補位湊過去（上半身探出去的誇張感）
+	// 彎腰半徑不足以抵達 HeadTarget 時，整個 BowBody 補位湊過去（上半身探出去的誇張感）。
+	// 偷瞄不補位：頭回到自己身體上方＝「坐起來看」，下一 tick 恢復作畫時再滑回。
+	if (!bPeeking)
 	{
 		const FVector HeadAfterSpine = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
 		const FVector Gap = HeadTarget - HeadAfterSpine;
 		BowBody->AddWorldOffset(Gap);
+		BowBody->RefreshBoneTransforms();
 	}
 
-	// --- 偷瞄（Shift）＝頭自由硬轉向受害者的臉（轆轤首制 2026-07-16 二波：頭身間由
-	// 每幀生成的脖子銜接，頭部相對運動不再有切口約束——舊「繞切盤軸投影」退役）。
+	// --- 臉 aim（頭頸硬轉，Neck+Head 繞頭骨樞軸）---
+	// 作畫＝臉對準落筆點（埋頭盯筆尖；恢復「你看的方向≡臉表達的方向」——相機在
+	// UpdateLeanCamera 同樣朝落筆點，第一/第三人稱不再脫鉤。pose-true batch 舊解，
+	// 轆轤首改制時遺失，2026-07-17 修回）；偷瞄＝臉對準受害者的真頭。
 	// 美術語言＝程式化硬轉；上限 95°（貓頭鷹護欄，貼上限硬轉不平滑）。
-	// 作畫時頭仍隨脊椎彎折自然朝下（埋頭式；鏡頭由 UpdateLeanCamera 對準墨點）。
-	if (bPeeking)
 	{
-		const FQuat SpineQ(FVector(1, 0, 0), SpineRad);
-		const FVector FaceDirCS = SpineQ.RotateVector(FVector(0, 1, 0));
+		const FVector AimTargetW = bPeeking ? GetLeanFaceTargetWorld() : FVector(LeanPoint);
 		const FVector HeadPosNow = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
+		const FQuat HeadNowCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
+		const FVector FaceDirCS = (HeadNowCSQ * HeadRestCSQ.Inverse()).RotateVector(FVector(0, 1, 0));
 		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(
-			(GetLeanFaceTargetWorld() - HeadPosNow).GetSafeNormal());
+			(AimTargetW - HeadPosNow).GetSafeNormal());
 		if (!FaceDirCS.IsNearlyZero() && !DesiredCS.IsNearlyZero())
 		{
-			FQuat PeekQ = FQuat::FindBetweenNormals(FaceDirCS, DesiredCS.GetSafeNormal());
+			FQuat AimQ = FQuat::FindBetweenNormals(FaceDirCS.GetSafeNormal(), DesiredCS.GetSafeNormal());
 			FVector Axis;
 			float Angle;
-			PeekQ.ToAxisAndAngle(Axis, Angle);
-			PeekQ = FQuat(Axis, FMath::Min(Angle, FMath::DegreesToRadians(95.0f)));
+			AimQ.ToAxisAndAngle(Axis, Angle);
+			AimQ = FQuat(Axis, FMath::Min(Angle, FMath::DegreesToRadians(95.0f)));
 			const FVector PivotCS =
 				BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetLocation();
 			for (const TCHAR* BoneName : { TEXT("Neck"), TEXT("Head") })
 			{
 				FTransform BoneCS = BowBody->GetBoneTransformByName(BoneName, EBoneSpaces::ComponentSpace);
-				BoneCS.SetLocation(PivotCS + PeekQ.RotateVector(BoneCS.GetLocation() - PivotCS));
-				BoneCS.SetRotation(PeekQ * BoneCS.GetRotation());
+				BoneCS.SetLocation(PivotCS + AimQ.RotateVector(BoneCS.GetLocation() - PivotCS));
+				BoneCS.SetRotation(AimQ * BoneCS.GetRotation());
 				BowBody->SetBoneTransformByName(BoneName, BoneCS, EBoneSpaces::ComponentSpace);
 				BowBody->RefreshBoneTransforms(); // 寫姿勢→讀骨骼之間必須刷新（poseable 快取陷阱）
 			}
@@ -1825,25 +2024,38 @@ void ANiceInkCharacter::UpdatePenVisual()
 			FVector InkPos, SkinNormal;
 			if (Target->Body->ResolveUVToWorldWithNormal(UV, InkPos, SkinNormal))
 			{
-				// 筆尖釘在墨點上（畫布真相＝零 offset）；筆身指向自己的頭＝像被握著
+				// 筆尖釘在墨點上（畫布真相＝零 offset）。筆身＝離表面法線斜 40°、
+				// 倒向自己頭的方位——真持筆的斜度（舊制「筆桿指向頭」＝插在皮膚上的
+				// 釘子，第三人稱讀不出「握著筆」；2026-07-17 改制）。
 				FVector HeadPos = GetActorLocation() + FVector(0, 0, 40.0f);
 				if (BowBody && BowBody->GetSkinnedAsset() && BowBody->IsVisible())
 				{
 					HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
 				}
-				FVector ShaftDir = (HeadPos - InkPos).GetSafeNormal();
-				if (ShaftDir.IsNearlyZero())
+				const FVector N = SkinNormal.GetSafeNormal();
+				const FVector ToHead = (HeadPos - InkPos).GetSafeNormal();
+				FVector Tan = ToHead - FVector::DotProduct(ToHead, N) * N;
+				if (!Tan.Normalize())
 				{
-					ShaftDir = SkinNormal;
+					Tan = FVector::CrossProduct(N, FVector::UpVector);
+					if (!Tan.Normalize())
+					{
+						Tan = FVector::CrossProduct(N, FVector::RightVector).GetSafeNormal();
+					}
 				}
+				constexpr float PenTiltRad = 0.698f; // 40°
+				const FVector ShaftDir = (N * FMath::Cos(PenTiltRad) + Tan * FMath::Sin(PenTiltRad)).GetSafeNormal();
 				constexpr float PenHalfLen = 7.5f; // 15cm 筆，圓柱 pivot 在中心
 				PenMesh->SetWorldLocationAndRotation(InkPos + ShaftDir * PenHalfLen,
 					FRotationMatrix::MakeFromZ(ShaftDir).Rotator());
+				PenTipWorld = InkPos;
+				PenShaftDirWorld = ShaftDir;
 				bShow = true;
 			}
 		}
 	}
 
+	bPenStateValid = bShow;
 	if (PenMesh->IsVisible() != bShow)
 	{
 		PenMesh->SetVisibility(bShow);
@@ -1867,10 +2079,9 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 	if (bAsleep && !bSleepDoubleActive && EnsureBowBodyAsset())
 	{
 		bSleepDoubleActive = true;
-		// 捕捉參考姿勢（分析式擺骨的基底；姿勢快取歸零）
-		BowBody->ResetBoneTransformByName(TEXT("Neck"));
-		BowBody->ResetBoneTransformByName(TEXT("Head"));
-		BowBody->RefreshBoneTransforms();
+		// 捕捉參考姿勢（分析式擺骨的基底；姿勢快取歸零）——全基底骨重置：
+		// 只重置 Neck/Head 會把 lean 殘留的蹲姿脊椎/手臂帶進睡姿替身
+		ResetBowBodyBones();
 		SleepNeckRefCS = BowBody->GetBoneTransformByName(TEXT("Neck"), EBoneSpaces::ComponentSpace);
 		SleepHeadRefCS = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace);
 		bSleepRefCaptured = true;
@@ -2167,6 +2378,7 @@ void ANiceInkCharacter::ResetBowPose()
 	{
 		BowBody->SetVisibility(false);
 		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot); // 清掉補位滑移
+		ResetBowBodyBones(); // 蹲姿/手臂全清——殘留會漏進下一個使用者（睡姿替身）
 	}
 	if (Body && !bAsleep)
 	{
@@ -2177,14 +2389,18 @@ void ANiceInkCharacter::ResetBowPose()
 
 void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 {
-	ACameraActor* Cam = GetOrSpawnCinematicCamera();
-	if (!Cam)
+	if (!FirstPersonCamera)
 	{
 		return;
 	}
 
 	// 鏡頭長在臉上：姿勢是唯一真相——彎多深＝看得多低、臉對哪＝看向哪。
 	// 偷瞄＝頭真的轉過去，第一人稱畫面自然跟著甩向受害者的臉。
+	//
+	// 承載體＝本體 FirstPersonCamera（2026-07-17 改制）：舊制走 CinematicCamera view
+	// target，OwnerNoSee 對外部相機失效（ViewActor≠owner）→ 自己的彎腰身體/頭殼/手臂
+	// 全被渲染在離鏡頭十幾 cm 處＝第一人稱穿膜主因。本體相機讓 OwnerNoSee 恢復生效，
+	// 鎖定畫面只剩畫布與筆。進鎖＝硬切（美術語言 #24；0.18s 混成會穿身飛行）。
 	FVector EyePos;
 	FVector AimTarget = bPeeking ? GetLeanFaceTargetWorld() : FVector(LeanPoint);
 	if (BowBody && BowBody->GetSkinnedAsset())
@@ -2198,17 +2414,21 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 		// 無骨骼資產的退路：貼皮膚定位（舊法）
 		EyePos = FVector(LeanPoint) + FVector(LeanNormal).GetSafeNormal() * (LeanCameraHeight - 14.0f);
 	}
-	Cam->SetActorLocationAndRotation(EyePos, (AimTarget - EyePos).Rotation());
 
 	if (!bLeanCamActive)
 	{
-		PC->SetViewTargetWithBlend(Cam, 0.18f, VTBlend_Linear);
 		bLeanCamActive = true;
-		bViewOverridden = true;
-		bWideViewActive = false;
-		bThirdPersonActive = false;
-		LastViewWorkId = INDEX_NONE;
+		if (bViewOverridden)
+		{
+			// 前一個系統鏡頭（巡禮/羞辱全景等）殘留 view target——硬切回本體
+			PC->SetViewTargetWithBlend(this, 0.0f);
+			bViewOverridden = false;
+			bWideViewActive = false;
+			bThirdPersonActive = false;
+			LastViewWorkId = INDEX_NONE;
+		}
 	}
+	FirstPersonCamera->SetWorldLocationAndRotation(EyePos, (AimTarget - EyePos).Rotation());
 }
 
 // --- 畫墨 RPC ---
@@ -2387,96 +2607,164 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 	bWalkAnimApplied = true;
 }
 
+namespace
+{
+	// 兩骨解析 IK（餘弦定理）：重置→解，冪等；姿勢寫→讀之間必須 RefreshBoneTransforms
+	//（poseable 快取陷阱）。回傳解算後的手骨世界位置。
+	bool SolveArmTwoBoneCS(UPoseableMeshComponent* Mesh, const FName& ArmBone, const FName& ForeBone,
+		const FName& HandBone, const FVector& Target, const FVector& PoleHint, FVector& OutHandPos)
+	{
+		if (Mesh->GetBoneIndex(ArmBone) == INDEX_NONE ||
+			Mesh->GetBoneIndex(ForeBone) == INDEX_NONE ||
+			Mesh->GetBoneIndex(HandBone) == INDEX_NONE)
+		{
+			return false; // 骨架缺鏈＝安靜跳過（姿勢不演，機制照跑）
+		}
+
+		Mesh->ResetBoneTransformByName(ArmBone);
+		Mesh->ResetBoneTransformByName(ForeBone);
+		Mesh->ResetBoneTransformByName(HandBone);
+		Mesh->RefreshBoneTransforms();
+
+		const FTransform ArmT = Mesh->GetBoneTransformByName(ArmBone, EBoneSpaces::WorldSpace);
+		const FTransform ForeT = Mesh->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
+		const FTransform HandT = Mesh->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
+		const FVector S = ArmT.GetLocation();
+		const FVector E = ForeT.GetLocation();
+		const FVector H = HandT.GetLocation();
+
+		const float UpperLen = FVector::Dist(S, E);
+		const float LowerLen = FVector::Dist(E, H);
+		FVector ToTarget = Target - S;
+		const float Dist = FMath::Clamp(static_cast<float>(ToTarget.Size()),
+			FMath::Abs(UpperLen - LowerLen) + 1.0f, (UpperLen + LowerLen) * 0.999f);
+		const FVector N = ToTarget.GetSafeNormal();
+		if (N.IsNearlyZero() || UpperLen < 1.0f || LowerLen < 1.0f)
+		{
+			return false;
+		}
+
+		FVector Pole = PoleHint - FVector::DotProduct(PoleHint, N) * N;
+		if (!Pole.Normalize())
+		{
+			Pole = FVector::CrossProduct(N, FVector::UpVector).GetSafeNormal();
+		}
+
+		const float CosShoulder = FMath::Clamp(
+			(UpperLen * UpperLen + Dist * Dist - LowerLen * LowerLen) / (2.0f * UpperLen * Dist), -1.0f, 1.0f);
+		const float SinShoulder = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosShoulder * CosShoulder));
+		const FVector NewElbow = S + N * (UpperLen * CosShoulder) + Pole * (UpperLen * SinShoulder);
+		const FVector NewHand = S + N * Dist;
+
+		// 上臂：把 S→E 轉到 S→NewElbow（世界空間旋轉、位置不動）
+		const FQuat Q1 = FQuat::FindBetweenNormals((E - S).GetSafeNormal(), (NewElbow - S).GetSafeNormal());
+		FTransform NewArmT = ArmT;
+		NewArmT.SetRotation(Q1 * ArmT.GetRotation());
+		Mesh->SetBoneTransformByName(ArmBone, NewArmT, EBoneSpaces::WorldSpace);
+		Mesh->RefreshBoneTransforms();
+
+		// 前臂：轉完上臂後重讀（子骨已被帶走），再把 E'→H' 轉向 E'→NewHand
+		const FTransform ForeT2 = Mesh->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
+		const FTransform HandT2 = Mesh->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
+		const FVector E2 = ForeT2.GetLocation();
+		const FQuat Q2 = FQuat::FindBetweenNormals(
+			(HandT2.GetLocation() - E2).GetSafeNormal(), (NewHand - E2).GetSafeNormal());
+		FTransform NewForeT = ForeT2;
+		NewForeT.SetRotation(Q2 * ForeT2.GetRotation());
+		Mesh->SetBoneTransformByName(ForeBone, NewForeT, EBoneSpaces::WorldSpace);
+		Mesh->RefreshBoneTransforms();
+
+		OutHandPos = NewHand;
+		return true;
+	}
+}
+
 void ANiceInkCharacter::UpdateLeanArm()
 {
-	static const FName ArmBone(TEXT("RightArm"));
-	static const FName ForeBone(TEXT("RightForeArm"));
-	static const FName HandBone(TEXT("RightHand"));
+	static const FName RArm(TEXT("RightArm"));
+	static const FName RFore(TEXT("RightForeArm"));
+	static const FName RHand(TEXT("RightHand"));
+	static const FName LArm(TEXT("LeftArm"));
+	static const FName LFore(TEXT("LeftForeArm"));
+	static const FName LHand(TEXT("LeftHand"));
 
 	const bool bActive = bPenArmIkEnabled && bLeanLocked && BowBody && BowBody->IsVisible();
 	if (!bActive)
 	{
-		if (bLeanArmApplied && BowBody)
+		if (bLeanArmApplied && BowBody && BowBody->GetSkinnedAsset())
 		{
-			BowBody->ResetBoneTransformByName(ArmBone);
-			BowBody->ResetBoneTransformByName(ForeBone);
-			BowBody->ResetBoneTransformByName(HandBone);
+			for (const FName& Bone : { RArm, RFore, RHand, LArm, LFore, LHand })
+			{
+				BowBody->ResetBoneTransformByName(Bone);
+			}
 			BowBody->RefreshBoneTransforms();
 			bLeanArmApplied = false;
 		}
 		return;
 	}
-	if (BowBody->GetBoneIndex(ArmBone) == INDEX_NONE ||
-		BowBody->GetBoneIndex(ForeBone) == INDEX_NONE ||
-		BowBody->GetBoneIndex(HandBone) == INDEX_NONE)
-	{
-		return; // 骨架缺鏈＝安靜跳過（姿勢不演，機制照跑）
-	}
 
-	// 每 tick 重置→解 IK（冪等；姿勢寫→讀之間必須 RefreshBoneTransforms——poseable 快取陷阱）
-	BowBody->ResetBoneTransformByName(ArmBone);
-	BowBody->ResetBoneTransformByName(ForeBone);
-	BowBody->ResetBoneTransformByName(HandBone);
-	BowBody->RefreshBoneTransforms();
-
-	const FTransform ArmT = BowBody->GetBoneTransformByName(ArmBone, EBoneSpaces::WorldSpace);
-	const FTransform ForeT = BowBody->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
-	const FTransform HandT = BowBody->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
-	const FVector S = ArmT.GetLocation();
-	const FVector E = ForeT.GetLocation();
-	const FVector H = HandT.GetLocation();
-
-	// 目標＝實體筆（筆尖已釘在墨點；未落筆時退回鎖定點）；握上段＝往筆桿上抬 6cm
-	FVector Target = (PenMesh && PenMesh->IsVisible())
-		? PenMesh->GetComponentLocation() + FVector(0, 0, 6.0f)
-		: FVector(LeanPoint);
-
-	const float UpperLen = FVector::Dist(S, E);
-	const float LowerLen = FVector::Dist(E, H);
-	FVector ToTarget = Target - S;
-	const float Dist = FMath::Clamp(static_cast<float>(ToTarget.Size()),
-		FMath::Abs(UpperLen - LowerLen) + 1.0f, (UpperLen + LowerLen) * 0.999f);
-	const FVector N = ToTarget.GetSafeNormal();
-	if (N.IsNearlyZero() || UpperLen < 1.0f || LowerLen < 1.0f)
-	{
-		return;
-	}
-
-	// 肘極向：右外側（本地 -X＝右，GetEvidenceUVForHit 同一慣例）偏向世界下
 	const FTransform CompT = BowBody->GetComponentTransform();
-	FVector Pole = CompT.TransformVectorNoScale(FVector(-1, 0, 0)) - FVector(0, 0, 0.6f);
-	Pole = (Pole - FVector::DotProduct(Pole, N) * N);
-	if (!Pole.Normalize())
+
+	// --- 右臂：握筆。目標＝筆桿上段握點（筆已斜 40°）；未落筆退回鎖定點 ---
+	const FVector GripTarget = bPenStateValid
+		? PenTipWorld + PenShaftDirWorld * 11.0f
+		: FVector(LeanPoint);
+	const FVector RPole = CompT.TransformVectorNoScale(FVector(-1, 0, 0)) - FVector(0, 0, 0.6f); // 肘朝右外偏下
+	FVector RHandPos;
+	if (SolveArmTwoBoneCS(BowBody, RArm, RFore, RHand, GripTarget, RPole, RHandPos))
 	{
-		Pole = FVector::CrossProduct(N, FVector::UpVector).GetSafeNormal();
+		bLeanArmApplied = true;
+
+		// 手腕朝向：手指沿筆桿向筆尖、掌側壓向皮膚（舊制手腕從不解算＝A-pose 掌向
+		// 抓著空氣——「手沒作勢畫畫」三病之二；2026-07-17 補齊）。
+		// 手指/拇指方向從「當幀骨骼位置」現量（位置與骨軸慣例無關——絕對旋轉跨界
+		// 搬運的煎餅教訓同 ApplyDrawBasePose）；施加的是世界空間 delta。
+		if (bPenStateValid &&
+			BowBody->GetBoneIndex(TEXT("RightHandIndex1")) != INDEX_NONE &&
+			BowBody->GetBoneIndex(TEXT("RightHandThumb1")) != INDEX_NONE)
+		{
+			const FVector FingerW = (-PenShaftDirWorld).GetSafeNormal(); // 握點→筆尖
+			FVector PalmW = -FVector(LeanNormal).GetSafeNormal();        // 掌心壓向皮膚
+			PalmW = PalmW - FVector::DotProduct(PalmW, FingerW) * FingerW;
+			const FVector HandP = BowBody->GetBoneTransformByName(RHand, EBoneSpaces::WorldSpace).GetLocation();
+			const FVector FingerCur = (BowBody->GetBoneTransformByName(TEXT("RightHandIndex1"), EBoneSpaces::WorldSpace).GetLocation() - HandP).GetSafeNormal();
+			const FVector ThumbCur = (BowBody->GetBoneTransformByName(TEXT("RightHandThumb1"), EBoneSpaces::WorldSpace).GetLocation() - HandP).GetSafeNormal();
+			if (PalmW.Normalize() && !FingerCur.IsNearlyZero() && !ThumbCur.IsNearlyZero())
+			{
+				// 先 swing：現況手指方向→筆桿方向；再繞筆桿 twist 對齊掌向
+				//（掌心方向＝Cross(手指, 拇指)，右手解剖恆定式）
+				const FQuat Q1 = FQuat::FindBetweenNormals(FingerCur, FingerW);
+				FVector PalmCur = FVector::CrossProduct(FingerW, Q1.RotateVector(ThumbCur));
+				PalmCur = PalmCur - FVector::DotProduct(PalmCur, FingerW) * FingerW;
+				if (PalmCur.Normalize())
+				{
+					const float Twist = FMath::Atan2(
+						FVector::DotProduct(FVector::CrossProduct(PalmCur, PalmW), FingerW),
+						FVector::DotProduct(PalmCur, PalmW));
+					const FQuat DeltaQ = FQuat(FingerW, Twist) * Q1;
+					FTransform HandT = BowBody->GetBoneTransformByName(RHand, EBoneSpaces::WorldSpace);
+					HandT.SetRotation(DeltaQ * HandT.GetRotation());
+					BowBody->SetBoneTransformByName(RHand, HandT, EBoneSpaces::WorldSpace);
+					BowBody->RefreshBoneTransforms();
+				}
+			}
+		}
 	}
 
-	// 兩骨解析解（餘弦定理）：肘的面內位置
-	const float CosShoulder = FMath::Clamp(
-		(UpperLen * UpperLen + Dist * Dist - LowerLen * LowerLen) / (2.0f * UpperLen * Dist), -1.0f, 1.0f);
-	const float SinShoulder = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosShoulder * CosShoulder));
-	const FVector NewElbow = S + N * (UpperLen * CosShoulder) + Pole * (UpperLen * SinShoulder);
-	const FVector NewHand = S + N * Dist;
-
-	// 上臂：把 S→E 轉到 S→NewElbow（世界空間旋轉、位置不動）
-	const FQuat Q1 = FQuat::FindBetweenNormals((E - S).GetSafeNormal(), (NewElbow - S).GetSafeNormal());
-	FTransform NewArmT = ArmT;
-	NewArmT.SetRotation(Q1 * ArmT.GetRotation());
-	BowBody->SetBoneTransformByName(ArmBone, NewArmT, EBoneSpaces::WorldSpace);
-	BowBody->RefreshBoneTransforms();
-
-	// 前臂：轉完上臂後重讀（子骨已被帶走），再把 E'→H' 轉向 E'→NewHand
-	const FTransform ForeT2 = BowBody->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
-	const FTransform HandT2 = BowBody->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
-	const FVector E2 = ForeT2.GetLocation();
-	const FQuat Q2 = FQuat::FindBetweenNormals(
-		(HandT2.GetLocation() - E2).GetSafeNormal(), (NewHand - E2).GetSafeNormal());
-	FTransform NewForeT = ForeT2;
-	NewForeT.SetRotation(Q2 * ForeT2.GetRotation());
-	BowBody->SetBoneTransformByName(ForeBone, NewForeT, EBoneSpaces::WorldSpace);
-	BowBody->RefreshBoneTransforms();
-
-	bLeanArmApplied = true;
+	// --- 左臂：撐在自己左大腿上（蹲繪的支撐手；吊著的 A-pose 左臂＝「沒在畫畫」讀感）---
+	if (BowBody->GetBoneIndex(TEXT("LeftUpLeg")) != INDEX_NONE &&
+		BowBody->GetBoneIndex(TEXT("LeftLeg")) != INDEX_NONE)
+	{
+		const FVector Hip = BowBody->GetBoneTransformByName(TEXT("LeftUpLeg"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector Knee = BowBody->GetBoneTransformByName(TEXT("LeftLeg"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector ThighRest = FMath::Lerp(Hip, Knee, 0.6f) + FVector(0, 0, 9.0f); // 大腿面上
+		const FVector LPole = CompT.TransformVectorNoScale(FVector(1, 0, 0)) - FVector(0, 0, 0.6f); // 肘朝左外偏下
+		FVector LHandPos;
+		if (SolveArmTwoBoneCS(BowBody, LArm, LFore, LHand, ThighRest, LPole, LHandPos))
+		{
+			bLeanArmApplied = true;
+		}
+	}
 }
 
 float ANiceInkCharacter::EffectiveLookSensitivity() const

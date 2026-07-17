@@ -453,6 +453,16 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboFeignSleep(bool bFeign);
 
+	// robo：模擬作畫偷瞄 Shift 按住/放開（在作畫者的 owning 端呼叫——直設 bPeeking
+	// 會被 PollLockedDraw 的輸入輪詢反殺，與裝睡同一條教訓）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboPeekHold(bool bHold);
+
+	// robo：沿法線 trace 皮膚表面點後走真 ServerEnterLean（真流程＝準星 trace；
+	// python 硬編體內錨點會把 10cm 眼位埋進肉裡；5.7 python 的 HitResult 反射不可用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	bool DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal);
+
 	UFUNCTION(Server, Reliable)
 	void ServerRequestStartMatch();
 
@@ -516,10 +526,20 @@ private:
 
 	FVector2D LeanCursorPx = FVector2D::ZeroVector; // 虛擬麥克筆游標（螢幕像素）
 	float LeanLockTime = 0.0f;                      // 鎖定起始（鏡頭到位前不落筆）
-	bool bLeanCamActive = false;
-	bool bPeekCamApplied = false;
+	bool bLeanCamActive = false;                    // 鎖定中本體相機被世界寫入接管（退鎖要還原掛點）
 
 	FVector2D LastCursorPx = FVector2D::ZeroVector; // 上一 tick 游標（螢幕細分用）
+
+	// 偷瞄目標追蹤：受害者的真頭會動（甦醒升降/掃視/裝睡收回）——目標移動就重擺姿勢
+	FVector LastPeekFaceTarget = FVector(1e18f);
+
+	// 實體筆本 tick 狀態（UpdatePenVisual 寫、UpdateLeanArm 讀：握點與手腕朝向）
+	FVector PenTipWorld = FVector::ZeroVector;
+	FVector PenShaftDirWorld = FVector::UpVector;
+	bool bPenStateValid = false;
+
+	void ApplyDrawBasePose();  // 蹲踞作畫基底（DrawPoseData.h 絕對 CS 逐骨寫入）
+	void ResetBowBodyBones();  // 基底骨集合全重置（防蹲姿/手臂殘留漏進睡姿替身）
 
 	void PollLeanEnter(APlayerController* PC);
 	void PollLockedDraw(APlayerController* PC, float DeltaSeconds);
@@ -546,6 +566,7 @@ private:
 	bool bFeignSleepLocal = false;
 	bool bDebugFeignHeld = false;            // robo「模擬按住 Shift」輸入源（與真鍵 OR，
 	                                         // 走同一條 poll edge——直設狀態會被輪詢反殺）
+	bool bDebugPeekHeld = false;             // robo「模擬作畫偷瞄 Shift」輸入源（同上）
 	void SetFeignSleepLocal(bool bNewFeign); // 本人端切換共用點（poll edge 唯一呼叫者）
 	void ApplyFeignVisual();                 // 裝睡切換窄路徑：眼皮＋替身 dirty。
 	                                         // 不走 ApplySleepVisual——那條路會把本人

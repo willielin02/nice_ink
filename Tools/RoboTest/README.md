@@ -33,6 +33,21 @@
   （原點/走廊/旋轉中/旋轉後），結果檔寫 Saved/robo_lightring_result.txt。
   舊 `robo_maze_shots.py`（seat1 浮動視窗版）不可靠——HighResShot 只有聚焦視窗會處理。
 
+## 作畫姿勢/穿膜/偷瞄截圖矩陣（2026-07-17）
+
+- `robo_drawpose_shots.py`＝蹲踞作畫姿改制的驗收儀器：第一人稱（host=作畫者）
+  ×四鎖定點（肚頂/臉/側腹/大腿）＋偷瞄旗艦鏡頭；第三人稱（client2=模特、host=攝影機）
+  ×作畫/偷瞄。數值斷言：頭到落筆點 22cm、腳貼地、膝朝前（位置重定向的鏡射驗證）、
+  view 走本體相機（OwnerNoSee 生效前提）、眼位 10cm、偷瞄鏡頭對準替身真頭、偷瞄升頭。
+  產出 drawpose_*.png＋Saved/robo_drawpose_result.txt。
+- 新 debug 鉤子：`DebugRoboPeekHold(bool)`＝模擬按住 Shift 偷瞄（直設 bPeeking 會被
+  owning 端輪詢反殺——同裝睡教訓）；`DebugRoboEnterLean(Target, Anchor, Normal)`＝
+  C++ 內 trace 皮膚表面點再走真 ServerEnterLean（python 硬編體內錨點＝眼位埋進肉裡
+  的假警報；5.7 python 的 HitResult 反射不可用）。
+- 既有 `robo_leanlock_test.py` 兩條「FAIL」＝預期：peek replicated FAIL（owner 輪詢
+  反殺 robo 態——改用 DebugRoboPeekHold 才測得到）；kick PARTIAL（GNiceInkKickEnabled
+  =false 拳腳封存中，該段測試過時）。
+
 ## 出口死鎖迴歸（2026-07-15）
 
 - `robo_exit_seating_repro.py`＝「入座階段衝到出口→Drawing 推門」迴歸：
