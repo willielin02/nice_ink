@@ -183,6 +183,22 @@ public:
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_EyesOpen, Category = "Nice Ink")
 	bool bEyesOpen = false;
 
+	// 裝睡（2026-07-17 使用者定案）：無聲甦醒後按住 Shift＝回到沉睡的姿勢＋閉眼貼圖
+	//（對旁人＝還沒醒來的樣子）；放開＝回到按下前的頭部位置與朝向。
+	// 實作＝指向凍結而非存/還原：按住期間滑鼠不寫入臉指向，狀態根本沒動過，
+	// 放開自然復原（最少狀態＝最少錯）。本人畫面＝全黑（定案 #42 恆等式：
+	// 你看得到的≡臉表達的——裝睡不是免費監視器，何時敢重新睜眼本身是賭注）。
+	// 切換硬切不補間（美術語言定案 #24）。
+	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_FeignSleep, Category = "Nice Ink")
+	bool bFeignSleep = false;
+
+	UFUNCTION(Server, Reliable)
+	void ServerSetFeignSleep(bool bNewFeign);
+
+	// 有效裝睡值（本人＝本地鏡像零延遲；他端＝複製值）；域鉗在 沉睡×睜眼 之內
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	bool IsFeigningSleep() const;
+
 	// 睡姿頭部姿態＝臉指向（方位＋俯仰，複製給其他端擺骨；閉眼不送＝盲瞄不洩漏）。
 	// 各端用同一套純函數（yaw∘pitch＋抬升規則）求值＝畫面必然一致；抬升不複製。
 	// 方位語義：180=腳側、0=頭頂側（與量測掃描一致）；俯仰：0=朝天、越大越壓向水平線下。
@@ -433,6 +449,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSleepLook(float Yaw, float Pitch);
 
+	// robo：模擬裝睡 Shift 按住/放開（本地受害者下一 tick 消化；RPC 逃出 python guard）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboFeignSleep(bool bFeign);
+
 	UFUNCTION(Server, Reliable)
 	void ServerRequestStartMatch();
 
@@ -478,6 +498,9 @@ private:
 	void OnRep_EyesOpen();
 
 	UFUNCTION()
+	void OnRep_FeignSleep();
+
+	UFUNCTION()
 	void OnRep_Blinded();
 
 	UFUNCTION()
@@ -518,6 +541,15 @@ private:
 	float SleepBendLocal = 0.0f;        // 閉眼盲瞄低頭（[0,上限]）
 	bool bHasPendingDebugSleepLook = false; // DebugRoboSleepLook 待消化（本地受害者 tick）
 	FVector2D PendingDebugSleepLook = FVector2D::ZeroVector;
+
+	// 裝睡本人端狀態（pattern 同 SleepAimAzLocal：本地零延遲、RPC 上服複製給他端）
+	bool bFeignSleepLocal = false;
+	bool bDebugFeignHeld = false;            // robo「模擬按住 Shift」輸入源（與真鍵 OR，
+	                                         // 走同一條 poll edge——直設狀態會被輪詢反殺）
+	void SetFeignSleepLocal(bool bNewFeign); // 本人端切換共用點（poll edge 唯一呼叫者）
+	void ApplyFeignVisual();                 // 裝睡切換窄路徑：眼皮＋替身 dirty。
+	                                         // 不走 ApplySleepVisual——那條路會把本人
+	                                         // 臉指向歸零（入睡重置），毀掉凍結契約
 
 	bool bWakeGazeActive = false;       // 睜眼指向啟用（FOV 切廣角）
 

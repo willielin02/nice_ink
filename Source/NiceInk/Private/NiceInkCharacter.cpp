@@ -177,6 +177,8 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkCharacter, bAsleep);
 	DOREPLIFETIME(ANiceInkCharacter, bEyesOpen);
+	// 裝睡：本人端用本地鏡像零延遲（pattern 同臉指向），複製只服務他端的姿勢與眼皮
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, bFeignSleep, COND_SkipOwner);
 	// 頭部轉動破綻：臉指向只發給他端（本人端用本地連續值零延遲；抬升＝純函數不複製）
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepAimAzDeg, COND_SkipOwner);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepAimTiltDeg, COND_SkipOwner);
@@ -669,14 +671,27 @@ void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
 		SleepKeyHeldTime[0] = SleepKeyHeldTime[1] = SleepKeyHeldTime[2] = SleepKeyHeldTime[3] = 0.0f;
 		if (bWakeGazeActive)
 		{
-			float MouseX = 0.0f;
-			float MouseY = 0.0f;
-			PC->GetInputMouseDelta(MouseX, MouseY);
-			// 號誌待驗：右滑＝＋az；上撥＝抬（tilt 減，FPS 慣例）——viewport 驗手感後可反轉
-			SleepAimAzLocal = FMath::Fmod(FMath::Fmod(
-				SleepAimAzLocal + MouseX * EffectiveLookSensitivity(), 360.0f) + 360.0f, 360.0f);
-			SleepAimTiltLocal = FMath::Clamp(SleepAimTiltLocal - MouseY * EffectiveLookSensitivity(),
-				0.0f, SleepAimMaxTiltDeg(SleepAimAzLocal));
+			// 裝睡（使用者定案 2026-07-17）：按住 Shift＝姿勢與眼皮回沉睡樣（旁人看＝
+			// 還沒醒）；放開＝回到按下前的臉指向。按住期間滑鼠不寫入臉指向＝指向凍結，
+			// 放開自然復原——不做存/還原（沒有可以錯的第二份狀態）。
+			const bool bWantsFeign = bDebugFeignHeld ||
+				PC->IsInputKeyDown(EKeys::LeftShift) ||
+				PC->IsInputKeyDown(EKeys::RightShift);
+			if (bWantsFeign != bFeignSleepLocal)
+			{
+				SetFeignSleepLocal(bWantsFeign);
+			}
+			if (!bFeignSleepLocal)
+			{
+				float MouseX = 0.0f;
+				float MouseY = 0.0f;
+				PC->GetInputMouseDelta(MouseX, MouseY);
+				// 號誌待驗：右滑＝＋az；上撥＝抬（tilt 減，FPS 慣例）——viewport 驗手感後可反轉
+				SleepAimAzLocal = FMath::Fmod(FMath::Fmod(
+					SleepAimAzLocal + MouseX * EffectiveLookSensitivity(), 360.0f) + 360.0f, 360.0f);
+				SleepAimTiltLocal = FMath::Clamp(SleepAimTiltLocal - MouseY * EffectiveLookSensitivity(),
+					0.0f, SleepAimMaxTiltDeg(SleepAimAzLocal));
+			}
 		}
 
 		// 頭部轉動破綻：臉指向節流上報（閉眼不送＝盲瞄不洩漏）
@@ -1055,6 +1070,9 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 	}
 
 	bAsleep = bNewAsleep;
+	bFeignSleep = false;      // 睡/醒任一方向切換＝裝睡歸零（server 權威）
+	bFeignSleepLocal = false; // 主機本人當受害者時 OnRep 不跑，這裡一併清鏡像
+	bDebugFeignHeld = false;
 
 	if (bNewAsleep)
 	{
@@ -1358,6 +1376,8 @@ void ANiceInkCharacter::MulticastRestoreWork_Implementation(FInkWork Work)
 
 void ANiceInkCharacter::OnRep_Asleep()
 {
+	bFeignSleepLocal = false; // 睡/醒切換＝裝睡鏡像歸零（server 端已同步清 bFeignSleep）
+	bDebugFeignHeld = false;
 	ApplySleepVisual();
 	if (bAsleep && IsLocallyControlled())
 	{
@@ -1381,7 +1401,7 @@ void ANiceInkCharacter::ApplySleepVisual()
 
 	bSleepPoseDirty = true; // 睡/醒/翻身任何切換＝替身下次 tick 重擺（含抬頭方向重算）
 
-	Body->SetEyesClosed(bAsleep && !bEyesOpen);
+	Body->SetEyesClosed(bAsleep && (!bEyesOpen || IsFeigningSleep())); // 裝睡＝閉眼貼圖照舊
 
 	// 無聲甦醒＝睜眼看得到自己的身體與正在落下的筆跡（2026-07-15 user 定案：
 	// 抓現行要有畫面——誰低頭、跪在哪、筆落在哪）。現身站起恢復 owner-no-see
@@ -1633,6 +1653,13 @@ void ANiceInkCharacter::DebugRoboSleepLook(float Yaw, float Pitch)
 {
 	bHasPendingDebugSleepLook = true;
 	PendingDebugSleepLook = FVector2D(Yaw, Pitch);
+}
+
+void ANiceInkCharacter::DebugRoboFeignSleep(bool bFeign)
+{
+	// 「模擬按住 Shift」輸入源：與真鍵 OR、由 PollSleepHead 的同一條 edge 消化
+	//（直設 feign 狀態會被下一 tick 的輸入輪詢反殺——owner 輪詢還原 robo 態的老陷阱）
+	bDebugFeignHeld = bFeign;
 }
 
 void ANiceInkCharacter::ApplyBowPose()
@@ -1920,12 +1947,17 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 		AimTilt = RemoteAimTiltDeg;
 	}
 
+	// 裝睡（Shift）：姿勢與抬升回沉睡樣＝與閉眼完全同一恆等姿勢（頭放回枕上、
+	// 脖子自動收合）；指向值凍結在按下前，放開硬切回（美術語言：程式化硬轉）。
+	// 本人讀本地鏡像（零延遲）、他端讀複製值——IsFeigningSleep 內建這個選路。
+	const bool bPoseAwake = bEyesOpen && !IsFeigningSleep();
+
 	// 指向 frame（CS、世界錨定）：up＝世界垂直、feet＝頭頂方向水平投影的反向；
 	// 姿勢＝先縮下巴（臉朝腳側轉 tilt，軸=up×feet）再繞 up 轉到方位 az——
 	// 量測掃描的鏡像實作（趴姿共用：up 相對身體自動翻轉，碰撞剖面近似記帳）。
-	FQuat OrbitQ = FQuat::Identity; // 閉眼＝頭不動（盲瞄不成為破綻）
+	FQuat OrbitQ = FQuat::Identity; // 閉眼/裝睡＝頭不動（盲瞄不成為破綻）
 	FVector LiftCS = FVector::ZeroVector;
-	if (bEyesOpen)
+	if (bPoseAwake)
 	{
 		const FVector UpCS = CompT.InverseTransformVectorNoScale(FVector::UpVector).GetSafeNormal();
 		FVector FeetCS = -(FVector::ZAxisVector - FVector::DotProduct(FVector::ZAxisVector, UpCS) * UpCS);
@@ -1943,12 +1975,12 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 	// 止血：姿態沒變不寫骨——每 tick 歸零重擺＝渲染器眼中的高速假移動＝動態模糊糊臉
 	if (bSleepRefCaptured &&
 		(bSleepPoseDirty || AimAz != LastPoseAz || AimTilt != LastPoseTilt ||
-		 bEyesOpen != bLastPoseEyes))
+		 bPoseAwake != bLastPoseEyes))
 	{
 		bSleepPoseDirty = false;
 		LastPoseAz = AimAz;
 		LastPoseTilt = AimTilt;
-		bLastPoseEyes = bEyesOpen;
+		bLastPoseEyes = bPoseAwake;
 
 		// 剛體擺骨：Neck/Head 同一 Δ（頭殼硬權重全在 Head；Neck 同步只為骨鏈一致）——
 		// 樞軸＝Head 骨 rest 位置（量測掃描的 P0）、骨位繞樞軸剛轉＋世界垂直抬升
@@ -1972,7 +2004,7 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 	// 任何相機層打折都是對訊號恆等式的背叛）
 	if (IsLocallyControlled())
 	{
-		const FQuat PoseQ = bEyesOpen ? OrbitQ : FQuat::Identity;
+		const FQuat PoseQ = bPoseAwake ? OrbitQ : FQuat::Identity;
 		const FVector FaceDirW = CompT.TransformVectorNoScale(PoseQ.RotateVector(FVector::YAxisVector)).GetSafeNormal();
 		const FVector CrownDirW = CompT.TransformVectorNoScale(PoseQ.RotateVector(FVector::ZAxisVector)).GetSafeNormal();
 		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
@@ -2073,6 +2105,59 @@ void ANiceInkCharacter::ServerUpdateSleepAim_Implementation(float AzDeg, float T
 	}
 	SleepAimAzDeg = FMath::Fmod(FMath::Fmod(AzDeg, 360.0f) + 360.0f, 360.0f);
 	SleepAimTiltDeg = FMath::Clamp(TiltDeg, 0.0f, SleepAimMaxTiltDeg(SleepAimAzDeg));
+}
+
+// --- 裝睡（Shift 按住；使用者定案 2026-07-17）---
+
+bool ANiceInkCharacter::IsFeigningSleep() const
+{
+	// 域鉗在 沉睡×睜眼 之內：狀態機任何一端翻掉，裝睡自動失義（殘值無法外漏）
+	return bAsleep && bEyesOpen && (IsLocallyControlled() ? bFeignSleepLocal : bFeignSleep);
+}
+
+void ANiceInkCharacter::SetFeignSleepLocal(bool bNewFeign)
+{
+	// 本人端切換共用點（poll edge 唯一呼叫者）：本地立即生效（零延遲）、RPC 上服
+	if (bFeignSleepLocal == bNewFeign)
+	{
+		return;
+	}
+	bFeignSleepLocal = bNewFeign;
+	ServerSetFeignSleep(bNewFeign);
+	ApplyFeignVisual();
+}
+
+void ANiceInkCharacter::ServerSetFeignSleep_Implementation(bool bNewFeign)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const APlayerState* PS = GetPlayerState();
+	if (!GS || !PS || PS->GetPlayerId() != GS->VictimPlayerId || !bAsleep || !bEyesOpen)
+	{
+		return;
+	}
+	if (bFeignSleep != bNewFeign)
+	{
+		bFeignSleep = bNewFeign;
+		ApplyFeignVisual();
+	}
+}
+
+void ANiceInkCharacter::OnRep_FeignSleep()
+{
+	// 裝睡切換＝眼皮貼圖＋替身姿勢重擺（與睜眼破綻同一條視覺路徑；零音效零提示）
+	ApplyFeignVisual();
+}
+
+void ANiceInkCharacter::ApplyFeignVisual()
+{
+	// 窄路徑：只動眼皮貼圖＋替身重擺。刻意不走 ApplySleepVisual——那條路在
+	// 本人端 bAsleep 時會把臉指向歸零（入睡重置語意），而裝睡的契約正是指向凍結、
+	// 放開回到按下前（2026-07-17 robo 抓到的真 bug：az90 被重置成 180 回不去）。
+	if (Body)
+	{
+		Body->SetEyesClosed(bAsleep && (!bEyesOpen || IsFeigningSleep()));
+	}
+	bSleepPoseDirty = true;
 }
 
 void ANiceInkCharacter::ResetBowPose()

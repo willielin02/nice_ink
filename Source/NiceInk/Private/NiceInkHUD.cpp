@@ -293,6 +293,19 @@ void ANiceInkHUD::DrawHUD()
 		return;
 	}
 
+	// 裝睡（Shift 按住）：對旁人＝沉睡姿勢＋閉眼貼圖；對本人＝閉眼就是看不到
+	//（定案 #42 恆等式：你看得到的≡臉表達的——裝睡不是免費監視器，
+	// 何時敢重新睜眼本身是賭注）。黑屏上只留一行提示。
+	if (MyChar && MyChar->IsFeigningSleep())
+	{
+		DrawRect(FLinearColor(0.01f, 0.01f, 0.015f, 1.0f), 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY);
+		DrawBottomHint(TEXT("feigning sleep — release SHIFT to open your eyes"), NiHudColor::PaperDim);
+		DrawTrapDial(MyChar);
+		DrawSystemMenu(MyChar);
+		DrawDebugPanel(GS, MyPS, MyChar);
+		return;
+	}
+
 	// ESC 選單開著＝只畫選單（醒著沒有遮蔽義務；底層面板文字互疊會打架）
 	if (MyChar && MyChar->IsSystemMenuOpen())
 	{
@@ -345,7 +358,7 @@ void ANiceInkHUD::DrawHUD()
 	else if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
 	{
 		// 無聲甦醒中：實景視野；提示只給受害者本人
-		DrawBottomHint(TEXT("eyes open — mouse aims your face · WASD stands you up & ends the drawing"), NiHudColor::Amber);
+		DrawBottomHint(TEXT("eyes open — mouse aims your face · hold SHIFT feigns sleep · WASD stands you up & ends the drawing"), NiHudColor::Amber);
 	}
 	else if (bDrawingArtist)
 	{
