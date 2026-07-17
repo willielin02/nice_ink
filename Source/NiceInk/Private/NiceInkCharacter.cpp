@@ -4,7 +4,6 @@
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PoseableMeshComponent.h"
-#include "DrawPoseData.h"
 #include "DreamMazeComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
@@ -1726,38 +1725,99 @@ bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector An
 	return true;
 }
 
+namespace
+{
+	// 作畫基底可能寫到的骨集合（重置與姿勢共用一張名單）
+	const TCHAR* GDrawPoseBones[] = {
+		TEXT("Hips"), TEXT("Spine"), TEXT("Spine1"), TEXT("Neck"), TEXT("Head"),
+		TEXT("LeftShoulder"), TEXT("LeftArm"), TEXT("LeftForeArm"), TEXT("LeftHand"),
+		TEXT("RightShoulder"), TEXT("RightArm"), TEXT("RightForeArm"), TEXT("RightHand"),
+		TEXT("LeftUpLeg"), TEXT("LeftLeg"), TEXT("LeftFoot"), TEXT("LeftToeBase"),
+		TEXT("RightUpLeg"), TEXT("RightLeg"), TEXT("RightFoot"), TEXT("RightToeBase"),
+	};
+}
+
 void ANiceInkCharacter::ResetBowBodyBones()
 {
-	// 基底骨集合全重置（回 SK rest）。只重置 Spine/Neck/Head 會讓蹲姿/手臂殘留
+	// 基底骨集合全重置（回 SK rest）。只重置 Spine/Neck/Head 會讓跪姿/手臂殘留
 	// 漏進下一個使用者（睡姿替身）——重置不經 CS 換算，無快取依賴，單次 refresh 收尾。
 	if (!BowBody || !BowBody->GetSkinnedAsset())
 	{
 		return;
 	}
-	for (const FDrawPoseBoneCS& B : GDrawPoseCS)
+	for (const TCHAR* Bone : GDrawPoseBones)
 	{
-		BowBody->ResetBoneTransformByName(FName(B.BoneName));
+		BowBody->ResetBoneTransformByName(FName(Bone));
 	}
 	BowBody->RefreshBoneTransforms();
 }
 
 void ANiceInkCharacter::ApplyDrawBasePose()
 {
-	// 蹲踞作畫基底＝「關節位置」重定向（2026-07-17 r2）。
-	// r1 教訓：Blender 匯出的絕對旋轉跨不過 FBX 匯入的每骨軸向重映射（位置=全域鏡射可搬、
-	// 旋轉=每骨慣例不可搬）——直寫旋轉讓蒙皮攤成煎餅、關節位置卻全對（數值全綠、畫面全毀）。
-	// 正解：只信位置。每骨施最小 swing（現況子骨方向→目標子骨方向、twist 保持 rest），
-	// Hips 位置直設＋雙約束（脊椎方向＋跨髖軸）鎖 twist——全程用引擎自己的骨骼框架。
-	static TMap<FName, FVector> TargetCS;
-	if (TargetCS.Num() == 0)
-	{
-		for (const FDrawPoseBoneCS& B : GDrawPoseCS)
-		{
-			TargetCS.Add(FName(B.BoneName), B.T);
-		}
-	}
-
+	// 長跪作畫基底（2026-07-17 r3，user 定案「畫畫時改成長跪」）：目標關節位置由引擎
+	// rest 骨長「現場解析」算出，不再吃 Blender 匯出資料（蹲姿資料版退役——長跪是可以
+	// 被完全解析描述的姿勢，唯一真相住在程式裡）。
+	// 幾何（元件空間：+Y=臉前、+Z=上、腳底原點）：膝著地、脛骨貼地向後、腳背貼地；
+	// 髖在膝上方沿大腿弧後傾——跪高＝落筆點高度的函數（高點=長跪大腿豎直、低點=跪坐
+	// 向腳跟），每一公分下降都是物理成立的姿勢，取代舊「整體下沉把腳埋進地板」的造假。
+	// 擺法沿用關節位置重定向（r2 教訓：Blender 絕對旋轉跨不過 FBX 每骨軸向重映射，
+	// 位置才是可信的跨界資料；本版連位置都自己算＝零跨界）：每骨最小 swing、
+	// Hips 位置直設＋雙約束（脊椎方向＋跨髖軸）鎖 twist。
 	const FTransform CompT = BowBody->GetComponentTransform();
+
+	// --- rest 量測（reset 後讀，全部來自引擎骨架自己）---
+	auto RestCS = [&](const TCHAR* Bone) {
+		return BowBody->GetBoneTransformByName(FName(Bone), EBoneSpaces::ComponentSpace).GetLocation();
+	};
+	const FVector RHips = RestCS(TEXT("Hips"));
+	const FVector RUpLegL = RestCS(TEXT("LeftUpLeg"));
+	const FVector RUpLegR = RestCS(TEXT("RightUpLeg"));
+	const FVector RLegL = RestCS(TEXT("LeftLeg"));
+	const FVector RFootL = RestCS(TEXT("LeftFoot"));
+	const FVector RToeL = RestCS(TEXT("LeftToeBase"));
+	const float ThighLen = FVector::Dist(RUpLegL, RLegL);
+	const float ShinLen = FVector::Dist(RLegL, RFootL);
+	const float FootLen = FVector::Dist(RFootL, RToeL);
+
+	// --- 跪高解算：頭高需求 → 髖高（上限=大腿豎直的長跪、下限=跪坐帶）---
+	constexpr float KneeZ = 11.0f;   // 膝關節著地高（肉墊半徑）
+	constexpr float AnkleZ = 8.0f;   // 踝關節貼地高
+	constexpr float ToeZ = 5.0f;     // 趾根貼地高
+	const FVector HeadTargetW = FVector(LeanPoint) + FVector(LeanNormal).GetSafeNormal() * 22.0f;
+	const float HeadReqZ = CompT.InverseTransformPosition(HeadTargetW).Z;
+	const float HipsZ = FMath::Clamp(HeadReqZ + 10.0f, 38.0f, KneeZ + ThighLen);
+	const float CosThigh = FMath::Clamp((HipsZ - KneeZ) / FMath::Max(1.0f, ThighLen), 0.0f, 1.0f);
+	const float SinThigh = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosThigh * CosThigh)); // 大腿後傾＝跪坐量
+
+	// --- 目標關節位置表 ---
+	TMap<FName, FVector> TargetCS;
+	const float ShinBack = FMath::Sqrt(FMath::Max(1.0f, ShinLen * ShinLen - FMath::Square(KneeZ - AnkleZ)));
+	const float FootBack = FMath::Sqrt(FMath::Max(1.0f, FootLen * FootLen - FMath::Square(AnkleZ - ToeZ)));
+	FVector UpLegMidT = FVector::ZeroVector;
+	for (int32 Side = 0; Side < 2; ++Side)
+	{
+		const bool bLeft = Side == 0;
+		const FVector& RUpLeg = bLeft ? RUpLegL : RUpLegR;
+		const FVector Knee(RUpLeg.X, RUpLeg.Y, KneeZ);                       // 膝在站姿髖關節正下方著地
+		const FVector UpLeg = Knee + FVector(0, -SinThigh, CosThigh) * ThighLen; // 髖沿大腿弧後傾上移
+		const FVector Ankle = Knee + FVector(0, -ShinBack, AnkleZ - KneeZ);  // 脛骨貼地向後
+		const FVector Toe = Ankle + FVector(0, -FootBack, ToeZ - AnkleZ);    // 腳背貼地、趾朝後
+		TargetCS.Add(FName(bLeft ? TEXT("LeftUpLeg") : TEXT("RightUpLeg")), UpLeg);
+		TargetCS.Add(FName(bLeft ? TEXT("LeftLeg") : TEXT("RightLeg")), Knee);
+		TargetCS.Add(FName(bLeft ? TEXT("LeftFoot") : TEXT("RightFoot")), Ankle);
+		TargetCS.Add(FName(bLeft ? TEXT("LeftToeBase") : TEXT("RightToeBase")), Toe);
+		UpLegMidT += UpLeg * 0.5f;
+	}
+	// 骨盆與軀幹：直立疊 rest 相對偏移（前彎由後續解算加上）
+	const FVector RUpLegMid = (RUpLegL + RUpLegR) * 0.5f;
+	const FVector HipsTarget = UpLegMidT + (RHips - RUpLegMid);
+	TargetCS.Add(FName(TEXT("Hips")), HipsTarget);
+	for (const TCHAR* Bone : { TEXT("Spine"), TEXT("Spine1"), TEXT("Neck"), TEXT("Head"),
+		TEXT("LeftShoulder"), TEXT("LeftArm"), TEXT("LeftForeArm"), TEXT("LeftHand"),
+		TEXT("RightShoulder"), TEXT("RightArm"), TEXT("RightForeArm"), TEXT("RightHand") })
+	{
+		TargetCS.Add(FName(Bone), HipsTarget + (RestCS(Bone) - RHips));
+	}
 	auto TargetW = [&](const FName& Bone) { return CompT.TransformPosition(TargetCS[Bone]); };
 	auto BoneW = [&](const FName& Bone) {
 		return BowBody->GetBoneTransformByName(Bone, EBoneSpaces::WorldSpace).GetLocation();
@@ -1868,9 +1928,9 @@ void ANiceInkCharacter::ApplyBowPose()
 	// ＝（當下頭骨 CS 旋轉 × rest 旋轉⁻¹）作用在 +Y 上——與擺了什麼無關，讀骨即得。
 	const FQuat HeadRestCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
 
-	// 基底＝蹲踞（2026-07-17 改制，user 手擺 DrawPose）：躺姿受害者全身落筆點的
-	// 頭高需求 25~105cm，蹲姿直立頭高 147cm 全蓋掉，且每個目標的前彎需求比站姿
-	// 少 15~40°——站姿對低位目標的「可達」是補位滑移造假出來的（腳埋地板）。
+	// 基底＝長跪（2026-07-17 r3 user 定案；蹲踞資料版退役）：躺姿受害者全身落筆點的
+	// 頭高需求 25~105cm，長跪直立頭高 ~115cm 全蓋掉；低位點由「跪坐向腳跟」承接
+	// （髖沿大腿弧真的坐下去），不再靠整體下沉把腳埋進地板。
 	ApplyDrawBasePose();
 
 	const FTransform CompT = BowBody->GetComponentTransform();
@@ -1925,17 +1985,33 @@ void ANiceInkCharacter::ApplyBowPose()
 	// 作畫＝臉對準落筆點（埋頭盯筆尖；恢復「你看的方向≡臉表達的方向」——相機在
 	// UpdateLeanCamera 同樣朝落筆點，第一/第三人稱不再脫鉤。pose-true batch 舊解，
 	// 轆轤首改制時遺失，2026-07-17 修回）；偷瞄＝臉對準受害者的真頭。
-	// 美術語言＝程式化硬轉；上限 95°（貓頭鷹護欄，貼上限硬轉不平滑）。
+	// 全框解（r3）：臉方向＋頭頂朝向雙約束——最小旋轉解會留下任意 roll（歪著頭看＝
+	// 詭異讀感的實質來源）。頭頂提示：臉近水平＝頭頂朝上；臉近垂直（低頭看肚皮）＝
+	// 頭頂朝「身體外」（低頭看紙的自然姿）。美術語言＝程式化硬轉；上限 95°（貓頭鷹護欄）。
 	{
 		const FVector AimTargetW = bPeeking ? GetLeanFaceTargetWorld() : FVector(LeanPoint);
 		const FVector HeadPosNow = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		const FQuat HeadNowCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
-		const FVector FaceDirCS = (HeadNowCSQ * HeadRestCSQ.Inverse()).RotateVector(FVector(0, 1, 0));
-		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(
-			(AimTargetW - HeadPosNow).GetSafeNormal());
-		if (!FaceDirCS.IsNearlyZero() && !DesiredCS.IsNearlyZero())
+		const FVector FaceDirW = (AimTargetW - HeadPosNow).GetSafeNormal();
+		FVector CrownHintW = FVector::UpVector;
+		if (FMath::Abs(FaceDirW.Z) > 0.7f)
 		{
-			FQuat AimQ = FQuat::FindBetweenNormals(FaceDirCS.GetSafeNormal(), DesiredCS.GetSafeNormal());
+			CrownHintW = HeadPosNow - CompT.TransformPosition(
+				BowBody->GetBoneTransformByName(TEXT("Spine"), EBoneSpaces::ComponentSpace).GetLocation());
+			CrownHintW.Z = 0.0f;
+			if (!CrownHintW.Normalize())
+			{
+				CrownHintW = GetActorForwardVector();
+			}
+		}
+		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(FaceDirW);
+		const FVector CrownCS = CompT.InverseTransformVectorNoScale(CrownHintW);
+		const FQuat HeadNowCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
+		if (!DesiredCS.IsNearlyZero())
+		{
+			// 目標視覺框（相對 rest 的 delta）：+Y=臉、+Z≈頭頂；現況 delta 反解出增量
+			const FQuat DeltaDesired = FRotationMatrix::MakeFromYZ(DesiredCS, CrownCS).ToQuat();
+			const FQuat DeltaNow = HeadNowCSQ * HeadRestCSQ.Inverse();
+			FQuat AimQ = DeltaDesired * DeltaNow.Inverse();
 			FVector Axis;
 			float Angle;
 			AimQ.ToAxisAndAngle(Axis, Angle);
@@ -2751,16 +2827,16 @@ void ANiceInkCharacter::UpdateLeanArm()
 		}
 	}
 
-	// --- 左臂：撐在自己左大腿上（蹲繪的支撐手；吊著的 A-pose 左臂＝「沒在畫畫」讀感）---
-	if (BowBody->GetBoneIndex(TEXT("LeftUpLeg")) != INDEX_NONE &&
-		BowBody->GetBoneIndex(TEXT("LeftLeg")) != INDEX_NONE)
+	// --- 左臂：撐在自己左膝上（長跪的支撐手——大腿豎直後「大腿面」不存在，膝頭是
+	// 自然的撐點；吊著的 A-pose 左臂＝「沒在畫畫」讀感）---
+	if (BowBody->GetBoneIndex(TEXT("LeftLeg")) != INDEX_NONE)
 	{
-		const FVector Hip = BowBody->GetBoneTransformByName(TEXT("LeftUpLeg"), EBoneSpaces::WorldSpace).GetLocation();
 		const FVector Knee = BowBody->GetBoneTransformByName(TEXT("LeftLeg"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector ThighRest = FMath::Lerp(Hip, Knee, 0.6f) + FVector(0, 0, 9.0f); // 大腿面上
+		const FVector KneeRest = Knee + FVector(0, 0, 8.0f) +
+			CompT.TransformVectorNoScale(FVector(0, 1, 0)) * 4.0f; // 膝頭上緣偏前
 		const FVector LPole = CompT.TransformVectorNoScale(FVector(1, 0, 0)) - FVector(0, 0, 0.6f); // 肘朝左外偏下
 		FVector LHandPos;
-		if (SolveArmTwoBoneCS(BowBody, LArm, LFore, LHand, ThighRest, LPole, LHandPos))
+		if (SolveArmTwoBoneCS(BowBody, LArm, LFore, LHand, KneeRest, LPole, LHandPos))
 		{
 			bLeanArmApplied = true;
 		}
