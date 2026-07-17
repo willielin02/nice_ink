@@ -7,7 +7,7 @@
 
 namespace
 {
-	constexpr int32 GRing = NeckSeamData::RingCount; // 72
+	constexpr int32 GRing = NeckSeamData::RingCount; // 84（cut_seam_head3）
 
 	FVector SeamPos(const NeckSeamData::FSeamVert& V) { return FVector(V.Px, V.Py, V.Pz); }
 	FVector SeamNrm(const NeckSeamData::FSeamVert& V) { return FVector(V.Nx, V.Ny, V.Nz); }

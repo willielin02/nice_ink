@@ -1827,7 +1827,7 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 {
 	// 睡姿替身（2026-07-15；環繞軌道制 2026-07-16 user 定案；同日二波＝轆轤首伸縮脖）：
 	// - 頭部姿勢＝軌道(φ)：兩段式（縮下巴段＋巡航掃方位段，θ 隨方位調變）＋量測抬頭表
-	//   ——網格已沿 user 手標 cut_seam_head 真切開（頭殼 Head=1.0 硬權重），
+	//   ——網格已沿 user 手標 cut_seam_head3 真切開（頭殼 Head=1.0 硬權重），
 	//   頭與身之間由 UNeckStretch 每幀生成的脖子區銜接（頭部運動無切口約束）
 	// - 相機＝眉心錨點、朝向＝臉的剛體朝向（含 roll）——看得到的 ≡ 臉表達的
 	//   ≡ 旁人讀到的破綻（視線制的頭頂盲區洩漏由構造封死）

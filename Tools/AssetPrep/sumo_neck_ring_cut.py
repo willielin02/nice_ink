@@ -1,8 +1,10 @@
-# 頭身切開手術 v2（user 2026-07-16 定案：轆轤首伸縮脖改制）
-# 切線＝user 手標 vertex group "cut_seam_head"（sumo_retopo_base14.blend，72 頂點閉環，
-# 前緣壓下顎垂肉下 z≈1.29、後緣沿後頸髮際 z≈1.59）——取代 v1 的 20° 平面 bisect。
-# 與 v1（sumo_neck_cut.py）的差異：
-#   - 不 bisect：沿 seam 的 72 條既有邊 split_edges，零新增幾何、UV 完全不動
+# 頭身切開手術 v4（user 2026-07-17 二度重標：分界線改 cut_seam_head3）
+# 切線＝user 手標 vertex group "cut_seam_head3"（sumo_retopo_base16.blend，84 頂點閉環，
+# 前緣壓下顎垂肉下 z≈1.29、後緣 z≈1.55）。重標目的＝整條線壓到髮域之下：
+# 環上 MARK_Hair 頂點 0 個、線下實繪髮罩頂點 0 個（探針實測）——黑髮殘留與
+# 端色採髮條灰邊的白汙染兩個問題在結構上同時消滅。其餘機制與 v2/v3 完全相同。
+# 與 v1（sumo_neck_cut.py 平面 bisect）的差異：
+#   - 不 bisect：沿 seam 的 N 條既有邊 split_edges，零新增幾何、UV 完全不動
 #   - 不封蓋：頭身之間由運行時每幀生成的脖子區（UNeckStretch）永遠銜接，內部永不露出
 #   - 身殼權重：Neck/Head 的質量「轉移」給 Spine1（不是歸一化——歸一化會讓縫區被肩膀支配）
 #   - 輸出邊界環資料 SourceAssets/neck_seam_rings.json（引擎 mini-skin ＋端色烘焙的原料）
@@ -16,23 +18,25 @@ import numpy as np
 from mathutils import Vector
 from mathutils.kdtree import KDTree
 
-BASE14 = r"C:/games/Unreal Engine/nice_ink/SourceAssets/sumo_retopo_base14.blend"
+SEAM_BLEND = r"C:/games/Unreal Engine/nice_ink/SourceAssets/sumo_retopo_base16.blend"
+SEAM_GROUP = "cut_seam_head3"
+SEAM_N = 84  # 探針量測定值（2026-07-17：84 頂點完美閉環、全 w=1.0、每點恰 2 鄰）
 MASTER = r"C:/games/Unreal Engine/nice_ink/SourceAssets/sumo_character_master.blend"
 OUT_JSON = r"C:/games/Unreal Engine/nice_ink/SourceAssets/neck_seam_rings.json"
 NORMAL_BAND = 0.04  # 縫區法線移植帶（距 seam 環 4cm）
 
-# ---------- 1) base14：取有序 seam 環（世界座標） ----------
-bpy.ops.wm.open_mainfile(filepath=BASE14)
+# ---------- 1) base15：取有序 seam 環（世界座標） ----------
+bpy.ops.wm.open_mainfile(filepath=SEAM_BLEND)
 t14 = bpy.data.objects["SumoRetopo"]
 me14 = t14.data
 mw14 = t14.matrix_world
-gi14 = t14.vertex_groups["cut_seam_head"].index
+gi14 = t14.vertex_groups[SEAM_GROUP].index
 S14 = set()
 for v in me14.vertices:
     for g in v.groups:
         if g.group == gi14:
             S14.add(v.index)
-assert len(S14) == 72, f"seam group size {len(S14)} != 72"
+assert len(S14) == SEAM_N, f"seam group size {len(S14)} != {SEAM_N}"
 adj14 = collections.defaultdict(list)
 for e in me14.edges:
     a, b = e.vertices[0], e.vertices[1]
@@ -48,8 +52,21 @@ while True:
         break
     prev, cur = cur, nxt[0]
     order14.append(cur)
-assert len(order14) == 72, "seam ring walk incomplete"
+assert len(order14) == SEAM_N, "seam ring walk incomplete"
 seam_world = [tuple(mw14 @ me14.vertices[i].co) for i in order14]
+
+# seam 最佳擬合平面法線（Newell，翻到朝頭側 z>0）——定向與 json 記錄用
+_newell = Vector((0.0, 0.0, 0.0))
+for k in range(SEAM_N):
+    p = Vector(seam_world[k])
+    q = Vector(seam_world[(k + 1) % SEAM_N])
+    _newell.x += (p.y - q.y) * (p.z + q.z)
+    _newell.y += (p.z - q.z) * (p.x + q.x)
+    _newell.z += (p.x - q.x) * (p.y + q.y)
+n_plane = _newell.normalized()
+if n_plane.z < 0:
+    n_plane = -n_plane
+print(f"seam plane n = ({n_plane.x:.4f}, {n_plane.y:.4f}, {n_plane.z:.4f})")
 
 # ---------- 2) master：前置斷言 ----------
 bpy.ops.wm.open_mainfile(filepath=MASTER)
@@ -78,7 +95,7 @@ for c in seam_world:
     co, idx, d = kt.find(Vector(c))
     assert d < 1e-6, f"seam vert {c} unmatched (d={d})"
     ring_m.append(idx)
-assert len(set(ring_m)) == 72
+assert len(set(ring_m)) == SEAM_N
 
 # ---------- 3) 術前複本（法線來源） ----------
 src = body.copy()
@@ -93,13 +110,13 @@ bm = bmesh.new()
 bm.from_mesh(me)
 bm.verts.ensure_lookup_table()
 ring_edges = []
-for k in range(72):
+for k in range(SEAM_N):
     a = bm.verts[ring_m[k]]
-    b = bm.verts[ring_m[(k + 1) % 72]]
+    b = bm.verts[ring_m[(k + 1) % SEAM_N]]
     e = next((ee for ee in a.link_edges if ee.other_vert(a) is b), None)
     assert e is not None, f"ring edge {k} missing"
     ring_edges.append(e)
-assert len(set(ring_edges)) == 72
+assert len(set(ring_edges)) == SEAM_N
 
 def count_islands(bm_):
     bm_.verts.index_update()
@@ -123,7 +140,7 @@ def count_islands(bm_):
 isl_pre = count_islands(bm)
 print("islands pre:", isl_pre)
 bmesh.ops.split_edges(bm, edges=ring_edges)
-assert len(bm.verts) == 11847 + 72, f"split did not duplicate ring: {len(bm.verts)}"
+assert len(bm.verts) == 11847 + SEAM_N, f"split did not duplicate ring: {len(bm.verts)}"
 isl_post = count_islands(bm)
 print("islands post:", isl_post)
 assert isl_post == isl_pre + 1, f"expected {isl_pre + 1} islands, got {isl_post}"
@@ -132,7 +149,7 @@ bm.free()
 me.update()
 post_counts = (len(me.vertices), len(me.edges), len(me.polygons), len(me.loops))
 print("POST:", post_counts)
-assert post_counts[0] == pre_counts[0] + 72
+assert post_counts[0] == pre_counts[0] + SEAM_N
 assert post_counts[2] == pre_counts[2]          # 面數不變（無封蓋）
 assert post_counts[3] == pre_counts[3]          # loop 數不變 ⇒ UV 逐 loop 原樣
 
@@ -161,8 +178,29 @@ head_cid = comp_id[top_vert]
 head_set = set(i for i, c in comp_id.items() if c == head_cid)
 print(f"head shell: {len(head_set)} verts, z[{min(me.vertices[i].co.z for i in head_set):.4f}, "
       f"{max(me.vertices[i].co.z for i in head_set):.4f}]")
-assert len(head_set) == 1238 + 72, f"head shell {len(head_set)} != 1310"
+# 頭殼語義不變量（v3：環數不再 72，改用結構檢查取代硬編頂點數）：
+#   - 不得洩漏到 seam 最低點以下（前緣 z≈1.293）
+#   - 臉部（MARK_Face 權重 >0.5）必須整組在頭殼——臉是頭殼的定義性內容
 assert min(me.vertices[i].co.z for i in head_set) > 1.28, "head shell leaks below seam"
+ktr_seam = KDTree(SEAM_N)
+for i in range(SEAM_N):
+    ktr_seam.insert(Vector(seam_world[i]), i)
+ktr_seam.balance()
+gi_face = body.vertex_groups["MARK_Face"].index
+face_verts = set()
+for v in me.vertices:
+    for g in v.groups:
+        if g.group == gi_face and g.weight > 0.5:
+            face_verts.add(v.index)
+assert face_verts, "MARK_Face group empty?"
+# 例外：seam 環頂點 split 後身側複本保留原頂點組——縫若壓過臉權重羽化帶，
+# 其身側複本合法落在身殼；非環位置的臉頂點仍必須全在頭殼。
+outside = face_verts - head_set
+for vi in outside:
+    co, idx, d = ktr_seam.find(me.vertices[vi].co)
+    assert d < 1e-6, f"non-seam face vert {vi} outside head shell (d={d})"
+print(f"face verts: {len(face_verts)} total, {len(outside)} body-side seam duplicates (ok)")
+assert 1000 < len(head_set) < 2500, f"head shell size implausible: {len(head_set)}"
 
 # ---------- 6) 權重：頭殼剛體 Head=1；身殼 Neck/Head 質量→Spine1 ----------
 deform_names = set(b.name for b in arm.data.bones)
@@ -207,8 +245,8 @@ for v in me.vertices:
     assert abs(tot - 1.0) < 1e-3, f"vert {v.index} weight sum {tot}"
 
 # ---------- 7) 縫區法線移植（rest 零視覺差） ----------
-ring_pos = [Vector(seam_world[k]) for k in range(72)]
-ktr = KDTree(72)
+ring_pos = [Vector(seam_world[k]) for k in range(SEAM_N)]
+ktr = KDTree(SEAM_N)
 for i, p in enumerate(ring_pos):
     ktr.insert(p, i)
 ktr.balance()
@@ -246,7 +284,7 @@ for (a, b), c in efc.items():
         badj[a].append(b)
         badj[b].append(a)
         nb += 1
-assert nb == 144, f"boundary edges {nb} != 144"
+assert nb == 2 * SEAM_N, f"boundary edges {nb} != {2 * SEAM_N}"
 
 def walk_ring(members):
     s0 = min(members)
@@ -264,17 +302,17 @@ def walk_ring(members):
 bverts = set(badj.keys())
 head_ring = walk_ring([i for i in bverts if i in head_set])
 body_ring = walk_ring([i for i in bverts if i not in head_set])
-assert len(head_ring) == 72 and len(body_ring) == 72
+assert len(head_ring) == SEAM_N and len(body_ring) == SEAM_N
 
 # 定向：以 seam 最佳擬合平面法線 n（朝頭側）看下去 CCW；起點＝最前緣（min y）
-n_plane = Vector((0.0, -0.785, 0.619)).normalized()
 def orient(ring):
-    k0 = min(range(72), key=lambda k: me.vertices[ring[k]].co.y)
+    n = len(ring)
+    k0 = min(range(n), key=lambda k: me.vertices[ring[k]].co.y)
     ring = ring[k0:] + ring[:k0]
     newell = Vector((0.0, 0.0, 0.0))
-    for k in range(72):
+    for k in range(n):
         p = me.vertices[ring[k]].co
-        q = me.vertices[ring[(k + 1) % 72]].co
+        q = me.vertices[ring[(k + 1) % n]].co
         newell.x += (p.y - q.y) * (p.z + q.z)
         newell.y += (p.z - q.z) * (p.x + q.x)
         newell.z += (p.x - q.x) * (p.y + q.y)
@@ -287,7 +325,7 @@ body_ring = orient(body_ring)
 # 配對：body_ring 重排到與 head_ring 逐點同位（rest 時兩環重合）
 pos2body = {tuple(round(c, 7) for c in me.vertices[i].co): i for i in body_ring}
 body_ring = [pos2body[tuple(round(c, 7) for c in me.vertices[i].co)] for i in head_ring]
-for k in range(72):
+for k in range(SEAM_N):
     assert (me.vertices[head_ring[k]].co - me.vertices[body_ring[k]].co).length < 1e-9
 
 # 每頂點：own-side loop 的 UV0/HairUV（可能跨島→列全部 distinct）＋corner normal 平均
@@ -347,9 +385,9 @@ def ring_data(ring, is_head):
 data = {
     "note": "neck seam rings (Blender mesh space, meters, char front=-Y). "
             "UE component space = (x, -y, z) * 100.",
-    "seam_source": "cut_seam_head @ sumo_retopo_base14.blend",
-    "count": 72,
-    "plane_n": [0.0, -0.785, 0.619],
+    "seam_source": f"{SEAM_GROUP} @ {SEAM_BLEND.split('/')[-1]}",
+    "count": SEAM_N,
+    "plane_n": [round(n_plane.x, 4), round(n_plane.y, 4), round(n_plane.z, 4)],
     "head_ring": ring_data(head_ring, True),
     "body_ring": ring_data(body_ring, False),
 }
