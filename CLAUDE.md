@@ -32,8 +32,8 @@
   & "C:\Program Files\Epic Games\UE_5.7\Engine\Build\BatchFiles\Build.bat" NiceInkEditor Win64 Development -Project="c:\games\Unreal Engine\nice_ink\NiceInk.uproject" -WaitMutex 2>&1 | Select-String "error C|error LNK|Result:"
   ```
 - **開發試玩（2026-07-17 起）**：`Tools/play_full_flow.bat`＝4 視窗 -game 從主選單跑
-  完整 happy path（真 ServerTravel/LAN 搜房）；`Tools/play_ingame.bat`＝2 視窗直連道場
-  跳過選單。都用編輯器二進位跑未 cook 資產——**重編譯前要先關掉這些遊戲視窗**。
+  完整 happy path（真 ServerTravel/LAN 搜房）；`Tools/play_ingame.bat`＝4 視窗直連道場
+  跳過選單（1 listen server＋3 client 錯開直連）。都用編輯器二進位跑未 cook 資產——**重編譯前要先關掉這些遊戲視窗**。
   正式流程＝大廳主機 ENTER 開局；PIE 自動開局只服務 robo。
 - **自駕測試（robo-test）**：`Tools/RoboTest/robo_leanlock_test.py` 是範本＋README。流程：
   0. **先切 robo play 模式**：`Tools/RoboTest/play_mode_robo.ps1`（編輯器關閉時跑）——
