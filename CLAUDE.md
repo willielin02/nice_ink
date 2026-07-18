@@ -9,7 +9,7 @@
 派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
 （沉睡＝醉夢圓形迷宮小遊戲），其他人用麥克筆在他身上畫畫；醒來後巡禮指認作者，
 猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。
-**設計的唯一權威是 `SPEC.md`**（v3.6）。上架衝刺（主選單/配對/大廳/音效/打包）的
+**設計的唯一權威是 `SPEC.md`**（v3.8）。上架衝刺（主選單/配對/大廳/音效/打包）的
 工作帳本與待使用者項在 `Docs/SHIP_PLAN.md`。
 
 ## 鐵律（違反任何一條都是嚴重事故）
@@ -107,8 +107,8 @@
 
 ## 技術地圖
 
-- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/彎腰/鏡頭/筆/程式化走路/
-  握筆右臂 IK/ESC 系統選單）、`InkCanvasComponent`（筆劃=真相、RT=快取、作者 ID/碳黑/
+- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/長跪作畫姿（解析式，v3.8）/
+  鎖定本體相機/筆/程式化走路/握筆雙臂 IK/ESC 系統選單）、`InkCanvasComponent`（筆劃=真相、RT=快取、作者 ID/碳黑/
   雷射/洗掉）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache、換睡姿網格、眼睛開閉）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/導航/旋轉）。
@@ -134,10 +134,11 @@
   角色源正本＝`SourceAssets/sumo_character_master.blend`（char17 已退役；迭代檔 previews/masters/retopo
   已 gitignore 留本地）。
 - 下一批已知工作：噴射出口與褌的視覺（SPEC 待定 #11）、平台小號實測（待定 #12）、
-  開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、EOS 憑證＋語音接入
+  開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、鎖定畫布空間感
+  ——眼位 20–25cm＋游標 A5 鉗位提案（待定 #16）、EOS 憑證＋語音接入
   （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
-  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、握筆右臂 IK（bPenArmIkEnabled）、
-  音效組（MasterVolume）——都可一鍵關。
+  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、握筆雙臂 IK（bPenArmIkEnabled）、
+  長跪作畫姿＋偷瞄追真頭（v3.8）、音效組（MasterVolume）。
 
 ## 收尾紀律
 
