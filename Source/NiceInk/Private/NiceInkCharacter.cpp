@@ -1044,7 +1044,14 @@ void ANiceInkCharacter::PollPalette(APlayerController* PC)
 	{
 		if (PC->WasInputKeyJustPressed(DigitKeys[Index]))
 		{
-			SelectedColorIndex = Index;
+			if (SelectedColorIndex != Index)
+			{
+				SelectedColorIndex = Index;
+				// 中筆劃換色即時生效：顏色是 per-stroke 屬性（開筆時取樣）——
+				// 按住左鍵中換色若不重開筆劃，要抬針才變色=「按了沒反應」讀感
+				//（割線/打霧同一條路；與換針 StopPaintingLocal 同款處理）
+				StopPaintingLocal();
+			}
 			break;
 		}
 	}
@@ -1591,6 +1598,12 @@ void ANiceInkCharacter::DebugRoboNeedle(int32 NeedleIndex)
 	PendingDebugNeedle = NeedleIndex == 1 ? EInkNeedle::Shader : EInkNeedle::Liner;
 }
 
+void ANiceInkCharacter::DebugRoboColor(int32 ColorIndex)
+{
+	SelectedColorIndex = FMath::Clamp(ColorIndex, 0, FNiceInkPalette::Num() - 1);
+	StopPaintingLocal(); // 換色=重開筆劃（顏色是 per-stroke 屬性，與鍵盤路徑同語義）
+}
+
 void ANiceInkCharacter::DebugRoboPaintStick(float X, float Y)
 {
 	DebugPaintStickPx = FVector2D(X, Y);
@@ -1940,6 +1953,10 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		PrevUV = &LastPaintUV;
 	};
 
+	// 手速→濃淡（十二版）：本 tick 的流量因子——EMA 手速已算好（τ0.08s），
+	// 同 tick 所有針同因子（EMA 時間尺度 >> tick）；量化 byte 隨針進筆劃資料
+	const uint8 FlowByte = ComputeMistFlowByte();
+
 	const bool bStrokeOpen = bPainting && PaintTarget.Get() == Target;
 	if (SelectedNeedle == EInkNeedle::Shader)
 	{
@@ -2034,14 +2051,23 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		bPainting = true;
 		PaintTarget = Target;
 		PendingPoints.Reset();
+		PendingFlows.Reset();
 		PointFlushTimer = 0.0f;
-		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle);
+		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte);
 		DotUVs.RemoveAt(0);
 	}
 	// 筆劃保持開著（節拍未到/原地冪等/空扎都不是抬針）——抬針只由放開左鍵/
 	// 失去接觸閘裁決；跨縫跨肢的點間大跳在點刺渲染下＝誠實的兩顆點，無內插垃圾
 
 	PendingPoints.Append(DotUVs);
+	if (SelectedNeedle == EInkNeedle::Shader)
+	{
+		// 流量陣列與點列逐索引對齊；Liner 恆走空陣列（=全滿濃度）省頻寬
+		for (int32 i = 0; i < DotUVs.Num(); ++i)
+		{
+			PendingFlows.Add(FlowByte);
+		}
+	}
 	PointFlushTimer += DeltaSeconds;
 	if (PendingPoints.Num() > 0 &&
 		(PendingPoints.Num() >= PointFlushMaxBatch || PointFlushTimer >= PointFlushInterval))
@@ -2056,15 +2082,29 @@ void ANiceInkCharacter::FlushPendingPoints()
 	// 分塊送出（九版）：server 單批上限 256——shader 真人快掃低幀時一 tick 可積
 	// 破百針，整包送=被上限整批拒收（靜默丟墨+各端不同步）
 	constexpr int32 ChunkMax = 200;
+	const bool bHasFlows = PendingFlows.Num() == PendingPoints.Num(); // Liner=空陣列
 	int32 Cursor = 0;
 	while (Cursor < PendingPoints.Num())
 	{
 		const int32 Count = FMath::Min(ChunkMax, PendingPoints.Num() - Cursor);
 		TArray<FVector2D> Chunk(PendingPoints.GetData() + Cursor, Count);
-		ServerPaintPoints(Chunk);
+		TArray<uint8> FlowChunk;
+		if (bHasFlows)
+		{
+			FlowChunk.Append(PendingFlows.GetData() + Cursor, Count);
+		}
+		ServerPaintPoints(Chunk, FlowChunk);
 		Cursor += Count;
 	}
 	PendingPoints.Reset();
+	PendingFlows.Reset();
+}
+
+uint8 ANiceInkCharacter::ComputeMistFlowByte() const
+{
+	// 十六版填色制：流量恆滿——Shader=塗色工具，濃度屬於機器（塗均勻契約）。
+	// 手速→濃淡映射（十二版）退役；byte 資料鏈保留（存檔/RPC 格式不動）。
+	return 255;
 }
 
 bool ANiceInkCharacter::ResolveCursorToTargetUV(APlayerController* PC, const FVector2D& ScreenPx, FVector2D& OutUV) const
@@ -2745,7 +2785,7 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TEXT("solveYaw=%.1f hipDeg=%.1f ankleDeg=%.1f tipErr=%.2f reach=%d unreach=%.2f ")
 		TEXT("needle=%.2f trig=%d nSolve=%.1f grip=%.1f ")
 		TEXT("cruise=%d stick=%.0f dotN=%d dotGapCm=%.2f vmaxCm=%.2f guideN=%d ")
-		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f"),
+		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d"),
 		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
 		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
 		GhostedChars.Num(),
@@ -2764,7 +2804,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TattooDbgCruiseSecs > 0.1f ? TattooDbgTipCm / TattooDbgCruiseSecs : -1.0f,
 		DrawAimAzLocal,
 		SelectedNeedle == EInkNeedle::Shader ? 1 : 0,
-		MistAimSpeedDegS);
+		MistAimSpeedDegS,
+		static_cast<int32>(ComputeMistFlowByte()));
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const
@@ -3975,7 +4016,7 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 
 // --- 畫墨 RPC ---
 
-void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle)
+void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow)
 {
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
 	if (!GM || !Target || !GM->CanPaintOn(this, Target))
@@ -3992,15 +4033,17 @@ void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Targe
 	ServerPaintLastRefill = GetWorld()->GetTimeSeconds();
 	// 玩家作畫一律點刺筆劃（工具=刺青機；robo 線畫走 GameMode DebugRoboStroke=false）
 	Target->MulticastPaintBegin(GetInkAuthorId(), FNiceInkPalette::Get(ColorIndex), UV,
-		/*bDotStroke=*/true, Needle);
+		/*bDotStroke=*/true, Needle, Flow);
 }
 
-void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>& UVs)
+void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows)
 {
 	ANiceInkCharacter* Target = ServerPaintTarget.Get();
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
 	// 單批上限 256（九版；舊 64 在 shader 3000 排/s 低幀下一批就破=整批靜默拒收）
-	if (!Target || !GM || !GM->CanPaintOn(this, Target) || UVs.Num() == 0 || UVs.Num() > 256)
+	// 流量陣列：空=全滿濃度（Liner）；非空必須與點列等長（改裝客戶端亂餵=整批拒收）
+	if (!Target || !GM || !GM->CanPaintOn(this, Target) || UVs.Num() == 0 || UVs.Num() > 256 ||
+		(Flows.Num() != 0 && Flows.Num() != UVs.Num()))
 	{
 		return;
 	}
@@ -4024,12 +4067,17 @@ void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>
 	if (UVs.Num() <= Allowed)
 	{
 		ServerPaintDotBudget -= UVs.Num();
-		Target->MulticastPaintPoints(GetInkAuthorId(), UVs);
+		Target->MulticastPaintPoints(GetInkAuthorId(), UVs, Flows);
 		return;
 	}
 	TArray<FVector2D> Accepted(UVs.GetData(), Allowed); // 超額針裁掉（順序保留）
+	TArray<uint8> AcceptedFlows;
+	if (Flows.Num() > 0)
+	{
+		AcceptedFlows.Append(Flows.GetData(), Allowed); // 與點列同裁＝索引恆對齊
+	}
 	ServerPaintDotBudget -= Accepted.Num();
-	Target->MulticastPaintPoints(GetInkAuthorId(), Accepted);
+	Target->MulticastPaintPoints(GetInkAuthorId(), Accepted, AcceptedFlows);
 }
 
 void ANiceInkCharacter::ServerPaintEnd_Implementation()
@@ -4043,24 +4091,25 @@ void ANiceInkCharacter::ServerPaintEnd_Implementation()
 
 // --- 畫墨重播 ---
 
-void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle)
+void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle, uint8 Flow)
 {
 	if (InkCanvas)
 	{
-		InkCanvas->BeginStroke(AuthorId, Color, UV, bDotStroke, Needle);
+		InkCanvas->BeginStroke(AuthorId, Color, UV, bDotStroke, Needle, Flow);
 	}
 }
 
-void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, const TArray<FVector2D>& UVs)
+void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, const TArray<FVector2D>& UVs, const TArray<uint8>& Flows)
 {
 	if (InkCanvas)
 	{
 		// 批次蓋章：整批只開關一次 RT context（細針點排每點 20 tile、逐點開關
 		// 4096 霧層 context 會拖垮幀率——robo superfast 實錘）
+		const bool bHasFlows = Flows.Num() == UVs.Num();
 		InkCanvas->BeginStampBatchFor(AuthorId);
-		for (const FVector2D& UV : UVs)
+		for (int32 i = 0; i < UVs.Num(); ++i)
 		{
-			InkCanvas->AddStrokePoint(AuthorId, UV);
+			InkCanvas->AddStrokePoint(AuthorId, UVs[i], bHasFlows ? Flows[i] : 255);
 		}
 		InkCanvas->EndStampBatch();
 	}

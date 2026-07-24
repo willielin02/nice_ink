@@ -75,6 +75,13 @@ struct FInkStroke
 	// 針型（雙針制 07-23）：渲染半徑查表；舊存檔預設 Liner＝原行為
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
 	EInkNeedle NeedleType = EInkNeedle::Liner;
+
+	// 逐點出墨流量（07-24 十二版 手速→濃淡）：0–255＝0.0–1.0 濃度因子，與 Points
+	// 逐索引對齊——打霧的灰階活在手速上（快甩=淡、慢推=濃），因子在落針當下量化
+	// 進筆劃資料＝live/重放/碳黑/跨端從同一份資料得到同一濃度（決定性）。
+	// 空陣列或缺項＝滿濃度（舊存檔與液線針零遷移；Liner 恆不寫=機器擁有速度）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
+	TArray<uint8> PointFlow;
 };
 
 // 傑作：一位作者在一個回合畫下的全部筆劃。

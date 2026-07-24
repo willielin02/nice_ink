@@ -55,25 +55,45 @@ public:
 	// 視距死路）：密度夠=平滑灰面+細緻針點紋理，疊趟平滑變深。
 	// 墨進霧層（銳化不咬半透明——線層銳化以 0.5 為門檻，30% 的點會被整片擦掉）。---
 
-	// 排半寬（UV；1.5cm ⇒ 帶寬 3cm）——與 Character.ShaderBrushRadiusCm（HUD 圈）同步
+	// 排半寬（UV；1cm ⇒ 帶寬 2cm——07-24 十三版 user 定值「筆刷寬度=現在的 2/3」）
+	// ——與 Character.ShaderBrushRadiusCm（HUD 圈）同步
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.001", ClampMax = "0.02"))
-	float ShaderRowHalfWidthUv = 0.00452f;
+	float ShaderRowHalfWidthUv = 0.00301f;
 
-	// 每排針點數（24 ⇒ 帶內橫向點距 ~1.25mm）
-	// 勞動量校準（user 定案「5 趟近實心」）：覆蓋期望 λ=(K×πr²)/(排距×帶寬)≈1.0、
-	// 單趟平均上色 ≈ 1-exp(-λ×ᾱ) ≈ 31% ⇒ 5 趟 ≈ 85% 近實心
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "4", ClampMax = "40"))
-	int32 ShaderRowDotCount = 24;
+	// 每排針點數（49＝user 定值 49RM 真實排針規格；帶內槽距 ~0.4mm、點徑 1.3mm
+	// ⇒ 相鄰點重疊 ~3 倍＝墨在真皮層暈開互融——正常視距讀感=平滑灰色水洗面、
+	// 看不見單點；「點」只活在細噪質感層）
+	// 勞動量校準（user 定案「5 趟近實心」不破）：λ=(K×πr²)/(排距×帶寬)
+	// =49×π×0.065²/(0.2×2.0)≈1.63、ᾱ≈0.23 ⇒ 單趟 1-exp(-λᾱ) ≈ 31%
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "4", ClampMax = "128"))
+	int32 ShaderRowDotCount = 49;
 
-	// 針點半徑（UV；1.8mm 直徑——覆蓋率的主槓桿；再小=幾何覆蓋率塌掉、費力）
+	// 針點半徑（UV；1.3mm 直徑＝暈開後的墨點腳印——單點越小越淡越不可見，
+	// 下限=霧層紋素地板 1.23px/mm）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.00005", ClampMax = "0.002"))
-	float ShaderStippleUvRadius = 0.000271f;
+	float ShaderStippleUvRadius = 0.0002f;
 
-	// 單點不透明度：沿排弧形衰減（中央→邊緣）＝排針接觸壓力剖面=帶緣羽化
+	// 單點濃度（十六版 填色制 user 定案「打霧=塗色」：帶內均勻、鐘形退役——
+	// 漸層剖面與塗均勻物理衝突：中深邊淺讓相鄰掃軌必須精確半帶距才不疊條紋）。
+	// 校準=單趟核心 ~55%（λᾱ：λ=K×πr²/(排距×帶寬)≈1.63、ᾱ=0.49）⇒
+	// 2 趟 ~80%、3 趟 ~91%、續掃逼近實墨=與割線同墨色（「5 趟近實心」隨鐘形退役）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.01", ClampMax = "1"))
-	float ShaderStippleAlphaCenter = 0.45f;
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0", ClampMax = "1"))
-	float ShaderStippleAlphaEdge = 0.08f;
+	float ShaderStippleAlphaCenter = 0.49f;
+
+	// 帶緣羽化寬（mm；十六版）：平頂＋線性羽化剖面——相鄰掃軌在羽化區重疊
+	// 剛好互補成平（partition of unity）＝**塗均勻由構造保證、不靠手穩**；
+	// 羽化同時承接「填色邊略軟於割線」的讀感（線硬色軟=真實刺青的正常關係）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.5", ClampMax = "10"))
+	float ShaderFillFeatherMm = 3.0f;
+
+	// 真皮層暈開半徑（mm；十四版建制、十五版 0.4→0.8）：每顆針點的墨在烘製端
+	// 做等向高斯擴散——「暈開」必須在高解析烘製域完成再正確積分下取樣（RT 紋素
+	// 0.81mm 裝不下 1.3mm 點的漸層；欠取樣 aliasing=十三版刮痕真兇）。
+	// 0.8=點完全互融、帶內噪聲歸零（十五版實測 0.4 殘留 std/mean 0.15 的紋素噪聲
+	// ——貼膚特寫下被材質 bilinear 放大成沿格線的脊狀怪絲；0.8mm 紋素畫布上
+	// 「細噪質感」不可保留，user 規格本就是「看不見點的平滑水洗面」）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float ShaderMistBleedMm = 0.8f;
 
 	// 冷墨底色（逐通道 max 疊在筆色上）：半透明純黑疊暖膚色=棕=髒讀感；
 	// 真墨在皮下散射偏藍（Tyndall）——黑墨拉到暗藍灰、彩墨幾乎不受影響
@@ -114,12 +134,13 @@ public:
 	// bDotStroke（2026-07-22 刺青手感）：點刺筆劃——逐點蓋章不連線（見 FInkStroke 註）。
 	// 玩家作畫路徑一律 true；robo/證據/舊管線維持 false＝折線語義。
 	// Needle（07-23 雙針制）：針型存進筆劃，渲染半徑查表。
+	// Flow（07-24 十二版）：該點出墨流量 0–255（手速→濃淡；預設滿濃度=舊行為）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void BeginStroke(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke = false,
-		EInkNeedle Needle = EInkNeedle::Liner);
+		EInkNeedle Needle = EInkNeedle::Liner, uint8 Flow = 255);
 
 	UFUNCTION(BlueprintCallable, Category = "Ink")
-	void AddStrokePoint(int32 AuthorId, FVector2D UV);
+	void AddStrokePoint(int32 AuthorId, FVector2D UV, uint8 Flow = 255);
 
 	// 批次蓋章（十一版效能修）：一批 AddStrokePoint 只開關一次 RT canvas context
 	// ——細針點排（每點 20 tile）逐點開關 4096 霧層 context 會拖垮幀率（robo
@@ -258,21 +279,24 @@ private:
 	static FVector2D ClampUV(FVector2D UV);
 
 	// 把折線（依 MaxUvSegmentLength 斷筆規則）stamp 進指定 Canvas；
-	// bDots＝點刺筆劃：逐點蓋章、點間永不內插；Needle＝該筆劃的針型。
-	void StampPolyline(UCanvas* Canvas, const FVector2D& CanvasSize, const TArray<FVector2D>& Points, const FLinearColor& Color, bool bDots, EInkNeedle Needle) const;
+	// bDots＝點刺筆劃：逐點蓋章、點間永不內插；Needle＝該筆劃的針型；
+	// PointFlow＝逐點流量（null/缺項=滿濃度，與 Points 逐索引對齊）。
+	void StampPolyline(UCanvas* Canvas, const FVector2D& CanvasSize, const TArray<FVector2D>& Points, const FLinearColor& Color, bool bDots, EInkNeedle Needle, const TArray<uint8>* PointFlow = nullptr) const;
 	// 針型分派的單針蓋章：Liner=實心圓（麥克筆寬）；Shader=細針點排（RowDirUv=
 	// 行進方向、排垂直於它；null=無方向資訊（筆劃首點）→只落中央一點。方向由
-	// 相鄰兩點推導＝重放/碳黑/跨端從同一份點序列得到同一排、零新資料）
-	void StampNeedleDot(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, EInkNeedle Needle, const FVector2D* RowDirUv) const;
-	void StampMistRow(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, const FVector2D* RowDirUv) const;
+	// 相鄰兩點推導＝重放/碳黑/跨端從同一份點序列得到同一排、零新資料）。
+	// Flow＝濃度因子 0–1（手速→濃淡；Liner 忽略=機器擁有速度）。
+	void StampNeedleDot(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, EInkNeedle Needle, const FVector2D* RowDirUv, float Flow = 1.0f) const;
+	void StampMistRow(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, const FVector2D* RowDirUv, float Flow) const;
 	// 縫區排章（07-24 跨縫制）：沿表面攤平補丁逐點落墨——點沿真實表面跨縫映射
 	// ＝縫兩側自動接續、不可能蓋到圖集上的無關島。回 false=退回平面條帶。
-	bool StampMistRowOnSurface(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Ink, const FVector2D& RowDirUv) const;
+	bool StampMistRowOnSurface(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Ink, const FVector2D& RowDirUv, float Flow) const;
 	void StampDot(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, float UvRadius) const;
 	void StampSegment(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& From, const FVector2D& To, const FLinearColor& Color, float UvRadius) const;
 
-	// 即時作畫用：針型路由（Liner→MarkerRT、Shader→MistRT）。RowDirUv=排向脈絡。
-	void StampIntoLayerRT(const FVector2D& From, const FVector2D& To, const FLinearColor& Color, bool bDotOnly, EInkNeedle Needle, const FVector2D* RowDirUv = nullptr);
+	// 即時作畫用：針型路由（Liner→MarkerRT、Shader→MistRT）。RowDirUv=排向脈絡；
+	// Flow=該點濃度因子（手速→濃淡）。
+	void StampIntoLayerRT(const FVector2D& From, const FVector2D& To, const FLinearColor& Color, bool bDotOnly, EInkNeedle Needle, const FVector2D* RowDirUv = nullptr, float Flow = 1.0f);
 
 	// 重播時的針型過濾：麥克筆重建分兩趟（線層只畫 Liner、霧層只畫 Shader）；
 	// 刺青層一趟全畫（碳黑的霧=軟黑填色直接進 TattooRT，銳化不咬刺青層）

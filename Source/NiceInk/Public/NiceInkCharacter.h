@@ -234,9 +234,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "30"))
 	float MistMinAimSpeedDegS = 3.0f;
 
-	// 排半寬 cm（HUD 範圍圈用；與 InkCanvas.ShaderRowHalfWidthUv 同步——帶寬 3cm）
+	// 排半寬 cm（HUD 範圍圈用；與 InkCanvas.ShaderRowHalfWidthUv 同步——帶寬 2cm，
+	// 十三版 user 定值 2/3 帶寬）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "6"))
-	float ShaderBrushRadiusCm = 1.5f;
+	float ShaderBrushRadiusCm = 1.0f;
+
+	// （十二版「手速→濃淡」已於十六版填色制退役：Shader=塗色工具（user 定案），
+	// 濃度屬於機器不屬於手速——手速調濃淡=塗均勻殺手。FInkStroke.PointFlow
+	// 資料鏈保留（恆滿值；存檔/RPC 格式不動、未來漸層工具可回收））
 
 	// 當前針型（本地工具狀態；跟選色同壽命——回合內持續、不複製、隨筆劃 RPC 上服）
 	EInkNeedle SelectedNeedle = EInkNeedle::Liner;
@@ -459,11 +464,13 @@ public:
 
 	// --- 畫墨 RPC（作畫者 → 伺服器） ---
 
+	// Flow/Flows＝逐針出墨流量 0–255（手速→濃淡；Flows 與 UVs 逐索引對齊，
+	// 空陣列=全滿濃度——液線針恆走空陣列省頻寬）
 	UFUNCTION(Server, Reliable)
-	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle);
+	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow);
 
 	UFUNCTION(Server, Reliable)
-	void ServerPaintPoints(const TArray<FVector2D>& UVs);
+	void ServerPaintPoints(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
 
 	UFUNCTION(Server, Reliable)
 	void ServerPaintEnd();
@@ -471,13 +478,14 @@ public:
 	// --- 畫墨重播（被畫角色 → 所有端） ---
 
 	// bDotStroke：玩家路徑（ServerPaintBegin）恆 true＝點刺筆劃；
-	// robo 線畫（GameMode DebugRoboStroke）傳 false 保留折線語義。Needle=針型（07-23）
+	// robo 線畫（GameMode DebugRoboStroke）傳 false 保留折線語義。Needle=針型（07-23）；
+	// Flow/Flows=逐針流量（十二版；空陣列=全滿濃度）
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintBegin(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke,
-		EInkNeedle Needle);
+		EInkNeedle Needle, uint8 Flow);
 
 	UFUNCTION(NetMulticast, Reliable)
-	void MulticastPaintPoints(int32 AuthorId, const TArray<FVector2D>& UVs);
+	void MulticastPaintPoints(int32 AuthorId, const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintEnd(int32 AuthorId);
@@ -668,6 +676,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboNeedle(int32 NeedleIndex);
 
+	// robo：直設調色盤選色（robo 無法注入數字鍵；走與 PollPalette 同一條
+	// per-stroke 語義=換色即重開筆劃）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboColor(int32 ColorIndex);
+
 	// robo：沿法線 trace 皮膚表面點後走真 ServerEnterLean（真流程＝準星 trace；
 	// python 硬編體內錨點會把 10cm 眼位埋進肉裡；5.7 python 的 HitResult 反射不可用）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
@@ -724,6 +737,8 @@ private:
 	bool bPainting = false;
 	TWeakObjectPtr<ANiceInkCharacter> PaintTarget;
 	TArray<FVector2D> PendingPoints;
+	TArray<uint8> PendingFlows;    // 與 PendingPoints 逐索引對齊（手速→濃淡）
+	uint8 ComputeMistFlowByte() const; // EMA 手速→流量因子（Shader 專用；Liner=255）
 	void FlushPendingPoints(); // 分塊 ≤200/RPC（server 單批上限 256）
 	float PointFlushTimer = 0.0f;
 	bool bEmergeRequested = false;

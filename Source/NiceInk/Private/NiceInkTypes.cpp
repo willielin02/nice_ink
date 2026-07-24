@@ -36,17 +36,21 @@ namespace
 		  FLinearColor(0.266356f, 0.104616f, 0.078187f) },
 	};
 
+	// Crayola 官方十色照抄（2026-07-24 user 定案「直接抄他們的」→引擎雙膚色
+	// 截圖驗收「過」）：權威依據=1903 八色盒＋1926 併購 Munsell 蠟筆線（色彩
+	// 科學譜系）＋百年消費者校準；值=官方公布 sRGB 轉線性。選色史（三輪公式
+	// 落選帳＋膚色可讀剖面）在 Docs/DIRECT_DRAW_PLAN.md 與 Saved/palette_*.json。
 	const FLinearColor GPalette[] = {
-		FLinearColor(0.02f, 0.02f, 0.02f), // 黑
-		FLinearColor(0.95f, 0.95f, 0.95f), // 白
-		FLinearColor(0.78f, 0.05f, 0.05f), // 紅
-		FLinearColor(0.9f, 0.4f, 0.05f),   // 橙
-		FLinearColor(0.92f, 0.85f, 0.05f), // 黃
-		FLinearColor(0.06f, 0.55f, 0.1f),  // 綠
-		FLinearColor(0.05f, 0.2f, 0.8f),   // 藍
-		FLinearColor(0.4f, 0.08f, 0.65f),  // 紫
-		FLinearColor(0.95f, 0.4f, 0.65f),  // 粉
-		FLinearColor(0.4f, 0.22f, 0.08f),  // 棕
+		FLinearColor(0.0168f, 0.0168f, 0.0168f), // 黑 Black #232323
+		FLinearColor(0.8469f, 0.8469f, 0.8469f), // 白 White #EDEDED
+		FLinearColor(0.8550f, 0.0144f, 0.0742f), // 紅 Red #EE204D
+		FLinearColor(1.0000f, 0.1779f, 0.0395f), // 橙 Orange #FF7538
+		FLinearColor(0.9734f, 0.8070f, 0.2270f), // 黃 Yellow #FCE883
+		FLinearColor(0.0116f, 0.4125f, 0.1878f), // 綠 Green #1CAC78
+		FLinearColor(0.0137f, 0.1779f, 0.9911f), // 藍 Blue #1F75FE
+		FLinearColor(0.2874f, 0.1559f, 0.4233f), // 紫 Violet #926EAE
+		FLinearColor(1.0000f, 0.4020f, 0.6038f), // 粉 Carnation Pink #FFAACC
+		FLinearColor(0.4564f, 0.1356f, 0.0742f), // 棕 Brown #B4674D
 	};
 }
 

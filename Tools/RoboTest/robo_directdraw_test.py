@@ -447,6 +447,7 @@ class Test:
                 if self.sfast_mid_gap is None and t > 0.8:
                     raw, d = summary(host)
                     self.sfast_mid_gap = d.get("dotGapCm", -1.0)
+                    self.sfast_mid_flow = d.get("flow", -1.0)  # 手速→濃淡（十二版）
                     log("SUPERFAST MID | " + raw)
                 return
             raw, d = summary(host)
@@ -473,6 +474,119 @@ class Test:
             check("no deposit while holding still (movement gate)",
                   d.get("dotN", 0.0) - self.shader_dot1 <= 2.0,
                   f"dotN {self.shader_dot1:.0f} -> {d.get('dotN', 0):.0f}")
+            self.advance("flow_slowpass")
+        elif s == "flow_slowpass":
+            # 手速→濃淡（十二版）契約①：工作速度慢掃=滿流量（勞動量校準域）。
+            # 兩趟相鄰軌（tilt+4/+7 ≈ 半帶距）落在乾淨區＝疊軌剖面的像素證據
+            #（robo_flow_mist − robo_shader_mist 差分即孤立這兩條新帶）。
+            # 重定位時先放開 LMB——aim 傳送的直線軌跡會在肚皮拖出雜排。
+            t = self.elapsed()
+            host = find_char(self.server(), self.host_pid)
+            if not getattr(self, "flow_setup", False):
+                self.flow_setup = True
+                host.call_method("DebugRoboPaintHold", (False,))
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0, self.paint_tilt0 + 4.0))
+                return
+            if t < 0.8:
+                return
+            if not getattr(self, "flow_hold", False):
+                self.flow_hold = True
+                raw, d = summary(host)
+                self.flow_dot0 = d.get("dotN", 0.0)
+                self.flow_slow_flow = None
+                host.call_method("DebugRoboPaintHold", (True,))
+                return
+            if t < 2.6:
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0 + (t - 0.8) * 8.0,
+                                  self.paint_tilt0 + 4.0))
+                if self.flow_slow_flow is None and t > 1.8:
+                    raw, d = summary(host)
+                    self.flow_slow_flow = d.get("flow", -1.0)
+                    log("FLOWSLOW MID | " + raw)
+                return
+            raw, d = summary(host)
+            dn = d.get("dotN", 0.0) - self.flow_dot0
+            check("flow full at working sweep (slow = calibrated tone)",
+                  self.flow_slow_flow is not None and self.flow_slow_flow >= 248,
+                  f"mid flow={self.flow_slow_flow}")
+            check("flow probe pass1 deposits", dn >= 20.0, f"d_dotN={dn:.0f}")
+            self.advance("flow_pass2")
+        elif s == "flow_pass2":
+            # 契約②：superfast（真人手速下緣）流量單調下降——快=淡的表達軸存在；
+            # 第二趟相鄰軌供疊軌剖面像素自查（鐘形邊坡互填谷 vs 舊平頂縱紋）
+            t = self.elapsed()
+            host = find_char(self.server(), self.host_pid)
+            if not getattr(self, "flow2_setup", False):
+                self.flow2_setup = True
+                host.call_method("DebugRoboPaintHold", (False,))
+                # +4.95=與 pass1（+4.0）差 0.95°≈半帶距（實測 ~1.07cm/°；帶寬 2cm
+                # 十三版收窄後 1.5° 已變 8 成帶寬——探針幾何跟帶寬走、要實測不猜）
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0, self.paint_tilt0 + 4.95))
+                return
+            if t < 0.8:
+                return
+            if not getattr(self, "flow2_hold", False):
+                self.flow2_hold = True
+                raw, d = summary(host)
+                self.flow2_dot0 = d.get("dotN", 0.0)
+                host.call_method("DebugRoboPaintHold", (True,))
+                return
+            if t < 2.6:
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0 + (t - 0.8) * 8.0,
+                                  self.paint_tilt0 + 4.95))
+                return
+            raw, d = summary(host)
+            dn = d.get("dotN", 0.0) - self.flow2_dot0
+            check("flow probe pass2 deposits (adjacent track)", dn >= 20.0, f"d_dotN={dn:.0f}")
+            # 十六版填色制：流量恆滿（手速→濃淡退役——塗色工具的濃度屬於機器）
+            check("flow constant across speeds (fill tool contract)",
+                  getattr(self, "sfast_mid_flow", None) is not None and
+                  self.sfast_mid_flow == 255.0,
+                  f"superfast mid flow={getattr(self, 'sfast_mid_flow', None)}")
+            victim = find_char(self.server(), self.victim_pid)
+            victim.get_editor_property("InkCanvas").call_method(
+                "ExportLayersToPng",
+                ("C:/games/Unreal Engine/nice_ink/Saved/robo_flow",))
+            self.advance("color_probe")
+        elif s == "color_probe":
+            # 調色盤 × 打霧（十六版追修驗證）：紅墨（index 2）短掃一趟——驗
+            # 選色→ServerPaintBegin→stroke→MistRT RGB→材質 premult over 全鏈；
+            # 像素自查（post-run）驗 robo_color−robo_flow 差分區 R≫B。
+            t = self.elapsed()
+            host = find_char(self.server(), self.host_pid)
+            if not getattr(self, "color_setup", False):
+                self.color_setup = True
+                host.call_method("DebugRoboPaintHold", (False,))
+                host.call_method("DebugRoboColor", (2,))
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0, self.paint_tilt0 + 9.5))
+                return
+            if t < 0.8:
+                return
+            if not getattr(self, "color_hold", False):
+                self.color_hold = True
+                raw, d = summary(host)
+                self.color_dot0 = d.get("dotN", 0.0)
+                host.call_method("DebugRoboPaintHold", (True,))
+                return
+            if t < 2.2:
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 - 8.0 + (t - 0.8) * 8.0,
+                                  self.paint_tilt0 + 9.5))
+                return
+            raw, d = summary(host)
+            dn = d.get("dotN", 0.0) - self.color_dot0
+            check("palette color stroke deposits (shader, red)", dn >= 15.0,
+                  f"d_dotN={dn:.0f}")
+            victim = find_char(self.server(), self.victim_pid)
+            victim.get_editor_property("InkCanvas").call_method(
+                "ExportLayersToPng",
+                ("C:/games/Unreal Engine/nice_ink/Saved/robo_color",))
+            host.call_method("DebugRoboColor", (0,))
             host.call_method("DebugRoboNeedle", (0,))
             self.advance("shader_restore")
         elif s == "shader_restore":

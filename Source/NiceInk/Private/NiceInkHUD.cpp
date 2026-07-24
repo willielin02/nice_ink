@@ -359,8 +359,9 @@ void ANiceInkHUD::DrawHUD()
 		// 這行話補上「該怎麼辦」
 		DrawBottomHint(MyChar->GetDrawUnreachableSeconds() > 1.0f
 			? TEXT("out of reach — RMB stand up and lean in closer")
-			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up   ·   1-9,0 color"),
+			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up"),
 			MyChar->GetDrawUnreachableSeconds() > 1.0f ? NiHudColor::Amber : NiHudColor::PaperDim);
+		DrawPaletteStrip(MyChar); // 色票列＝「1-9,0 color」提示的可視化本體
 	}
 	else if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
 	{
@@ -691,6 +692,43 @@ void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
 void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)
 {
 	DrawTok(Text, Canvas->ClipX * 0.5f, Canvas->ClipY - 46.0f * UiScale, ETextTier::Small, Color, EHAlign::Center, false);
+}
+
+void ANiceInkHUD::DrawPaletteStrip(const ANiceInkCharacter* MyChar)
+{
+	// 鎖定中常駐色票列：十色塊＋鍵位數字＋當前色高亮框——固定色盤是承重設計
+	//（限時作畫/皮膚可讀策展/墨杯題材/畫風指紋），可視化補完 hotbar 慣例的另一半。
+	// 色塊直接用調色盤 linear 值＝與墨水同色（準星/範圍圈同一約定，不過 sRGB）。
+	if (!MyChar || !Canvas)
+	{
+		return;
+	}
+	const int32 N = FMath::Min(10, FNiceInkPalette::Num());
+	const float S = 20.0f * UiScale;            // 色塊邊長
+	const float Gap = 7.0f * UiScale;
+	const float TotalW = N * S + (N - 1) * Gap;
+	const float X0 = (Canvas->ClipX - TotalW) * 0.5f;
+	const float SwatchY = Canvas->ClipY - 104.0f * UiScale; // 底部提示行(-46)之上
+	for (int32 i = 0; i < N; ++i)
+	{
+		const float X = X0 + i * (S + Gap);
+		const bool bSel = MyChar->SelectedColorIndex == i;
+		// 外框：未選=墨色細框（白色/淡色在膚色背景上也讀得出邊界）；
+		// 當前色=紙色粗框＋微放大（唯一高亮語彙，不加動畫——美術語言 #24 硬切）
+		const float B = (bSel ? 2.5f : 1.0f) * UiScale;
+		const float Grow = bSel ? 2.0f * UiScale : 0.0f;
+		FLinearColor Frame = bSel ? NiHudColor::Paper : NiHudColor::Ink;
+		Frame.A = bSel ? 1.0f : 0.8f;
+		DrawRect(Frame, X - B - Grow, SwatchY - B - Grow,
+			S + 2.0f * (B + Grow), S + 2.0f * (B + Grow));
+		FLinearColor Swatch = FNiceInkPalette::Get(i);
+		Swatch.A = 1.0f;
+		DrawRect(Swatch, X - Grow, SwatchY - Grow, S + 2.0f * Grow, S + 2.0f * Grow);
+		// 鍵位標（1..9,0）：置於色塊下、提示行上
+		DrawTok(FString::Printf(TEXT("%d"), (i + 1) % 10), X + S * 0.5f,
+			SwatchY + S + 5.0f * UiScale, ETextTier::Small,
+			bSel ? NiHudColor::Paper : NiHudColor::PaperDim, EHAlign::Center, bSel);
+	}
 }
 
 void ANiceInkHUD::DrawBlindOverlay(const ANiceInkCharacter* MyChar)

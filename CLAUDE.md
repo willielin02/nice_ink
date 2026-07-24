@@ -110,8 +110,11 @@
 - `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/**直接畫制**（2026-07-20 起：
   眼錨定 FP 相機 FOV36、螢幕中心=針尖、剛臂 3-DOF 解筆尖觸膚、2D viewmodel 筆、ghost 穿透）/
   **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**雙針制**（滾輪切換：
-  Liner=方向拉桿巡航＋守恆式 v_max=k·d·f＋行進蟻導引＋浮雕跨越；Shader=自由揮掃＋
-  移動閘（EMA 短窗）＋距離節拍細針點排）/程式化走路/ESC 系統選單）、
+  Liner=方向拉桿巡航＋守恆式 v_max=k·d·f＋行進蟻導引＋浮雕跨越；Shader=**填色
+  收斂制**（平頂＋線性羽化剖面=塗均勻構造保證、單趟 55% 疊趟收斂實墨、軟橢圓
+  章 COLA 疊平、暈開烘製鏈=高解烘→高斯→箱式下取樣 1:1；流量恆定、
+  FInkStroke.PointFlow byte 鏈保留）＋**Crayola 官方十色調色盤**（user 驗收
+  定案；1-9,0 換色即時生效＋HUD 常駐色票列））/程式化走路/ESC 系統選單）、
   `InkCanvasComponent`（筆劃=真相、**三層 RT 快取**：線層 4096+Valve 銳化／霧層 4096
   軟半透明（銳化不咬）／刺青層；作者 ID/碳黑/雷射/洗掉；批次蓋章＋預烘 stipple 條帶＋
   縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
@@ -146,10 +149,14 @@
   （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
   已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
   **刺青作畫全制（2026-07-20~24，帳本=Docs/DIRECT_DRAW_PLAN.md 逐版全史：直接畫制
-  →刺青機伸縮針→液線巡航手感→雙針制→打霧十一版（細針點排＝小半透明點 30%→5%
-  弧形衰減、5 趟近實心勞動量校準、冷墨底色、跨縫表面補丁）；長跪作畫姿/雙臂 IK/
-  平面畫布全退役；robo_directdraw_test.py=59 檢查常駐套件（含真人手速探針），
-  迴歸組=orbit/feign/maze）**。SPEC 敘事對齊（麥克筆→刺青機、定案 #19 針寬）
+  →刺青機伸縮針→液線巡航手感→雙針制→打霧十一版（細針點排、冷墨底色、跨縫
+  表面補丁）→**十二~十六版（07-24：欠取樣 aliasing 根治（暈開烘製鏈）→軟橢圓
+  章 COLA→填色收斂制＝user 定性「打霧=塗色」：平頂+羽化+疊趟收斂實墨；
+  鐘形/手速濃淡/5 趟近實心均退役）＋調色盤全戰役（換色即時生效/色票列/
+  三輪公式選色落選→Crayola 官方十色 user 驗收定案；選色儀器=Tools/AssetPrep/
+  palette_pick.py+canonical_palette.py+Tools/RoboTest/robo_palette_matrix.py）**；
+  長跪作畫姿/雙臂 IK/平面畫布全退役；robo_directdraw_test.py=64 檢查常駐套件
+  （含真人手速探針＋流量恆定＋紅墨像素契約），迴歸組=orbit/feign/maze）**。SPEC 敘事對齊（麥克筆→刺青機、定案 #19 針寬）
   由 user 統一處理（明示），SPEC 未動。
 
 ## 收尾紀律

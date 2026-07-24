@@ -92,6 +92,10 @@ protected:
 	void DrawPostGamePanel(class ANiceInkCharacter* MyChar);
 	void DrawBottomHint(const FString& Text, const FLinearColor& Color);
 
+	// 鎖定中常駐色票列（十六版追修：hotbar 慣例的補完——十色可視＋數字標＋
+	// 當前色高亮；選項不可視=「不知道有十色/拿什麼色/按哪鍵」三重盲）
+	void DrawPaletteStrip(const class ANiceInkCharacter* MyChar);
+
 	// 沉睡端全套：視覺全遮蔽黑屏＋醉夢圓形迷宮＋姿勢面板（SPEC 定案 #3、#30/#31）
 	void DrawVictimSleepUI(class ANiceInkCharacter* MyChar, const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS);
 
