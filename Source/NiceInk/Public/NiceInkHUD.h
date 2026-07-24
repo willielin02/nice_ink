@@ -37,6 +37,8 @@ protected:
 	UPROPERTY() TObjectPtr<UTexture2D> IconSpray;
 	UPROPERTY() TObjectPtr<UTexture2D> IconKick;
 	UPROPERTY() TObjectPtr<UTexture2D> IconMarker;
+	// FP 2D 筆（07-22 viewmodel 制）：入鎖時畫在畫面上緣的刺青機貼圖＋出針口→墨點針線
+	UPROPERTY() TObjectPtr<UTexture2D> PenSprite;
 	UPROPERTY() TObjectPtr<UTexture2D> IconCash;
 	UPROPERTY() TObjectPtr<UTexture2D> IconRotate;
 	UPROPERTY() TObjectPtr<UTexture2D> IconEye;

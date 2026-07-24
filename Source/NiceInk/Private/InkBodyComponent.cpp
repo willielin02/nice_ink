@@ -48,6 +48,7 @@ void UInkBodyComponent::BindCanvas(UInkCanvasComponent* Canvas)
 
 	DynamicBodyMaterial->SetTextureParameterValue(MarkerRTParam, Canvas->GetMarkerRenderTarget());
 	DynamicBodyMaterial->SetTextureParameterValue(TattooRTParam, Canvas->GetTattooRenderTarget());
+	DynamicBodyMaterial->SetTextureParameterValue(MistRTParam, Canvas->GetMistRenderTarget());
 	DynamicBodyMaterial->SetVectorParameterValue(SkinToneParam, SkinTone);
 	if (EyeMaskTexture)
 	{
@@ -65,6 +66,9 @@ void UInkBodyComponent::SwapBodyMesh(UStaticMesh* NewMesh)
 	SetStaticMesh(NewMesh);
 	bTriCacheBuilt = false;
 	CachedTris.Reset();
+	bSeamDataBuilt = false;
+	TriNearSeam.Reset();
+	UvGridCells.Reset();
 	// SetStaticMesh 會重設材質槽為新網格預設——把 MID 綁回去
 	if (DynamicBodyMaterial)
 	{
@@ -95,6 +99,8 @@ void UInkBodyComponent::ApplyFaceTexture()
 bool UInkBodyComponent::BuildTriCache()
 {
 	CachedTris.Reset();
+	WeldPos.Reset();
+	TriAdj.Reset();
 	bTriCacheBuilt = false;
 
 	UStaticMesh* SM = GetStaticMesh();
@@ -131,6 +137,11 @@ bool UInkBodyComponent::BuildTriCache()
 				continue;
 			}
 		}
+		// FaceUV 慣例＝UV 通道 1（存在才讀；缺席時退回通道 0＝臉貼圖不演但不炸）
+		const uint32 Uv1Channel = Vertices.GetNumTexCoords() > 1 ? 1 : SafeUvChannel;
+		const FColorVertexBuffer& Colors = LOD.VertexBuffers.ColorVertexBuffer;
+		const bool bHasColors = Colors.GetNumVertices() == Positions.GetNumVertices();
+
 		for (uint32 Tri = 0; Tri < Section.NumTriangles; ++Tri)
 		{
 			const uint32 Base = Section.FirstIndex + Tri * 3;
@@ -145,12 +156,491 @@ bool UInkBodyComponent::BuildTriCache()
 			Cached.UVA = FVector2D(Vertices.GetVertexUV(I0, SafeUvChannel));
 			Cached.UVB = FVector2D(Vertices.GetVertexUV(I1, SafeUvChannel));
 			Cached.UVC = FVector2D(Vertices.GetVertexUV(I2, SafeUvChannel));
+			Cached.UV1A = FVector2D(Vertices.GetVertexUV(I0, Uv1Channel));
+			Cached.UV1B = FVector2D(Vertices.GetVertexUV(I1, Uv1Channel));
+			Cached.UV1C = FVector2D(Vertices.GetVertexUV(I2, Uv1Channel));
+			Cached.ColA = bHasColors ? Colors.VertexColor(I0) : FColor::Black;
+			Cached.ColB = bHasColors ? Colors.VertexColor(I1) : FColor::Black;
+			Cached.ColC = bHasColors ? Colors.VertexColor(I2) : FColor::Black;
 			CachedTris.Add(Cached);
+		}
+	}
+
+	// --- 位置焊接（跨 UV 縫的表面連續拓樸）＋三角形鄰接 ---
+	// 渲染緩衝在 UV 縫上拆頂點：用頂點索引建鄰接會把圖集縫當成邊界、補丁被縫切斷
+	// ——攤平畫布的存在意義正是讓縫隱形，焊接鍵必須是「位置」（0.01mm 量化）。
+	{
+		TMap<FIntVector, int32> WeldMap;
+		WeldMap.Reserve(CachedTris.Num() * 2);
+		auto WeldId = [&](const FVector& P) {
+			const FIntVector Key(
+				FMath::RoundToInt(P.X * 100.0f),
+				FMath::RoundToInt(P.Y * 100.0f),
+				FMath::RoundToInt(P.Z * 100.0f));
+			if (const int32* Found = WeldMap.Find(Key))
+			{
+				return *Found;
+			}
+			const int32 NewId = WeldPos.Add(P);
+			WeldMap.Add(Key, NewId);
+			return NewId;
+		};
+		for (FCachedTri& Tri : CachedTris)
+		{
+			Tri.W[0] = WeldId(Tri.A);
+			Tri.W[1] = WeldId(Tri.B);
+			Tri.W[2] = WeldId(Tri.C);
+		}
+
+		TriAdj.Init(INDEX_NONE, CachedTris.Num() * 3);
+		TMap<uint64, int32> EdgeOwner; // 焊接邊 → 先到的 (tri*3+edge)
+		EdgeOwner.Reserve(CachedTris.Num() * 3);
+		for (int32 T = 0; T < CachedTris.Num(); ++T)
+		{
+			for (int32 E = 0; E < 3; ++E)
+			{
+				const int32 Wa = CachedTris[T].W[E];
+				const int32 Wb = CachedTris[T].W[(E + 1) % 3];
+				if (Wa == Wb)
+				{
+					continue; // 退化邊（焊接後塌掉）
+				}
+				const uint64 Key = (static_cast<uint64>(FMath::Min(Wa, Wb)) << 32) |
+					static_cast<uint32>(FMath::Max(Wa, Wb));
+				if (int32* Other = EdgeOwner.Find(Key))
+				{
+					if (*Other != INDEX_NONE)
+					{
+						TriAdj[T * 3 + E] = *Other / 3;
+						TriAdj[*Other] = T;
+						*Other = INDEX_NONE; // 非流形邊（>2 面共邊）：只配第一對
+					}
+				}
+				else
+				{
+					EdgeOwner.Add(Key, T * 3 + E);
+				}
+			}
 		}
 	}
 
 	bTriCacheBuilt = CachedTris.Num() > 0;
 	return bTriCacheBuilt;
+}
+
+bool UInkBodyComponent::BuildSeamData()
+{
+	if (bSeamDataBuilt)
+	{
+		return TriNearSeam.Num() > 0;
+	}
+	if (!bTriCacheBuilt && !BuildTriCache())
+	{
+		return false;
+	}
+	bSeamDataBuilt = true;
+
+	const int32 NumTris = CachedTris.Num();
+	TriNearSeam.Init(0, NumTris);
+
+	// --- 縫邊偵測：焊接鄰接存在（表面連續）但共享頂點的 UV 兩側不一致=UV 縫；
+	// 快取邊界邊（褌洞/外緣）同樣入列——出界平面蓋章一樣是汙染 ---
+	auto UVOfWeld = [&](const FCachedTri& Tri, int32 W) -> FVector2D
+	{
+		if (Tri.W[0] == W) { return Tri.UVA; }
+		if (Tri.W[1] == W) { return Tri.UVB; }
+		return Tri.UVC;
+	};
+	TArray<float> DistCm;
+	DistCm.Init(TNumericLimits<float>::Max(), NumTris);
+	TArray<int32> Queue;
+	constexpr float SeamUvTol = 1e-5f;
+	for (int32 T = 0; T < NumTris; ++T)
+	{
+		bool bSeamTri = false;
+		for (int32 E = 0; E < 3 && !bSeamTri; ++E)
+		{
+			const int32 N = TriAdj[T * 3 + E];
+			if (N == INDEX_NONE)
+			{
+				bSeamTri = true; // 邊界邊
+				continue;
+			}
+			const int32 Wa = CachedTris[T].W[E];
+			const int32 Wb = CachedTris[T].W[(E + 1) % 3];
+			if (!UVOfWeld(CachedTris[T], Wa).Equals(UVOfWeld(CachedTris[N], Wa), SeamUvTol) ||
+				!UVOfWeld(CachedTris[T], Wb).Equals(UVOfWeld(CachedTris[N], Wb), SeamUvTol))
+			{
+				bSeamTri = true; // UV 不連續＝圖集縫
+			}
+		}
+		if (bSeamTri)
+		{
+			DistCm[T] = 0.0f;
+			TriNearSeam[T] = 1;
+			Queue.Add(T);
+		}
+	}
+
+	// --- 距離膨脹（多源標號修正法，質心距近似）：距縫 < NearCm 的 tri 全旗標——
+	// 排帶半寬 1.5cm＋抖動＋點半徑 < 2.5cm ⇒ 快速路徑的平面蓋章保證不越縫 ---
+	constexpr float NearCm = 2.5f;
+	auto Centroid = [&](int32 T)
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		return (Tri.A + Tri.B + Tri.C) / 3.0f;
+	};
+	for (int32 Head = 0; Head < Queue.Num(); ++Head)
+	{
+		const int32 T = Queue[Head];
+		for (int32 E = 0; E < 3; ++E)
+		{
+			const int32 N = TriAdj[T * 3 + E];
+			if (N == INDEX_NONE)
+			{
+				continue;
+			}
+			const float Cand = DistCm[T] + FVector::Dist(Centroid(T), Centroid(N));
+			if (Cand < DistCm[N] && Cand < NearCm)
+			{
+				DistCm[N] = Cand;
+				TriNearSeam[N] = 1;
+				Queue.Add(N);
+			}
+		}
+	}
+
+	// --- UV 網格索引（UV bbox 撒格）---
+	UvGridCells.Reset();
+	UvGridCells.SetNum(UvGridDim * UvGridDim);
+	for (int32 T = 0; T < NumTris; ++T)
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		const float MinU = FMath::Min3(Tri.UVA.X, Tri.UVB.X, Tri.UVC.X);
+		const float MaxU = FMath::Max3(Tri.UVA.X, Tri.UVB.X, Tri.UVC.X);
+		const float MinV = FMath::Min3(Tri.UVA.Y, Tri.UVB.Y, Tri.UVC.Y);
+		const float MaxV = FMath::Max3(Tri.UVA.Y, Tri.UVB.Y, Tri.UVC.Y);
+		const int32 X0 = FMath::Clamp(FMath::FloorToInt(MinU * UvGridDim), 0, UvGridDim - 1);
+		const int32 X1 = FMath::Clamp(FMath::FloorToInt(MaxU * UvGridDim), 0, UvGridDim - 1);
+		const int32 Y0 = FMath::Clamp(FMath::FloorToInt(MinV * UvGridDim), 0, UvGridDim - 1);
+		const int32 Y1 = FMath::Clamp(FMath::FloorToInt(MaxV * UvGridDim), 0, UvGridDim - 1);
+		for (int32 Y = Y0; Y <= Y1; ++Y)
+		{
+			for (int32 X = X0; X <= X1; ++X)
+			{
+				UvGridCells[Y * UvGridDim + X].Add(T);
+			}
+		}
+	}
+	return true;
+}
+
+int32 UInkBodyComponent::FindTriAtUV(const FVector2D& UV)
+{
+	if (!BuildSeamData())
+	{
+		return INDEX_NONE;
+	}
+	const int32 X = FMath::Clamp(FMath::FloorToInt(UV.X * UvGridDim), 0, UvGridDim - 1);
+	const int32 Y = FMath::Clamp(FMath::FloorToInt(UV.Y * UvGridDim), 0, UvGridDim - 1);
+	for (const int32 T : UvGridCells[Y * UvGridDim + X])
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		const FVector2D V0 = Tri.UVB - Tri.UVA;
+		const FVector2D V1 = Tri.UVC - Tri.UVA;
+		const FVector2D V2 = UV - Tri.UVA;
+		const float Denom = V0.X * V1.Y - V1.X * V0.Y;
+		if (FMath::Abs(Denom) < 1e-12f)
+		{
+			continue;
+		}
+		const float B1 = (V2.X * V1.Y - V1.X * V2.Y) / Denom;
+		const float B2 = (V0.X * V2.Y - V2.X * V0.Y) / Denom;
+		if (B1 >= -0.001f && B2 >= -0.001f && (B1 + B2) <= 1.001f)
+		{
+			return T;
+		}
+	}
+	return INDEX_NONE;
+}
+
+bool UInkBodyComponent::IsUVNearSeam(const FVector2D& UV)
+{
+	const int32 T = FindTriAtUV(UV);
+	return T != INDEX_NONE && TriNearSeam.IsValidIndex(T) && TriNearSeam[T] != 0;
+}
+
+bool UInkBodyComponent::UVToWorldOnTri(int32 TriIndex, const FVector2D& UV, FVector& OutWorld)
+{
+	if (!CachedTris.IsValidIndex(TriIndex))
+	{
+		return false;
+	}
+	const FCachedTri& Tri = CachedTris[TriIndex];
+	const FVector2D V0 = Tri.UVB - Tri.UVA;
+	const FVector2D V1 = Tri.UVC - Tri.UVA;
+	const FVector2D V2 = UV - Tri.UVA;
+	const float Denom = V0.X * V1.Y - V1.X * V0.Y;
+	if (FMath::Abs(Denom) < 1e-12f)
+	{
+		return false;
+	}
+	const float B1 = (V2.X * V1.Y - V1.X * V2.Y) / Denom;
+	const float B2 = (V0.X * V2.Y - V2.X * V0.Y) / Denom;
+	const FVector Local = Tri.A + (Tri.B - Tri.A) * B1 + (Tri.C - Tri.A) * B2;
+	OutWorld = GetComponentTransform().TransformPosition(Local);
+	return true;
+}
+
+bool UInkBodyComponent::BuildSurfacePatch(const FVector& WorldCenter, float RadiusCm,
+	FInkSurfacePatch& OutPatch, float MaxSeedDistance)
+{
+	OutPatch.Reset();
+	if ((!bTriCacheBuilt && !BuildTriCache()) || RadiusCm <= 1.0f)
+	{
+		return false;
+	}
+
+	// --- 種子三角形＝離世界點最近的皮膚三角形 ---
+	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldCenter);
+	int32 Seed = INDEX_NONE;
+	FVector SeedPoint = FVector::ZeroVector;
+	float BestDistSq = TNumericLimits<float>::Max();
+	for (int32 T = 0; T < CachedTris.Num(); ++T)
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+		const float DistSq = FVector::DistSquared(Closest, Local);
+		if (DistSq < BestDistSq)
+		{
+			BestDistSq = DistSq;
+			Seed = T;
+			SeedPoint = Closest;
+		}
+	}
+	if (Seed == INDEX_NONE || BestDistSq > FMath::Square(MaxSeedDistance))
+	{
+		return false;
+	}
+	return BuildSurfacePatchInternal(Seed, SeedPoint, RadiusCm, OutPatch);
+}
+
+bool UInkBodyComponent::BuildSurfacePatchFromTri(int32 SeedTri, const FVector& WorldCenter,
+	float RadiusCm, FInkSurfacePatch& OutPatch)
+{
+	OutPatch.Reset();
+	if ((!bTriCacheBuilt && !BuildTriCache()) || !CachedTris.IsValidIndex(SeedTri) || RadiusCm <= 1.0f)
+	{
+		return false;
+	}
+	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldCenter);
+	const FCachedTri& Tri = CachedTris[SeedTri];
+	const FVector SeedPoint = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+	return BuildSurfacePatchInternal(SeedTri, SeedPoint, RadiusCm, OutPatch);
+}
+
+bool UInkBodyComponent::BuildSurfacePatchInternal(int32 Seed, const FVector& SeedPoint,
+	float RadiusCm, FInkSurfacePatch& OutPatch)
+{
+	// --- 種子平面框（chart 原點=選點；+Y≈網格本地 +Z 朝頭側的投影——畫布上下有穩定語義）---
+	const FCachedTri& S = CachedTris[Seed];
+	const FVector SeedN = FVector::CrossProduct(S.B - S.A, S.C - S.A).GetSafeNormal();
+	FVector UpHint = FMath::Abs(SeedN.Z) < 0.9f ? FVector::UpVector : FVector::YAxisVector;
+	FVector AxisY = (UpHint - FVector::DotProduct(UpHint, SeedN) * SeedN).GetSafeNormal();
+	if (AxisY.IsNearlyZero())
+	{
+		AxisY = FVector::XAxisVector;
+	}
+	const FVector AxisX = FVector::CrossProduct(AxisY, SeedN).GetSafeNormal();
+
+	// --- BFS 鉸鏈展開：每焊接頂點一個 chart 座標（先到先定＝圖表連續）---
+	TMap<int32, FVector2D> ChartByWeld;
+	ChartByWeld.Reserve(512);
+	auto SeedChart = [&](const FVector& P) {
+		const FVector D = P - SeedPoint;
+		return FVector2D(FVector::DotProduct(D, AxisX), FVector::DotProduct(D, AxisY));
+	};
+	ChartByWeld.Add(S.W[0], SeedChart(S.A));
+	ChartByWeld.Add(S.W[1], SeedChart(S.B));
+	ChartByWeld.Add(S.W[2], SeedChart(S.C));
+
+	TSet<int32> Visited;
+	Visited.Add(Seed);
+	TArray<int32> Queue;
+	Queue.Add(Seed);
+	TArray<int32> Accepted;
+
+	auto CornerPos = [&](int32 T, int32 Corner) -> const FVector& {
+		const FCachedTri& Tri = CachedTris[T];
+		return Corner == 0 ? Tri.A : (Corner == 1 ? Tri.B : Tri.C);
+	};
+
+	for (int32 Head = 0; Head < Queue.Num(); ++Head)
+	{
+		const int32 T = Queue[Head];
+		const FCachedTri& Tri = CachedTris[T];
+
+		// 收錄判定：任一角在半徑內（邊界三角形保留＝畫布邊緣是三角形邊，誠實的紙緣）
+		bool bInside = false;
+		for (int32 C = 0; C < 3; ++C)
+		{
+			const FVector2D* Chart = ChartByWeld.Find(Tri.W[C]);
+			if (Chart && Chart->SizeSquared() <= FMath::Square(RadiusCm))
+			{
+				bInside = true;
+				break;
+			}
+		}
+		if (!bInside)
+		{
+			continue;
+		}
+		Accepted.Add(T);
+
+		// 擴張：三條邊的鄰居展開進平面
+		for (int32 E = 0; E < 3; ++E)
+		{
+			const int32 N = TriAdj[T * 3 + E];
+			if (N == INDEX_NONE || Visited.Contains(N))
+			{
+				continue;
+			}
+			const FCachedTri& NT = CachedTris[N];
+			// 鄰居的第三個焊接頂點（不在共享邊上的那個）
+			const int32 Wa = Tri.W[E];
+			const int32 Wb = Tri.W[(E + 1) % 3];
+			int32 ThirdCorner = INDEX_NONE;
+			for (int32 C = 0; C < 3; ++C)
+			{
+				if (NT.W[C] != Wa && NT.W[C] != Wb)
+				{
+					ThirdCorner = C;
+					break;
+				}
+			}
+			const FVector2D* CA = ChartByWeld.Find(Wa);
+			const FVector2D* CB = ChartByWeld.Find(Wb);
+			if (ThirdCorner == INDEX_NONE || !CA || !CB)
+			{
+				continue; // 退化或父邊未定——不從這條邊擴
+			}
+			if (!ChartByWeld.Contains(NT.W[ThirdCorner]))
+			{
+				// 鉸鏈展開：保長放平——沿 AB 求垂足＋高度，放在父三角形 apex 的對側
+				const FVector& PA = WeldPos[Wa];
+				const FVector& PB = WeldPos[Wb];
+				const FVector& PC = WeldPos[NT.W[ThirdCorner]];
+				const float DAB = FMath::Max(FVector::Dist(PA, PB), 0.01f);
+				const float Da = FVector::Dist(PC, PA);
+				const float Db = FVector::Dist(PC, PB);
+				const float Along = (DAB * DAB + Da * Da - Db * Db) / (2.0f * DAB);
+				const float H = FMath::Sqrt(FMath::Max(0.0f, Da * Da - Along * Along));
+				const FVector2D U = (*CB - *CA) / DAB;
+				const FVector2D V(-U.Y, U.X);
+				// 父 apex（本三角形不在共享邊上的角）在 AB 的哪一側——鄰居放對側
+				const int32 ParentApexW = Tri.W[(E + 2) % 3];
+				float Side = 1.0f;
+				if (const FVector2D* PApex = ChartByWeld.Find(ParentApexW))
+				{
+					const FVector2D Rel = *PApex - *CA;
+					Side = (Rel.X * V.X + Rel.Y * V.Y) > 0.0f ? -1.0f : 1.0f;
+				}
+				ChartByWeld.Add(NT.W[ThirdCorner], *CA + U * Along + V * (H * Side));
+			}
+			Visited.Add(N);
+			Queue.Add(N);
+		}
+	}
+
+	if (Accepted.Num() == 0)
+	{
+		return false;
+	}
+
+	// --- 輸出補丁 ---
+	OutPatch.SeedTri = Seed;
+	OutPatch.RadiusCm = RadiusCm;
+	OutPatch.TriMask.Init(false, CachedTris.Num());
+	OutPatch.Tris.Reserve(Accepted.Num());
+	TSet<int32> AcceptedSet(Accepted);
+	for (const int32 T : Accepted)
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		FInkSurfacePatch::FPatchTri P;
+		P.CacheTri = T;
+		const FVector2D* Charts[3] = { ChartByWeld.Find(Tri.W[0]), ChartByWeld.Find(Tri.W[1]), ChartByWeld.Find(Tri.W[2]) };
+		if (!Charts[0] || !Charts[1] || !Charts[2])
+		{
+			continue;
+		}
+		P.C[0] = { *Charts[0], Tri.UVA, Tri.UV1A, Tri.ColA };
+		P.C[1] = { *Charts[1], Tri.UVB, Tri.UV1B, Tri.ColB };
+		P.C[2] = { *Charts[2], Tri.UVC, Tri.UV1C, Tri.ColC };
+		OutPatch.Tris.Add(P);
+		OutPatch.TriMask[T] = true;
+
+		// 邊界線段：鄰居不在補丁內（或無鄰居）的邊
+		for (int32 E = 0; E < 3; ++E)
+		{
+			const int32 N = TriAdj[T * 3 + E];
+			if (N == INDEX_NONE || !AcceptedSet.Contains(N))
+			{
+				OutPatch.BoundarySegs.Add(CornerPos(T, E));
+				OutPatch.BoundarySegs.Add(CornerPos(T, (E + 1) % 3));
+			}
+		}
+	}
+
+	return OutPatch.IsValid();
+}
+
+bool FInkSurfacePatch::ChartToUV0(const FVector2D& ChartPt, FVector2D& OutUV0) const
+{
+	for (const FPatchTri& Tri : Tris)
+	{
+		const FVector2D V0 = Tri.C[1].Chart - Tri.C[0].Chart;
+		const FVector2D V1 = Tri.C[2].Chart - Tri.C[0].Chart;
+		const FVector2D V2 = ChartPt - Tri.C[0].Chart;
+		const float D00 = FVector2D::DotProduct(V0, V0);
+		const float D01 = FVector2D::DotProduct(V0, V1);
+		const float D11 = FVector2D::DotProduct(V1, V1);
+		const float D20 = FVector2D::DotProduct(V2, V0);
+		const float D21 = FVector2D::DotProduct(V2, V1);
+		const float Denom = D00 * D11 - D01 * D01;
+		if (Denom <= D00 * D11 * 1e-4f)
+		{
+			continue; // 退化判定同 ResolveUVToWorld（相對尺度）
+		}
+		const float V = (D11 * D20 - D01 * D21) / Denom;
+		const float W = (D00 * D21 - D01 * D20) / Denom;
+		const float U = 1.0f - V - W;
+		constexpr float Eps = -0.001f;
+		if (U >= Eps && V >= Eps && W >= Eps)
+		{
+			OutUV0 = Tri.C[0].UV0 * U + Tri.C[1].UV0 * V + Tri.C[2].UV0 * W;
+			return true;
+		}
+	}
+	return false;
+}
+
+bool FInkSurfacePatch::Overlaps(const FInkSurfacePatch& A, const FInkSurfacePatch& B)
+{
+	if (A.TriMask.Num() != B.TriMask.Num() || A.TriMask.Num() == 0)
+	{
+		return false; // 不同網格（站/睡切換瞬間）＝不重疊；空補丁＝不重疊
+	}
+	const int32 NumWords = FBitSet::CalculateNumWords(A.TriMask.Num());
+	const uint32* WordsA = A.TriMask.GetData();
+	const uint32* WordsB = B.TriMask.GetData();
+	for (int32 i = 0; i < NumWords; ++i)
+	{
+		if (WordsA[i] & WordsB[i])
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool UInkBodyComponent::ResolveUVToWorld(FVector2D UV, FVector& OutWorldPosition)
@@ -226,6 +716,12 @@ FString UInkBodyComponent::DebugResolveBodyUV(const FVector& WorldPosition)
 
 bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance)
 {
+	return ResolveBodyUV(WorldPosition, OutUV, MaxDistance, nullptr);
+}
+
+bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance,
+	const FVector2D* PreferNearUV)
+{
 	if (!bTriCacheBuilt && !BuildTriCache())
 	{
 		return false;
@@ -251,6 +747,32 @@ bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& O
 	if (BestDistSq > FMath::Square(MaxDistance))
 	{
 		return false;
+	}
+
+	// 縫區遲滯：距離「真並列」（最近距離＋0.5mm 帶）的候選裡選 UV 離上一點最近的——
+	// 縫上兩島的浮點搶點被上一點錨死。帶寬鐵則：只准蓋浮點平手（縫上兩側真等距），
+	// 5mm 帶會把平滑區的相鄰三角形全捲進來＝解算黏滑（stick-slip）＝每條筆跡
+	// 高頻方波鋸齒（07-20 viewport 實錘、二改 0.5mm）。
+	if (PreferNearUV)
+	{
+		const float SlackSq = FMath::Square(FMath::Sqrt(BestDistSq) + 0.05f);
+		float BestUvDistSq = FVector2D::DistSquared(BestUV, *PreferNearUV);
+		for (const FCachedTri& Tri : CachedTris)
+		{
+			const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+			if (FVector::DistSquared(Closest, Local) > SlackSq)
+			{
+				continue;
+			}
+			const FVector Bary = FMath::ComputeBaryCentric2D(Closest, Tri.A, Tri.B, Tri.C);
+			const FVector2D UV = Tri.UVA * Bary.X + Tri.UVB * Bary.Y + Tri.UVC * Bary.Z;
+			const float UvDistSq = FVector2D::DistSquared(UV, *PreferNearUV);
+			if (UvDistSq < BestUvDistSq)
+			{
+				BestUvDistSq = UvDistSq;
+				BestUV = UV;
+			}
+		}
 	}
 
 	OutUV = BestUV;

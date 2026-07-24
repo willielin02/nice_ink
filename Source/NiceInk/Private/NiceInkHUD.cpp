@@ -6,6 +6,7 @@
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
 #include "Engine/Texture2D.h"
+#include "EngineUtils.h"
 #include "Fonts/FontMeasure.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Framework/Application/SlateApplication.h"
@@ -73,6 +74,7 @@ void ANiceInkHUD::EnsureUiAssets()
 	IconTrap   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Trap.T_UI_Trap"));
 	IconSleep  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Sleep.T_UI_Sleep"));
 	IconNose   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Nose.T_UI_Nose"));
+	PenSprite  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
 }
 
 float ANiceInkHUD::TierSize(ETextTier Tier) const
@@ -353,7 +355,12 @@ void ANiceInkHUD::DrawHUD()
 	}
 	else if (MyChar && MyChar->bLeanLocked)
 	{
-		DrawBottomHint(TEXT("LMB draw   ·   SHIFT peek at his face   ·   RMB stand up   ·   1-9,0 color"), NiHudColor::PaperDim);
+		// 搆不到持續 >1s＝邊界開口說話（無聲失敗鐵則）：筆懸空是物理訊號，
+		// 這行話補上「該怎麼辦」
+		DrawBottomHint(MyChar->GetDrawUnreachableSeconds() > 1.0f
+			? TEXT("out of reach — RMB stand up and lean in closer")
+			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up   ·   1-9,0 color"),
+			MyChar->GetDrawUnreachableSeconds() > 1.0f ? NiHudColor::Amber : NiHudColor::PaperDim);
 	}
 	else if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
 	{
@@ -898,15 +905,175 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 		CrosshairColor = MyChar->GetCurrentColor();
 		CrosshairColor.A = 1.0f;
 
-		// 貼臉鎖定：麥克筆游標取代準星（筆尖點＋筆桿斜線＋選色環）
+		// 筆即游標（07-20 定案）：UI 準星退役——世界上只有一支實體筆。
+		// 接觸墨點＝筆尖可落墨時，在筆尖的螢幕投影畫一粒選色小點（錨在筆尖、
+		// 不在螢幕中心——任何中心標記都會重新製造「兩支筆」的對照）；
+		// 搆不到＝無點（筆懸空本身就是訊號），持續 >1s 由底部提示補一句話。
 		if (MyChar->bLeanLocked)
 		{
-			const FVector2D Cur = MyChar->GetLeanCursorPx();
-			const float B = UiScale;
-			Canvas->K2_DrawLine(FVector2D(Cur.X + 3.0f * B, Cur.Y - 3.0f * B), FVector2D(Cur.X + 16.0f * B, Cur.Y - 16.0f * B), 4.0f * B, FLinearColor(0.15f, 0.15f, 0.18f, 1.0f));
-			DrawRect(CrosshairColor, Cur.X - 2.0f * B, Cur.Y - 2.0f * B, 4.0f * B, 4.0f * B);
-			DrawRect(FLinearColor(0.0f, 0.0f, 0.0f, 0.55f), Cur.X + 14.0f * B, Cur.Y + 10.0f * B, 18.0f * B, 18.0f * B);
-			DrawRect(CrosshairColor, Cur.X + 16.0f * B, Cur.Y + 12.0f * B, 14.0f * B, 14.0f * B);
+			// 準星歸 2D（07-22 user 定案）：落點指示固定畫在螢幕正中心（零抖動、
+			// FPS 標準）——舊制「錨在世界筆尖投影」的小點會吃到解算殘差＋濾波相位差
+			// 的像素跳動；「兩支筆」禁令針對的矛盾源（實體筆＋UI 準星並存）在 2D 筆制
+			// 下已不存在。墨照舊從世界針尖出（偏差=解算容差 ≤1.5cm、感知可忽略）。
+			// 可落墨才顯示（搆不到=無點的訊號語義保留）。
+			const FVector2D Aim(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
+			const bool bReach = MyChar->IsDrawTipReachable();
+			// 雙針制（07-23 四版）：液線針=小方點；霧針=筆刷範圍圈（3.5cm 大軟刷的
+			// 皮膚投影——自由揮掃要知道霧會落在哪一圈）
+			const bool bShaderNeedle = MyChar->SelectedNeedle == EInkNeedle::Shader;
+			if (bReach && !bShaderNeedle)
+			{
+				const float B = UiScale;
+				DrawRect(CrosshairColor, Aim.X - 2.5f * B, Aim.Y - 2.5f * B, 5.0f * B, 5.0f * B);
+			}
+			if (bShaderNeedle && bReach)
+			{
+				FVector TipW;
+				if (MyChar->GetPenTipWorldForHud(TipW))
+				{
+					const FVector P1 = Project(TipW);
+					const FVector P2 = Project(TipW + FVector(0.0f, 0.0f, MyChar->ShaderBrushRadiusCm));
+					if (P1.Z > 0.0f && P2.Z > 0.0f)
+					{
+						const float Rpx = FMath::Clamp(FVector2D::Distance(
+							FVector2D(P1.X, P1.Y), FVector2D(P2.X, P2.Y)), 8.0f, 600.0f);
+						FLinearColor RingCol = CrosshairColor;
+						RingCol.A = 0.55f;
+						constexpr int32 Segs = 28;
+						for (int32 i = 0; i < Segs; ++i)
+						{
+							const float A0 = 2.0f * PI * i / Segs;
+							const float A1 = 2.0f * PI * (i + 1) / Segs;
+							DrawLine(Aim.X + FMath::Cos(A0) * Rpx, Aim.Y + FMath::Sin(A0) * Rpx,
+								Aim.X + FMath::Cos(A1) * Rpx, Aim.Y + FMath::Sin(A1) * Rpx,
+								RingCol, 1.5f * UiScale);
+						}
+					}
+				}
+			}
+
+			// 巡航導引（07-22 二改「業界式」）：皮膚面預測路徑＋行進蟻虛線——
+			// 巡航步進器往前模擬 8cm 的貼膚曲線投影到螢幕，沿弧長畫虛線；
+			// 虛線相位隨時間向前滾動（marching ants＝方向零歧義）、遠端漸淡、
+			// 線停在剪影邊緣＝「針會在這裡釘住」的預告。指「路徑」不是位置目標點
+			//（不重蹈「兩支筆」雙指標矛盾）；放開左鍵/收回死區即消失。
+			{
+				TArray<FVector> GuidePts;
+				if (MyChar->BuildTattooGuidePath(GuidePts) >= 2)
+				{
+					TArray<FVector2D> Scr;
+					Scr.Reserve(GuidePts.Num());
+					for (const FVector& W : GuidePts)
+					{
+						const FVector Pr = Project(W);
+						if (Pr.Z <= 0.0f)
+						{
+							break; // 相機後方（理論上不會發生）
+						}
+						Scr.Add(FVector2D(Pr.X, Pr.Y));
+					}
+					// 折線平滑（07-22 三修）：retopo 大三角面上逐步 trace 的落點微鋸齒
+					// ＋模擬步長不完全均勻→折線毛邊；3 點滑動平均殺面片鋸齒、
+					// 保留真曲率（端點錨定：起點釘針尖、終點釘邊緣截斷）
+					if (Scr.Num() >= 3)
+					{
+						TArray<FVector2D> Smoothed = Scr;
+						for (int32 i = 1; i < Scr.Num() - 1; ++i)
+						{
+							Smoothed[i] = (Scr[i - 1] + Scr[i] + Scr[i + 1]) / 3.0f;
+						}
+						Scr = MoveTemp(Smoothed);
+					}
+					float TotalPx = 0.0f;
+					for (int32 i = 1; i < Scr.Num(); ++i)
+					{
+						TotalPx += FVector2D::Distance(Scr[i - 1], Scr[i]);
+					}
+					if (Scr.Num() >= 2 && TotalPx > 8.0f)
+					{
+						const float DashPx = 7.0f * UiScale;
+						const float GapPx2 = 5.0f * UiScale;
+						const float Period = DashPx + GapPx2;
+						const float SkipPx = 12.0f * UiScale; // 讓開中心落點
+						// 行進蟻：相位隨時間增加＝dash 沿路徑向外滾（前進方向）
+						const float MarchPx = FMath::Fmod(static_cast<float>(
+							GetWorld()->GetTimeSeconds()) * 36.0f * UiScale, Period);
+						float S = 0.0f; // 投影路徑弧長（px）
+						for (int32 i = 1; i < Scr.Num(); ++i)
+						{
+							const FVector2D A = Scr[i - 1];
+							const FVector2D Bp = Scr[i];
+							const float L = FVector2D::Distance(A, Bp);
+							if (L <= KINDA_SMALL_NUMBER)
+							{
+								continue;
+							}
+							const FVector2D Dn = (Bp - A) / L;
+							const float SEnd = S + L;
+							// 段內 on 區間：s ≡ MarchPx (mod Period) 起、長 DashPx
+							float Base = MarchPx +
+								FMath::FloorToFloat((S - MarchPx) / Period) * Period;
+							for (; Base < SEnd; Base += Period)
+							{
+								const float On0 = FMath::Max(FMath::Max(Base, S), SkipPx);
+								const float On1 = FMath::Min(Base + DashPx, SEnd);
+								if (On1 <= On0)
+								{
+									continue;
+								}
+								// 遠端漸淡（近端 0.9 → 尾端 0.25）
+								const float Fade = 1.0f - 0.72f *
+									FMath::Clamp(On0 / FMath::Max(TotalPx, 1.0f), 0.0f, 1.0f);
+								const FLinearColor C(0.95f, 0.95f, 0.95f, 0.9f * Fade);
+								const FVector2D P0 = A + Dn * (On0 - S);
+								const FVector2D P1 = A + Dn * (On1 - S);
+								DrawLine(P0.X, P0.Y, P1.X, P1.Y, C, 2.0f * UiScale);
+							}
+							S = SEnd;
+						}
+					}
+				}
+			}
+
+			// FP 2D 筆（07-22「要 2D 感」二改：user 定案「筆尖要對齊落筆點＋筆身像
+			// 真人握筆右傾」）：貼圖以出針口為樞軸右傾 PEN_TILT、出針口錨在準星
+			// 沿筆軸外推一小段——待機=留間隙+針樁（收）、按住 LMB=針線補滿間隙且
+			// 機身微壓近（伸/壓筆感）。恆定大小角度=viewmodel 體感不變。
+			if (PenSprite && MyChar->IsPenMachineMode())
+			{
+				const bool bInking = MyChar->IsPenTriggerHeldLocal() && bReach;
+				constexpr float PenTiltDeg = 30.0f;                    // 右傾（人握筆攻角）
+				constexpr float MuzU = 0.4716f, MuzV = 0.9080f;        // 出針口在貼圖內的正規化座標
+				const float SpriteW = Canvas->ClipY * 0.48f;           // 方形貼圖邊長
+				const float TiltRad = FMath::DegreesToRadians(PenTiltDeg);
+				// 筆軸方向（準星→機身）：右上
+				const FVector2D AxisUp(FMath::Sin(TiltRad), -FMath::Cos(TiltRad));
+				const float GapPx = (bInking ? 16.0f : 30.0f) * UiScale; // 壓筆=機身微壓近
+				const FVector2D Muz = Aim + AxisUp * GapPx;
+				const FLinearColor NeedleCol(0.78f, 0.80f, 0.84f, 1.0f); // 針鋼
+				// 針線粗細隨針型（shader=粗針視覺；切針的即時回饋之一）
+				const float NeedlePx = (bShaderNeedle ? 5.0f : 3.0f) * UiScale;
+				if (bInking)
+				{
+					// 伸：針線補滿出針口→準星（線先畫、貼圖蓋線頭）
+					DrawLine(Muz.X, Muz.Y, Aim.X, Aim.Y, NeedleCol, NeedlePx);
+				}
+				else
+				{
+					// 收：短樁指向準星（讀出「會往哪扎」）
+					const FVector2D Stub = Muz - AxisUp * 12.0f * UiScale;
+					DrawLine(Muz.X, Muz.Y, Stub.X, Stub.Y, NeedleCol, NeedlePx);
+				}
+				// 以出針口為樞軸旋轉（RotPivot=貼圖內正規化座標）
+				DrawTexture(PenSprite, Muz.X - MuzU * SpriteW, Muz.Y - MuzV * SpriteW,
+					SpriteW, SpriteW, 0.0f, 0.0f, 1.0f, 1.0f, FLinearColor::White,
+					EBlendMode::BLEND_Translucent, 1.0f, false,
+					PenTiltDeg, FVector2D(MuzU, MuzV));
+				// 針型標籤（07-23 雙針制）：常駐在出針口旁——狀態永遠可讀、切針即時回饋
+				DrawTok(bShaderNeedle ? TEXT("SHADER") : TEXT("LINER"),
+					Muz.X + 22.0f * UiScale, Muz.Y - 8.0f * UiScale,
+					ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, bShaderNeedle);
+			}
 			return;
 		}
 
@@ -919,6 +1086,7 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			DrawTok(TEXT("RMB — lean in"), Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f + 52.0f * UiScale,
 				ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 		}
+
 	}
 
 	const float CenterX = Canvas->ClipX * 0.5f;

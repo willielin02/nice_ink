@@ -1,4 +1,4 @@
-#include "NiceInkCharacter.h"
+﻿#include "NiceInkCharacter.h"
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -12,10 +12,12 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/ProjectileMovementComponent.h"
+#include "DrawPoseData.h"
 #include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
 #include "InkSprayProjectile.h"
 #include "InputCoreTypes.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "NeckStretchComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -53,10 +55,66 @@ namespace
 
 	// 貼臉鎖定參數
 	constexpr float LeanEnterMaxDistance = 300.0f;  // 起手距離（湊上去的觸發範圍）
-	constexpr float LeanStandoff = 55.0f;           // 鎖定時腳站在落筆點外多遠
-	constexpr float LeanCameraHeight = 38.0f;       // 鎖定鏡頭離皮膚
+	// 入座距離＝目標高度的函數（07-20 三修）：Backup4 剛臂前向模型解析——
+	// z(θ)=67.9+116.3sinθ−8.2cosθ、fwd(θ)=−29.7+116.3cosθ+8.2sinθ（θ=髖角）。
+	// 「恆定 86」只在 ±12° 髖域成立；貼地目標髖摺 ~−30° 時水平投影縮到 ~70
+	// ——常數 standoff＝低位入座永遠搆不到的真兇之一。折線取樣自解析曲線。
+	float LeanStandoffForHeight(float TargetHCm)
+	{
+		const float H = FMath::Clamp(TargetHCm, 0.0f, 120.0f);
+		if (H >= 60.0f)
+		{
+			return 86.0f;
+		}
+		if (H >= 40.0f)
+		{
+			return FMath::Lerp(84.0f, 86.0f, (H - 40.0f) / 20.0f);
+		}
+		if (H >= 20.0f)
+		{
+			return FMath::Lerp(77.0f, 84.0f, (H - 20.0f) / 20.0f);
+		}
+		return FMath::Lerp(69.0f, 77.0f, H / 20.0f);
+	}
 	constexpr float LeanPaintDelay = 0.25f;         // 鏡頭到位前不落筆
 	constexpr float LeanCursorSpeed = 1.0f;         // 游標像素/滑鼠單位
+
+	// 直接畫制 aim 域與剛臂姿勢解算（2026-07-20 user 定案「手就一直伸直就好」：
+	// 手臂恆 Backup4 手勢，對齊靠 3-DOF（yaw/Hips/雙踝）解「筆尖=落墨點」）
+	constexpr float DrawTiltMinDeg = -35.0f;   // 抬頭上限（看他的臉抓睜眼）
+	constexpr float DrawTiltMaxDeg = 80.0f;    // 低頭下限（畫低位）
+	constexpr float DrawHipDeltaClampDeg = 40.0f;   // Hips 前傾增量鉗位。±22 是我發明的保守值
+	                                                // ＝貼地搆不到＋頭被迫折 75° 刺穿胸背的共同
+	                                                // 根因（07-20 三輪 viewport）；畫貼地需要髖摺
+	                                                // ~-35°＝「近乎趴下」——user 明示接受的姿勢
+	constexpr float DrawAnkleDeltaClampDeg = 18.0f; // 雙踝重心搖增量鉗位（腳尖上前後搖）
+	constexpr float DrawTipSolveTolCm = 1.5f;  // 筆尖=P 殘差容許（超過=搆不到=不落墨）
+	constexpr float PenTipAheadCm = 9.0f;      // 校準：筆尖在握骨前方多遠（沿眉→手延長線）
+	constexpr float DrawToePadCm = 4.0f;       // 落地補償的趾墊高
+
+	// 子樹剛轉工具（以樞軸為心、含位置與旋轉；scale 不動）——ApplyBowPose 增量鏈用
+	void RotSubtreeAboutPivotCS(const FReferenceSkeleton& Ref, TArray<FTransform>& CS,
+		int32 RootIdx, const FQuat& Q, const FVector& PivotCS)
+	{
+		for (int32 i = 0; i < CS.Num(); ++i)
+		{
+			bool bIn = false;
+			for (int32 A = i; A != INDEX_NONE; A = Ref.GetParentIndex(A))
+			{
+				if (A == RootIdx)
+				{
+					bIn = true;
+					break;
+				}
+			}
+			if (!bIn)
+			{
+				continue;
+			}
+			CS[i].SetLocation(PivotCS + Q.RotateVector(CS[i].GetLocation() - PivotCS));
+			CS[i].SetRotation(Q * CS[i].GetRotation());
+		}
+	}
 
 	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
 	FVector ClampToRoom(const FVector& P)
@@ -132,10 +190,68 @@ ANiceInkCharacter::ANiceInkCharacter()
 	PenMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PenMesh->SetVisibility(false);
 	PenMesh->SetCastShadow(false);
+	// 刺青機三件套（2026-07-22 伸縮分帳制、user 提供 Meshy 生成+Text-to-Texture）：
+	// 機械體（pivot=握管頂）＋握管（可伸縮）＋針（可伸縮）——任一缺席整套退
+	// 真麥克筆（尖端在原點、筆身 +Z、13cm），再退圓柱
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> MachineMesh(TEXT("/Game/Characters/SM_TattooMachine.SM_TattooMachine"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> GripAsset(TEXT("/Game/Characters/SM_TattooGrip.SM_TattooGrip"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> NeedleAsset(TEXT("/Game/Characters/SM_TattooNeedle.SM_TattooNeedle"));
+	static ConstructorHelpers::FObjectFinder<UStaticMesh> MarkerMesh(TEXT("/Game/Characters/SM_Marker.SM_Marker"));
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> PenCylinder(TEXT("/Engine/BasicShapes/Cylinder.Cylinder"));
-	if (PenCylinder.Succeeded())
+	if (MachineMesh.Succeeded() && GripAsset.Succeeded() && NeedleAsset.Succeeded())
+	{
+		PenMesh->SetStaticMesh(MachineMesh.Object);
+		bPenIsMachineAsset = true;
+		bNeedleIsAsset = true;
+	}
+	else if (MarkerMesh.Succeeded())
+	{
+		PenMesh->SetStaticMesh(MarkerMesh.Object);
+		bPenIsMarkerAsset = true;
+	}
+	else if (PenCylinder.Succeeded())
 	{
 		PenMesh->SetStaticMesh(PenCylinder.Object);
+	}
+
+	// 伸縮件（LMB 伸出到皮膚接觸點、放開收樁；長度每 tick 由 UpdatePenVisual 沿針軸
+	// 實測皮膚距重設——各端同構解算＝同長度，無需複製）
+	auto MakeStretchPart = [&](const TCHAR* Name) -> UStaticMeshComponent*
+	{
+		UStaticMeshComponent* C = CreateDefaultSubobject<UStaticMeshComponent>(Name);
+		C->SetupAttachment(GetCapsuleComponent());
+		C->SetAbsolute(true, true, true);
+		C->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		C->SetVisibility(false);
+		C->SetCastShadow(false);
+		return C;
+	};
+	GripMesh = MakeStretchPart(TEXT("GripMesh"));
+	NeedleMesh = MakeStretchPart(TEXT("NeedleMesh"));
+	if (bPenIsMachineAsset)
+	{
+		GripMesh->SetStaticMesh(GripAsset.Object);
+		NeedleMesh->SetStaticMesh(NeedleAsset.Object);
+	}
+	else if (PenCylinder.Succeeded())
+	{
+		NeedleMesh->SetStaticMesh(PenCylinder.Object);
+	}
+
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PenBaseMat(
+		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
+	if (PenBaseMat.Succeeded())
+	{
+		PenBodyMaterial = PenBaseMat.Object;
+	}
+
+	// 直接畫制 ghost 材質（畫畫時除自己與沉睡者外，其餘人半透明；資產由
+	// Tools/AssetPrep/ue_make_ghost_material.py 生成，缺席時 ghost 退化為隱藏）
+	static ConstructorHelpers::FObjectFinder<UMaterialInterface> GhostMat(
+		TEXT("/Game/Characters/M_GhostBody.M_GhostBody"));
+	if (GhostMat.Succeeded())
+	{
+		GhostMaterial = GhostMat.Object;
 	}
 
 	InkCanvas = CreateDefaultSubobject<UInkCanvasComponent>(TEXT("InkCanvas"));
@@ -161,13 +277,69 @@ void ANiceInkCharacter::BeginPlay()
 		}
 	}
 
-	// 實體筆外觀：細黑桿（引擎圓柱 100×100×100 → 1.2cm 粗、15cm 長）
+	// 實體筆外觀：真資產（刺青機/麥克筆）＝實尺寸（scale 1）；圓柱退路＝縮成 1.2cm 粗 15cm 長。
+	// 材質＝引擎基本材質 MID（幾何 only 匯入，預設材質無 Color 參數）：
+	// 刺青機依槽名分區上色（黑鐵骨架/銅線圈/鋼握管/黃銅小件；linear 色），其餘單色深灰
 	if (PenMesh)
 	{
-		PenMesh->SetWorldScale3D(FVector(0.012f, 0.012f, 0.15f));
-		if (UMaterialInstanceDynamic* PenMID = PenMesh->CreateAndSetMaterialInstanceDynamic(0))
+		PenMesh->SetWorldScale3D((bPenIsMachineAsset || bPenIsMarkerAsset)
+			? FVector::OneVector : FVector(0.012f, 0.012f, 0.15f));
+		if (PenBodyMaterial)
 		{
-			PenMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.03f, 0.03f, 0.04f));
+			if (bPenIsMachineAsset && PenMesh->GetStaticMesh())
+			{
+				const TArray<FStaticMaterial>& Slots = PenMesh->GetStaticMesh()->GetStaticMaterials();
+				for (int32 i = 0; i < Slots.Num(); ++i)
+				{
+					FLinearColor C(0.020f, 0.020f, 0.026f); // TattooFrame 黑鐵（預設）
+					const FName Slot = Slots[i].MaterialSlotName;
+					if (Slot == TEXT("TattooTex"))
+					{
+						continue; // 貼圖版（Meshy PBR＋M_TattooMachine 已綁在資產上）：不蓋 MID
+					}
+					if (Slot == TEXT("TattooCoils"))
+					{
+						C = FLinearColor(0.430f, 0.150f, 0.045f); // 銅線圈
+					}
+					else if (Slot == TEXT("TattooGrip"))
+					{
+						C = FLinearColor(0.300f, 0.320f, 0.350f); // 鋼握管
+					}
+					else if (Slot == TEXT("TattooBrass"))
+					{
+						C = FLinearColor(0.400f, 0.250f, 0.060f); // 黃銅銜鐵/接線柱
+					}
+					if (UMaterialInstanceDynamic* MID = UMaterialInstanceDynamic::Create(PenBodyMaterial, this))
+					{
+						MID->SetVectorParameterValue(TEXT("Color"), C);
+						PenMesh->SetMaterial(i, MID);
+					}
+				}
+			}
+			else if (UMaterialInstanceDynamic* PenMID = UMaterialInstanceDynamic::Create(PenBodyMaterial, this))
+			{
+				PenMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.03f, 0.03f, 0.04f));
+				PenMesh->SetMaterial(0, PenMID);
+			}
+		}
+	}
+	// 貼圖版伸縮件（槽 TattooTex）沿用資產綁定的 M_TattooMachine；其餘退路上鋼色 MID
+	for (UStaticMeshComponent* Part : { GripMesh.Get(), NeedleMesh.Get() })
+	{
+		if (!Part || !PenBodyMaterial)
+		{
+			continue;
+		}
+		const UStaticMesh* PartSM = Part->GetStaticMesh();
+		const bool bTextured = PartSM && PartSM->GetStaticMaterials().Num() > 0 &&
+			PartSM->GetStaticMaterials()[0].MaterialSlotName == TEXT("TattooTex");
+		if (!bTextured)
+		{
+			if (UMaterialInstanceDynamic* PartMID = UMaterialInstanceDynamic::Create(PenBodyMaterial, this))
+			{
+				PartMID->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.55f, 0.57f, 0.60f)); // 鋼
+				Part->SetMaterial(0, PartMID);
+			}
 		}
 	}
 }
@@ -182,6 +354,8 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	// 頭部轉動破綻：臉指向只發給他端（本人端用本地連續值零延遲；抬升＝純函數不複製）
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepAimAzDeg, COND_SkipOwner);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SleepAimTiltDeg, COND_SkipOwner);
+	// 伸縮針觸發：本人端本地鏡像零延遲，複製只服務他端的針視覺
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, bPenTriggerHeld, COND_SkipOwner);
 	// 技能庫存只給本人：作畫者不該從網路層讀到「受害者拿到技能／進度」
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SprayCharges, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, KickCharges, COND_OwnerOnly);
@@ -191,7 +365,9 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkCharacter, LeanPoint);
 	DOREPLIFETIME(ANiceInkCharacter, LeanNormal);
 	DOREPLIFETIME(ANiceInkCharacter, LeanTarget);
-	DOREPLIFETIME(ANiceInkCharacter, bPeeking);
+	// 作畫臉指向：本人端用本地值零延遲（pattern 同 SleepAim），複製只服務他端擺姿
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawAimAzDeg, COND_SkipOwner);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawAimTiltDeg, COND_SkipOwner);
 	DOREPLIFETIME(ANiceInkCharacter, bBodyFaceDown);
 }
 
@@ -200,7 +376,6 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	EnsureAvatarApplied();
-	UpdatePenVisual(); // 所有端：筆尖跟著墨點走
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	const bool bLocal = PC && IsLocallyControlled();
@@ -234,19 +409,29 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
 	UpdateWalkAnim(DeltaSeconds);        // 所有端：站立移動的程式化步伐
 
-	// 偷瞄中受害者的真頭會動（甦醒升降/掃視/裝睡收回）——目標移動就重擺姿勢（所有端；
-	// 姿態沒變不寫骨，同睡姿替身的止血原則）
-	if (bLeanLocked && bPeeking)
+	// 直接畫制：aim 驅動的作畫姿勢（所有端；姿態沒變不寫骨——ApplyBowPose 內建
+	// 髒檢查；他端在這裡做複製值的平滑追趕）
+	if (bLeanLocked)
 	{
-		const FVector FaceT = GetLeanFaceTargetWorld();
-		if (!FaceT.Equals(LastPeekFaceTarget, 2.0f))
+		if (!IsLocallyControlled())
 		{
-			LastPeekFaceTarget = FaceT;
-			ApplyBowPose();
+			const float K = FMath::Clamp(DeltaSeconds * 12.0f, 0.0f, 1.0f);
+			if (bRemoteDrawSnap)
+			{
+				RemoteDrawAzDeg = DrawAimAzDeg;
+				RemoteDrawTiltDeg = DrawAimTiltDeg;
+				bRemoteDrawSnap = false;
+			}
+			else
+			{
+				RemoteDrawAzDeg += FMath::FindDeltaAngleDegrees(RemoteDrawAzDeg, DrawAimAzDeg) * K;
+				RemoteDrawTiltDeg += (DrawAimTiltDeg - RemoteDrawTiltDeg) * K;
+			}
 		}
+		ApplyBowPose();
 	}
 
-	UpdateLeanArm();                     // 所有端：貼臉鎖定的握筆右臂（跟著實體筆）
+	UpdatePenVisual(); // 所有端：筆焊死在右手（讀本 tick 最終骨骼——必在 ApplyBowPose 後）
 
 	// 伸縮脖：所有擺骨完成後解銜接曲面（顯式順序；lean-lock 事件驅動的擺骨
 	// 由下一 tick 的變化偵測接住，一幀延遲不可感）
@@ -865,6 +1050,161 @@ void ANiceInkCharacter::PollPalette(APlayerController* PC)
 	}
 }
 
+FString ANiceInkCharacter::DebugRoboLeanEnterFromEye(ANiceInkCharacter* Target, FVector AimPoint, bool bEnter)
+{
+	// 與 PollLeanEnter 同一條真射線（起點＝當前真實眼位），方向由 AimPoint 給定
+	//（robo 不能注入滑鼠）。驗的是「站在外面點不點得到」——DebugRoboEnterLean
+	// 會先傳送到點旁＝跳過此段（低位入口從未被驗過的縫）。
+	if (!Target || !GetWorld() || !FirstPersonCamera)
+	{
+		return TEXT("MISS setup");
+	}
+	if (bLeanLocked)
+	{
+		return TEXT("MISS locked");
+	}
+	const FVector Start = FirstPersonCamera->GetComponentLocation();
+	const FVector Dir = (AimPoint - Start).GetSafeNormal();
+	if (Dir.IsNearlyZero())
+	{
+		return TEXT("MISS dir");
+	}
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkLeanTrace), /*bInTraceComplex=*/true);
+	QueryParams.AddIgnoredActor(this);
+	FHitResult Hit;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Dir * LeanEnterMaxDistance,
+		ECC_Visibility, QueryParams))
+	{
+		return TEXT("MISS trace");
+	}
+	ANiceInkCharacter* HitChar = Cast<ANiceInkCharacter>(Hit.GetActor());
+	if (!HitChar || HitChar != Target || !HitChar->Body)
+	{
+		return FString::Printf(TEXT("MISS actor z=%.1f"), Hit.ImpactPoint.Z);
+	}
+	FVector2D UnusedUV;
+	if (!Target->Body->ResolveBodyUV(Hit.ImpactPoint, UnusedUV))
+	{
+		return FString::Printf(TEXT("MISS skin z=%.1f"), Hit.ImpactPoint.Z);
+	}
+	if (bEnter)
+	{
+		ServerEnterLean(Target, Hit.ImpactPoint, Hit.ImpactNormal);
+	}
+	return FString::Printf(TEXT("HIT z=%.1f err=%.1f eyez=%.1f"),
+		Hit.ImpactPoint.Z, FVector::Dist(Hit.ImpactPoint, AimPoint), Start.Z);
+}
+
+FString ANiceInkCharacter::DebugRoboCoverageScan(ANiceInkCharacter* Target, int32 GridN)
+{
+	// 覆蓋率量測儀（user 提問「不趴能畫到多大、趴後多大、理論極限在哪」的量測答案）。
+	// 對受害者皮膚 UV 網格取樣→UV→世界點＋法線→從眼位集合打「真入座射線」：
+	// 眼高 {35,60,98(趴實測),130,156(站實測)} × 繞 P 外向方位扇 {0,±35,±70°} ×
+	// 距離 {70,120,190,270}，命中語義同 PollLeanEnter（complex、皮膚 2.5cm、射程≤295）。
+	// 路人角色 ignore＝只量受害者本體的自遮擋幾何。
+	UWorld* World = GetWorld();
+	if (!Target || !Target->Body || !World)
+	{
+		return TEXT("ERR setup");
+	}
+	UInkBodyComponent* B = Target->Body;
+	const float Ground = GetActorLocation().Z - 92.0f;
+	const FVector VictimC = Target->GetActorLocation();
+
+	FCollisionQueryParams QP(SCENE_QUERY_STAT(NiceInkCoverage), /*bInTraceComplex=*/true);
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		if (*It != Target)
+		{
+			QP.AddIgnoredActor(*It);
+		}
+	}
+
+	const float Heights[5] = { 35.0f, 60.0f, 98.0f, 130.0f, 156.0f };
+	const float Spreads[5] = { 0.0f, 35.0f, -35.0f, 70.0f, -70.0f };
+	const float Dists[4] = { 70.0f, 120.0f, 190.0f, 270.0f };
+
+	int32 Total = 0, Down = 0, LowBand = 0, VisAny = 0, VisStandProne = 0;
+	int32 VisAtH[5] = { 0, 0, 0, 0, 0 };
+
+	const int32 N = FMath::Clamp(GridN, 8, 256);
+	for (int32 Gy = 0; Gy < N; ++Gy)
+	{
+		for (int32 Gx = 0; Gx < N; ++Gx)
+		{
+			const FVector2D UV((Gx + 0.5f) / N, (Gy + 0.5f) / N);
+			FVector P, Nrm;
+			if (!B->ResolveUVToWorldWithNormal(UV, P, Nrm))
+			{
+				continue;
+			}
+			++Total;
+			if (Nrm.Z < -0.5f)
+			{
+				++Down; // 面朝下（貼地側）——結構性看不到＝翻身的領土
+			}
+			if (P.Z - Ground < 15.0f)
+			{
+				++LowBand;
+			}
+
+			FVector Out = P - VictimC;
+			Out.Z = 0.0f;
+			Out = Out.GetSafeNormal();
+			if (Out.IsNearlyZero())
+			{
+				Out = FVector(1.0f, 0.0f, 0.0f);
+			}
+
+			bool bAnyVis = false;
+			bool bVisAtHeight[5] = { false, false, false, false, false };
+			for (int32 H = 0; H < 5; ++H)
+			{
+				bool bVis = false;
+				for (int32 A = 0; A < 5 && !bVis; ++A)
+				{
+					const FVector Dir = Out.RotateAngleAxis(Spreads[A], FVector::UpVector);
+					for (int32 D = 0; D < 4 && !bVis; ++D)
+					{
+						FVector Eye = P + Dir * Dists[D];
+						Eye.Z = Ground + Heights[H];
+						if (FVector::Dist(Eye, P) > 295.0f)
+						{
+							continue;
+						}
+						FHitResult Hit;
+						const FVector End = P + (P - Eye).GetSafeNormal() * 3.0f;
+						if (World->LineTraceSingleByChannel(Hit, Eye, End, ECC_Visibility, QP) &&
+							Hit.GetActor() == Target &&
+							FVector::Dist(Hit.ImpactPoint, P) <= 2.5f)
+						{
+							bVis = true;
+						}
+					}
+				}
+				if (bVis)
+				{
+					++VisAtH[H];
+					bVisAtHeight[H] = true;
+					bAnyVis = true;
+				}
+			}
+			if (bAnyVis)
+			{
+				++VisAny;
+			}
+			if (bVisAtHeight[2] || bVisAtHeight[4])
+			{
+				++VisStandProne; // 站(156)∪低眼(98) 聯集（07-20 趴姿裁決的量測欄位，儀器保留）
+			}
+		}
+	}
+	return FString::Printf(
+		TEXT("total=%d down=%d low15=%d any=%d sp=%d h35=%d h60=%d h98=%d h130=%d h156=%d"),
+		Total, Down, LowBand, VisAny, VisStandProne,
+		VisAtH[0], VisAtH[1], VisAtH[2], VisAtH[3], VisAtH[4]);
+}
+
 // --- 貼臉鎖定：湊上去 ---
 
 void ANiceInkCharacter::PollLeanEnter(APlayerController* PC)
@@ -908,6 +1248,516 @@ void ANiceInkCharacter::PollLeanEnter(APlayerController* PC)
 	ServerEnterLean(Target, Hit.ImpactPoint, Hit.ImpactNormal);
 }
 
+// --- 直接畫制（2026-07-18 user 定案；07-20 筆即游標：墨從筆尖出、準星退役）---
+
+float ANiceInkCharacter::FAimEuro::Step(float X, float Dt, float MinCutoffHz, float Beta)
+{
+	// One Euro（Casiez 2012）：截止頻率=MinCutoff+Beta×|速度|——靜止強濾抖（截止低）、
+	// 快掃近零滯後（截止高）。固定係數低通把「濾抖」和「延遲」綁在一起（滯後距離=
+	// 速度×延遲、掃越快筆落後越遠＝兩支筆分家的 lag 真兇）；自適應把兩者拆開。
+	if (!bInit || Dt <= 0.0f)
+	{
+		Snap(X);
+		return X;
+	}
+	X = XPrev + FMath::FindDeltaAngleDegrees(XPrev, X); // 角度連續化（az 過 ±180 不跳）
+	auto Alpha = [Dt](float CutoffHz)
+	{
+		const float Tau = 1.0f / (2.0f * PI * CutoffHz);
+		return 1.0f / (1.0f + Tau / Dt);
+	};
+	const float Dx = (X - XPrev) / Dt;
+	DxPrev += (Dx - DxPrev) * Alpha(1.0f); // 速度估計自己先過 1Hz 低通（教科書配置）
+	const float Cutoff = MinCutoffHz + Beta * FMath::Abs(DxPrev);
+	XPrev = FMath::UnwindDegrees(XPrev + (X - XPrev) * Alpha(Cutoff));
+	return XPrev;
+}
+
+void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, bool bCruise)
+{
+	// 作畫中滑鼠＝臉指向（az=世界 yaw、tilt 正=向下）；robo 直設 aim 由此消化
+	//（巡航中照樣受理＝robo 的傳送門，跳過巡航限速——測試擺位用）
+	if (bHasPendingDebugDrawAim)
+	{
+		bHasPendingDebugDrawAim = false;
+		DrawAimAzLocal = FMath::UnwindDegrees(PendingDebugDrawAim.X);
+		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg, DrawTiltMaxDeg);
+	}
+	float MouseX = 0.0f;
+	float MouseY = 0.0f;
+	PC->GetInputMouseDelta(MouseX, MouseY);
+	if (bCruise)
+	{
+		// 刺青巡航（07-22 user 定案）：LMB 按住＝滑鼠不再 1:1 寫 aim，改累積「方向拉桿」
+		//（按下點=錨、拉出向量=方向盤）；aim 由 UpdateTattooCruise 以皮膚面恆速推進——
+		// 手快沒有用，機器只有一種速度。桿長鉗＝超出只取方向、徑向多拉丟棄不入帳
+		//（入帳=放手後針還在走=失控感）；相機讀生 aim ⇒ 畫面跟著針緩慢平移＝機器的重量，
+		// 螢幕中心恆=針尖（不做「意圖點 vs 實際點」雙指標——兩支筆禁令）。
+		TattooStickPx.X += MouseX;
+		TattooStickPx.Y -= MouseY; // 拉上=巡航向上（與 tilt 同號空間：正=向下）
+		if (bDebugPaintStickActive)
+		{
+			TattooStickPx = DebugPaintStickPx; // robo 覆寫每 tick 重申（免疫輪詢歸零）
+		}
+		const float StickLen = TattooStickPx.Size();
+		if (StickLen > TattooStickMaxPx)
+		{
+			TattooStickPx *= TattooStickMaxPx / StickLen;
+		}
+		UpdateTattooCruise(DeltaSeconds);
+	}
+	else
+	{
+		TattooStickPx = FVector2D::ZeroVector;
+		bTattooCruising = false;
+		DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * EffectiveLookSensitivity());
+		DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * EffectiveLookSensitivity(),
+			DrawTiltMinDeg, DrawTiltMaxDeg);
+	}
+
+	// One Euro：姿勢/筆/墨的驅動源＝濾波 aim（相機用生值——視角零延遲）
+	DrawAimAzFilt = AimEuroAz.Step(DrawAimAzLocal, DeltaSeconds, DrawAimFilterMinCutoffHz, DrawAimFilterBeta);
+	DrawAimTiltFilt = FMath::Clamp(
+		AimEuroTilt.Step(DrawAimTiltLocal, DeltaSeconds, DrawAimFilterMinCutoffHz, DrawAimFilterBeta),
+		DrawTiltMinDeg, DrawTiltMaxDeg);
+
+	// 上報節流（20Hz、變化 >0.5 度）——pattern 同 SleepAim（他端只拿來擺姿）
+	DrawAimSendAccum += DeltaSeconds;
+	if (DrawAimSendAccum >= 0.05f &&
+		(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentDrawAz, DrawAimAzLocal)) > 0.5f ||
+			FMath::Abs(LastSentDrawTilt - DrawAimTiltLocal) > 0.5f))
+	{
+		DrawAimSendAccum = 0.0f;
+		LastSentDrawAz = DrawAimAzLocal;
+		LastSentDrawTilt = DrawAimTiltLocal;
+		if (HasAuthority())
+		{
+			DrawAimAzDeg = DrawAimAzLocal;
+			DrawAimTiltDeg = DrawAimTiltLocal;
+		}
+		else
+		{
+			ServerUpdateDrawAim(DrawAimAzLocal, DrawAimTiltLocal);
+		}
+	}
+}
+
+void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
+{
+	// 方向拉桿→aim 皮膚面恆速推進（07-22 刺青手感核心）。
+	// 速率上限量在「皮膚表面 3D 距離」不在角速度——眼距隨部位變（69~86cm＋長針 85cm）、
+	// 掠射面上小角=大皮膚位移；trace 回饋鉗讓掠射面自動變慢（斜坡上扎針本來就慢）。
+	// P 跳段（拉出剪影/跨肢溝壑）＝收斂到零步＝針釘在邊緣持續原地扎——feature：
+	// 真刺青要跨過去必須抬針（放開左鍵），順帶消滅跨肢誤連線整類髒輸出。
+	bTattooCruising = false;
+	if (TattooStickPx.Size() <= TattooStickDeadzonePx)
+	{
+		TattooSpeedDebtCm = 0.0f; // 停針意圖：清債
+		return; // 死區＝停針原地扎（點刺；輕點=單點落墨→dotwork 風格免費湧現）
+	}
+	const float BaseStepCm = TattooMaxSpeedCmPerSec() * FMath::Min(DeltaSeconds, 0.25f);
+	if (BaseStepCm <= 0.0f)
+	{
+		return;
+	}
+	// 速度債（07-22 三修）：上幀短差本幀補——aim 跳距總和恆=命令；外環增益再補
+	//「跳距噪聲膨脹→針的平滑路徑縮短」的系統性折損（見 TattooSpeedGain 註）
+	const float StepCm = BaseStepCm * TattooSpeedGain + TattooSpeedDebtCm;
+	const FVector2D Dir = TattooStickPx.GetSafeNormal();
+
+	FVector PNow;
+	if (!TraceAimToTarget(FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), PNow))
+	{
+		// 指在皮膚外（按著左鍵掃回身上的路上）：無回饋可量，按估計角速慢移——
+		// 機器咬合中一切都慢是同一條規則
+		DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + Dir.X * TattooAngPerCmEst * BaseStepCm);
+		DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal + Dir.Y * TattooAngPerCmEst * BaseStepCm,
+			DrawTiltMinDeg, DrawTiltMaxDeg);
+		TattooSpeedDebtCm = 0.0f; // 無量測=無帳可記
+		bTattooCruising = true;
+		return;
+	}
+
+	float MovedCm = 0.0f;
+	if (CruiseStepOnSkin(DrawAimAzLocal, DrawAimTiltLocal, Dir, StepCm, TattooAngPerCmEst, PNow, MovedCm))
+	{
+		bTattooCruising = true;
+		TattooDbgCruiseSecs += DeltaSeconds;
+		TattooDbgHopCm += MovedCm;
+		if (MovedCm < StepCm * 0.5f)
+		{
+			// 幾何受限（貼邊小步）：不記債不進增益視窗——受限樣本會把外環帶壞
+			TattooSpeedDebtCm = 0.0f;
+			TattooGainCmdAccum = 0.0f;
+			TattooGainActAccum = 0.0f;
+		}
+		else
+		{
+			TattooSpeedDebtCm = FMath::Clamp(StepCm - MovedCm, -0.1f, 0.3f);
+			// 外環增益視窗：每累積 1cm 命令距離對帳一次（實走量在出墨段累積）
+			TattooGainCmdAccum += BaseStepCm;
+			if (TattooGainCmdAccum >= 1.0f)
+			{
+				const float Ratio = TattooGainCmdAccum / FMath::Max(TattooGainActAccum, 0.05f);
+				// 下限 0.7：閉環必須雙向可修——1.0 下限=只補不煞，折損消失的環境
+				// 會恆定超速 15% 而增益鎖死在底（robo 兩輪實錘 tipSpd 2.72/gain=1.00）
+				TattooSpeedGain = FMath::Clamp(
+					FMath::Lerp(TattooSpeedGain, TattooSpeedGain * Ratio, 0.4f), 0.7f, 1.7f);
+				TattooGainCmdAccum = 0.0f;
+				TattooGainActAccum = 0.0f;
+			}
+		}
+	}
+	else
+	{
+		TattooSpeedDebtCm = 0.0f; // 邊緣釘住：清債
+		TattooGainCmdAccum = 0.0f;
+		TattooGainActAccum = 0.0f;
+	}
+	// 步進失敗＝邊緣釘住：aim 不動、針原地扎（bTattooCruising 保持 false）
+}
+
+bool ANiceInkCharacter::CruiseStepOnSkin(float& AzDeg, float& TiltDeg, const FVector2D& Dir,
+	float StepCm, float& AngPerCmEst, FVector& InOutP, float& OutMovedCm) const
+{
+	// 巡航與導引預測共用的單步核心（07-22 二改抽出；三修=對稱收斂帶）：
+	// 首版只鉗超速＝單向偏差——低於目標的步長無條件放行，量測噪聲下平均步長
+	// 系統性偏短（12Hz 實測掉到 70% v_max、robo 數據實錘；單向鉗位必產單向偏差
+	// ＝lift 護束老教訓的變體）。對稱帶 [0.9,1.05]×Step 兩側都重試；六輪未進帶
+	// 取「帶下最佳候選」而非凍幀（幾何受限的貼邊小步也算誠實前進，殘差交給債務）。
+	OutMovedCm = 0.0f;
+	float AngDeg = FMath::Clamp(AngPerCmEst * StepCm, 0.0005f, 5.0f);
+	float BestAng = -1.0f;
+	float BestDs = 0.0f;
+	float BestAz = 0.0f;
+	float BestTilt = 0.0f;
+	FVector BestP = FVector::ZeroVector;
+	// 浮雕跳段候選（07-22 五修）：所有超帶候選中跳距最小者——凸起（乳頭/肚臍/下顎）
+	// 的自遮盲帶讓任何角度步都跳過去，縮步收斂不了；最小跳＝以最小角度剛好落到
+	// 凸起對側的那一點
+	float JumpDs = 1e9f;
+	float JumpAz = 0.0f;
+	float JumpTilt = 0.0f;
+	FVector JumpP = FVector::ZeroVector;
+	for (int32 It = 0; It < 6; ++It)
+	{
+		const float CandAz = FMath::UnwindDegrees(AzDeg + Dir.X * AngDeg);
+		const float CandTilt = FMath::Clamp(TiltDeg + Dir.Y * AngDeg,
+			DrawTiltMinDeg, DrawTiltMaxDeg);
+		FVector PNew;
+		if (!TraceAimToTarget(FRotator(-CandTilt, CandAz, 0.0f).Vector(), PNew))
+		{
+			AngDeg *= 0.5f; // 滑出剪影：縮步貼邊
+			continue;
+		}
+		const float Ds = FVector::Dist(InOutP, PNew);
+		if (Ds <= StepCm * 1.05f && Ds > BestDs)
+		{
+			BestAng = AngDeg;
+			BestDs = Ds;
+			BestAz = CandAz;
+			BestTilt = CandTilt;
+			BestP = PNew;
+		}
+		if (Ds > StepCm * 1.05f)
+		{
+			if (Ds < JumpDs)
+			{
+				JumpDs = Ds;
+				JumpAz = CandAz;
+				JumpTilt = CandTilt;
+				JumpP = PNew;
+			}
+			// 超速：比例縮回再試（跳段時 Ds 巨大＝縮到近零；帶上緣=速率契約）
+			AngDeg *= StepCm / FMath::Max(Ds, KINDA_SMALL_NUMBER);
+			continue;
+		}
+		if (Ds < StepCm * 0.9f)
+		{
+			// 低於帶：放大重試（縮放比鉗 ×4——近零 Ds 的比例放大會爆衝）
+			AngDeg = FMath::Min(AngDeg * FMath::Clamp(
+				StepCm / FMath::Max(Ds, KINDA_SMALL_NUMBER), 1.0f, 4.0f), 5.0f);
+			continue;
+		}
+		AzDeg = CandAz;
+		TiltDeg = CandTilt;
+		InOutP = PNew;
+		OutMovedCm = Ds;
+		// 角/公分換算的回饋更新（半衰混合；下一發首試即近命中，迭代通常 1 輪收斂）
+		AngPerCmEst = FMath::Clamp(
+			FMath::Lerp(AngPerCmEst, AngDeg / Ds, 0.5f), 0.02f, 20.0f);
+		return true;
+	}
+	if (BestDs > StepCm * 0.02f)
+	{
+		// 未進帶但有效：取最接近目標的帶下候選（貼邊/掠射的誠實小步）
+		AzDeg = BestAz;
+		TiltDeg = BestTilt;
+		InOutP = BestP;
+		OutMovedCm = BestDs;
+		if (BestDs > 0.02f)
+		{
+			AngPerCmEst = FMath::Clamp(
+				FMath::Lerp(AngPerCmEst, BestAng / BestDs, 0.5f), 0.02f, 20.0f);
+		}
+		return true;
+	}
+	if (JumpDs <= TattooReliefJumpCm)
+	{
+		// 浮雕跨越（07-22 五修）：小跳=凸起自遮盲帶，針騎過去落對側——盲帶誠實
+		// 留白（看到哪畫到哪的固有邊界）。速度記帳只算一步（跳距非真皮膚路程、
+		// 不給免費里程）；est 不吃跳距（那不是角/公分換算資料）。
+		// >容差或射線離體＝真邊緣照舊釘住（跨肢誤連線防護保留）。
+		AzDeg = JumpAz;
+		TiltDeg = JumpTilt;
+		InOutP = JumpP;
+		OutMovedCm = StepCm;
+		return true;
+	}
+	return false; // 連小步都無效且跳距超容差＝真邊緣（釘住）
+}
+
+int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
+{
+	// 導引預測路徑（07-22 二改，業界式）：把巡航步進器往前模擬 LookaheadCm——
+	// 本地複本（az/tilt/est/P）模擬、巡航狀態零污染；線=貼膚曲線、停在剪影邊緣
+	//＝「針會在這裡釘住」在拉過去之前就預告（邊緣釘住從突然挫折變可預期地形）。
+	OutPoints.Reset();
+	FVector2D Dir;
+	float Strength = 0.0f;
+	if (!GetTattooStickForHud(Dir, Strength))
+	{
+		return 0;
+	}
+	float Az = DrawAimAzLocal;
+	float Tilt = DrawAimTiltLocal;
+	float Est = TattooAngPerCmEst;
+	FVector P;
+	if (!TraceAimToTarget(FRotator(-Tilt, Az, 0.0f).Vector(), P))
+	{
+		return 0;
+	}
+	OutPoints.Add(P);
+	const float Step = FMath::Max(TattooGuideStepCm, 0.1f);
+	const int32 N = FMath::Clamp(FMath::CeilToInt(TattooGuideLookaheadCm / Step), 1, 64);
+	for (int32 i = 0; i < N; ++i)
+	{
+		float MovedCm = 0.0f;
+		if (!CruiseStepOnSkin(Az, Tilt, Dir, Step, Est, P, MovedCm))
+		{
+			break; // 邊緣＝導引線誠實截斷
+		}
+		OutPoints.Add(P);
+	}
+	return OutPoints.Num();
+}
+
+void ANiceInkCharacter::ServerUpdateDrawAim_Implementation(float AzDeg, float TiltDeg)
+{
+	if (!bLeanLocked)
+	{
+		return;
+	}
+	DrawAimAzDeg = FMath::UnwindDegrees(AzDeg);
+	DrawAimTiltDeg = FMath::Clamp(TiltDeg, DrawTiltMinDeg, DrawTiltMaxDeg);
+}
+
+float ANiceInkCharacter::EffectiveDrawAz() const
+{
+	// 本人＝One Euro 濾波值（姿勢/筆/墨的共同驅動源）；他端＝複製追趕值。
+	// 相機不走這裡（UpdateLeanCamera 直讀生值＝視角零延遲）。
+	return IsLocallyControlled() ? DrawAimAzFilt : RemoteDrawAzDeg;
+}
+
+float ANiceInkCharacter::EffectiveDrawTilt() const
+{
+	return IsLocallyControlled() ? DrawAimTiltFilt : RemoteDrawTiltDeg;
+}
+
+void ANiceInkCharacter::DebugRoboDrawAim(float AzDeg, float TiltDeg)
+{
+	bHasPendingDebugDrawAim = true;
+	PendingDebugDrawAim = FVector2D(AzDeg, TiltDeg);
+}
+
+void ANiceInkCharacter::DebugRoboPaintHold(bool bHold)
+{
+	bDebugPaintHeld = bHold;
+}
+
+void ANiceInkCharacter::DebugRoboNeedle(int32 NeedleIndex)
+{
+	bHasPendingDebugNeedle = true;
+	PendingDebugNeedle = NeedleIndex == 1 ? EInkNeedle::Shader : EInkNeedle::Liner;
+}
+
+void ANiceInkCharacter::DebugRoboPaintStick(float X, float Y)
+{
+	DebugPaintStickPx = FVector2D(X, Y);
+	bDebugPaintStickActive = DebugPaintStickPx.Size() > KINDA_SMALL_NUMBER;
+	if (!bDebugPaintStickActive)
+	{
+		// 解除覆寫＝模擬「拉回死區」：robo 沒有滑鼠可回拉，直接歸零（真玩家的
+		// 拉桿由滑鼠回拉/放開左鍵歸零）
+		TattooStickPx = FVector2D::ZeroVector;
+	}
+}
+
+FVector ANiceInkCharacter::GetAimRayOrigin() const
+{
+	// 眼錨定（07-20）：入畫收斂後＝世界定點（與 UpdateLeanCamera 共用⇒準星=P 精確）。
+	// 錨定前（入鎖首幀）＝ActorLoc+60——與 server 算 aim 初值的眼睛同一公式，
+	// 首幀 P≈LeanPoint。絕不讀活骨骼：骨骼被解算驅動＝自我參照回饋（滑走實錘）。
+	if (bDrawEyeAnchorValid)
+	{
+		return DrawEyeAnchorWorld;
+	}
+	return GetActorLocation() + FVector(0.0f, 0.0f, 60.0f);
+}
+
+bool ANiceInkCharacter::TraceAimToTarget(const FVector& DirWorld, FVector& OutImpact) const
+{
+	// 中心射線→受害者皮膚命中點。其他角色一律被射線無視（ghost＝別人的頭脖永遠
+	// 擋不住你的筆）。射程只是找 P 的幾何上限——「搆不搆得到」由姿勢解算裁決
+	//（舊 PaintReach=140 讓「站高俯瞰低點」入座首幀差 2cm 打不到＝低位永遠無 P，
+	// 07-20 robo 實錘：eye 高 152、點高 37、距離 142）。
+	ANiceInkCharacter* Target = LeanTarget.Get();
+	if (!Target || !Target->Body || !GetWorld())
+	{
+		return false;
+	}
+	const FVector Origin = GetAimRayOrigin();
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkAimTrace), /*bInTraceComplex=*/true);
+	QueryParams.AddIgnoredActor(this);
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		if (*It != Target)
+		{
+			QueryParams.AddIgnoredActor(*It);
+		}
+	}
+	FHitResult Hit;
+	if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin + DirWorld * 300.0f,
+			ECC_Visibility, QueryParams) ||
+		Hit.GetActor() != Target)
+	{
+		return false;
+	}
+	OutImpact = Hit.ImpactPoint;
+	return true;
+}
+
+bool ANiceInkCharacter::ResolveAimToTargetUV(const FVector& DirWorld, FVector2D& OutUV,
+	const FVector2D* PrevUV) const
+{
+	// 命中點→UV。容差 1.5mm＝打在褌上不落墨（「褌下不可畫＝物理遮擋」）；
+	// PrevUV＝縫區連續性偏好（兩島搶點的浮點來回跳＝筆跡毛邊真兇，07-20 實錘）。
+	ANiceInkCharacter* Target = LeanTarget.Get();
+	FVector Impact;
+	if (!Target || !Target->Body || !TraceAimToTarget(DirWorld, Impact))
+	{
+		return false;
+	}
+	return Target->Body->ResolveBodyUV(Impact, OutUV, /*MaxDistance=*/0.15f, PrevUV);
+}
+
+void ANiceInkCharacter::ApplyGhostView(bool bEnable)
+{
+	// 畫畫時除自己與沉睡者外，其餘人半透明（本端視覺；碰撞穿透在 OnRep_Lean 全域處理）。
+	// 冪等；還原＝「從各自的真相重建」而非材質快照（被換下的 MID 失去引用會被 GC 反殺）。
+	if (!bEnable)
+	{
+		for (const TWeakObjectPtr<ANiceInkCharacter>& Weak : GhostedChars)
+		{
+			if (ANiceInkCharacter* C = Weak.Get())
+			{
+				C->SetActorHiddenInGame(false);
+				C->ReapplyCanonicalMaterials();
+			}
+		}
+		GhostedChars.Reset();
+		return;
+	}
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		ANiceInkCharacter* C = *It;
+		if (C == this || C == LeanTarget.Get() || GhostedChars.Contains(C))
+		{
+			continue;
+		}
+		if (GhostMaterial)
+		{
+			TInlineComponentArray<UMeshComponent*> Meshes(C);
+			for (UMeshComponent* M : Meshes)
+			{
+				if (!M || M == C->PenMesh || M == C->GripMesh || M == C->NeedleMesh ||
+					Cast<UNeckStretchComponent>(M))
+				{
+					continue; // 筆/握管/針微小、伸縮脖收合時本就隱藏——不 ghost
+				}
+				for (int32 i = 0; i < M->GetNumMaterials(); ++i)
+				{
+					M->SetMaterial(i, GhostMaterial);
+				}
+			}
+		}
+		else
+		{
+			C->SetActorHiddenInGame(true); // 資產缺席的退化：全隱（比穿模誠實）
+		}
+		GhostedChars.Add(C);
+	}
+}
+
+void ANiceInkCharacter::ReapplyCanonicalMaterials()
+{
+	// Body：MID 重建/重綁（臉貼圖、RT、眼罩、膚色全部回真相）
+	if (Body && InkCanvas)
+	{
+		Body->BindCanvas(InkCanvas);
+	}
+	// BowBody：皮膚槽回身體 MID、褌槽回資產材質（EnsurePoseableAsset 的指派邏輯重申）
+	if (BowBody && BowBody->GetSkinnedAsset() && Body && Body->GetDynamicMaterial())
+	{
+		if (const USkeletalMesh* Sk = Cast<USkeletalMesh>(BowBody->GetSkinnedAsset()))
+		{
+			const TArray<FSkeletalMaterial>& SkMats = Sk->GetMaterials();
+			for (int32 i = 0; i < SkMats.Num(); ++i)
+			{
+				if (SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
+				{
+					BowBody->SetMaterial(i, SkMats[i].MaterialInterface);
+				}
+				else
+				{
+					BowBody->SetMaterial(i, Body->GetDynamicMaterial());
+				}
+			}
+		}
+	}
+	// 其餘網格件（髮髻等道具）：回資產預設材質
+	TInlineComponentArray<UMeshComponent*> Meshes(this);
+	for (UMeshComponent* M : Meshes)
+	{
+		if (!M || M == Body || M == BowBody || M == PenMesh || M == GripMesh ||
+			M == NeedleMesh || Cast<UNeckStretchComponent>(M))
+		{
+			continue;
+		}
+		if (UStaticMeshComponent* SMC = Cast<UStaticMeshComponent>(M))
+		{
+			if (const UStaticMesh* SM = SMC->GetStaticMesh())
+			{
+				const TArray<FStaticMaterial>& Mats = SM->GetStaticMaterials();
+				for (int32 i = 0; i < Mats.Num(); ++i)
+				{
+					SMC->SetMaterial(i, Mats[i].MaterialInterface);
+				}
+			}
+		}
+	}
+}
+
 // --- 貼臉鎖定：鎖定中的游標作畫／偷瞄／起身 ---
 
 void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds)
@@ -915,6 +1765,7 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	if (!bLeanLocked)
 	{
 		StopPaintingLocal();
+		bPenTriggerLocal = false; // 伺服器端由 ForceExitLean 清；這裡只清本地鏡像
 		return;
 	}
 
@@ -932,36 +1783,73 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 偷瞄：按住 Shift，鬆開彈回（頭頸硬轉，全房可見）；robo 輸入源 OR（同裝睡模式）
-	const bool bWantsPeek = PC->IsInputKeyDown(EKeys::LeftShift) || bDebugPeekHeld;
-	if (bWantsPeek != bPeeking)
+	// LMB 狀態先讀（07-22 刺青巡航：滑鼠的歸屬依此分流——按住=方向拉桿、放開=自由 aim）
+	const float Now = GetWorld()->GetTimeSeconds();
+	const bool bCanPaint = (Now - LeanLockTime) > LeanPaintDelay;
+	const bool bWantsPaint = bCanPaint && (PC->IsInputKeyDown(EKeys::LeftMouseButton) || bDebugPaintHeld);
+
+	// 伸縮針觸發（2026-07-21）：LMB 邊緣同步——本人端本地鏡像零延遲，
+	// RPC 只在變化時發（他端針視覺吃複製值；pattern 同裝睡）
+	if (bWantsPaint != bPenTriggerLocal)
 	{
-		StopPaintingLocal();
-		ServerSetPeeking(bWantsPeek);
-		// 本地即時反應（複寫回來會再套一次，冪等）
-		bPeeking = bWantsPeek;
-		OnRep_Peeking();
+		bPenTriggerLocal = bWantsPaint;
+		ServerSetPenTrigger(bWantsPaint);
 	}
 
-	// 虛擬麥克筆游標：滑鼠位移驅動、夾在視窗內
-	float MouseX = 0.0f;
-	float MouseY = 0.0f;
-	PC->GetInputMouseDelta(MouseX, MouseY);
-	int32 ViewX = 0;
-	int32 ViewY = 0;
-	PC->GetViewportSize(ViewX, ViewY);
-	const float CursorScale = LeanCursorSpeed * 6.0f * (EffectiveLookSensitivity() / FMath::Max(0.1f, LookSensitivity));
-	LeanCursorPx.X = FMath::Clamp(LeanCursorPx.X + MouseX * CursorScale, 0.0f, static_cast<float>(ViewX));
-	LeanCursorPx.Y = FMath::Clamp(LeanCursorPx.Y - MouseY * CursorScale, 0.0f, static_cast<float>(ViewY));
+	// 滾輪切針（07-23 雙針制 user 定案）：兩針=toggle；鎖定中滾輪閒置（轉盤=受害者
+	// 迷宮情境）、數字鍵=調色盤——滾輪是唯一零衝突空位＋FPS 切武器肌肉記憶。
+	// 換針=抬針重開筆劃（渲染半徑是 per-stroke，不能續同一筆）；狀態跟選色同壽命。
+	if (bHasPendingDebugNeedle)
+	{
+		bHasPendingDebugNeedle = false;
+		SelectedNeedle = PendingDebugNeedle;
+		StopPaintingLocal();
+	}
+	if (PC->WasInputKeyJustPressed(EKeys::MouseScrollUp) ||
+		PC->WasInputKeyJustPressed(EKeys::MouseScrollDown))
+	{
+		SelectedNeedle = (SelectedNeedle == EInkNeedle::Liner)
+			? EInkNeedle::Shader : EInkNeedle::Liner;
+		NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+		StopPaintingLocal();
+	}
 
-	// 偷瞄中或鏡頭未到位不落筆
-	const float Now = GetWorld()->GetTimeSeconds();
-	const bool bCanPaint = !bPeeking && (Now - LeanLockTime) > LeanPaintDelay;
-	const bool bWantsPaint = bCanPaint && PC->IsInputKeyDown(EKeys::LeftMouseButton);
+	// 滑鼠＝臉指向或方向拉桿。巡航=液線針專屬（慢而穩=割線手法）；
+	// 霧針按住左鍵仍是自由 aim＝噴槍式自由揮掃（打霧手法=手擁有速度，07-23 四版）。
+	// 液線針抬針（放開左鍵）＝瞬間拿回全速 aim。
+	PollDrawAim(PC, DeltaSeconds, bWantsPaint && SelectedNeedle == EInkNeedle::Liner);
+
+	// 霧針移動閘量測（每 tick 無條件更新——跨越早退幀的殘差會偽造移動暴衝）：
+	// 量在 raw aim 上＝滑鼠靜止時 delta 精確為零，解算抖動偽造不了移動。
+	// 短窗 EMA（τ≈0.08s）：高幀率下滑鼠回報率 < 幀率＝沒回報的幀瞬時速度為 0、
+	// 閘每隔幾幀閃關一次——瞬時值當閘=排帶斷格真兇（robo 每 tick 餵 aim 測不到；
+	// 「手在動」是 0.1s 尺度的事實，不是單幀的事實）
+	{
+		const float InstSpeed = (bMistPrevAimValid && DeltaSeconds > KINDA_SMALL_NUMBER)
+			? (FMath::Abs(FMath::FindDeltaAngleDegrees(DrawAimAzLocal, MistPrevAimAz)) +
+				FMath::Abs(DrawAimTiltLocal - MistPrevAimTilt)) / DeltaSeconds
+			: 0.0f;
+		const float K = FMath::Clamp(DeltaSeconds / 0.08f, 0.0f, 1.0f);
+		MistAimSpeedDegS = FMath::Lerp(MistAimSpeedDegS, InstSpeed, K);
+	}
+	MistPrevAimAz = DrawAimAzLocal;
+	MistPrevAimTilt = DrawAimTiltLocal;
+	bMistPrevAimValid = true;
+
+	// 搆不到計時（HUD 提示閘）：有目標但筆搆不著才累積；看向房間（無 P）不算
+	if (bDrawTargetValid && !bDrawTipReachable)
+	{
+		DrawUnreachSecs += DeltaSeconds;
+	}
+	else
+	{
+		DrawUnreachSecs = 0.0f;
+	}
+
 	if (!bWantsPaint)
 	{
 		StopPaintingLocal();
-		LastCursorPx = LeanCursorPx;
+		bHasLastPaintTip = false;
 		return;
 	}
 
@@ -972,89 +1860,238 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 螢幕空間細分（每 4px 一個取樣）：筆快滑不掉點，
-	// 跨 UV 接縫的線在 3D 上連續取樣、兩側各自落墨＝縫合（縫在筆下隱形）
-	TArray<FVector2D> SampleUVs;
-	const FVector2D From = bPainting ? LastCursorPx : LeanCursorPx;
-	const float PixelDist = FVector2D::Distance(From, LeanCursorPx);
-	const int32 Steps = FMath::Clamp(FMath::CeilToInt(PixelDist / 4.0f), 1, 24);
-	for (int32 Step = 1; Step <= Steps; ++Step)
-	{
-		const FVector2D Px = FMath::Lerp(From, LeanCursorPx, static_cast<float>(Step) / Steps);
-		FVector2D UV;
-		if (ResolveCursorToTargetUV(PC, Px, UV))
-		{
-			SampleUVs.Add(UV);
-		}
-	}
-	LastCursorPx = LeanCursorPx;
-
-	if (SampleUVs.IsEmpty())
+	// 搆得到才畫得到：剛臂＋伸針解算（ApplyBowPose）裁決本 tick 針尖是否真的壓在皮膚上。
+	// 解不到（橫向殘差超容差）＝墨不落。刺青機再加一閘：針必須實際伸出（UpdatePenVisual
+	// 的針軸 trace 命中；上一 tick 值＝首個觸發 tick 針還沒彈出、墨慢一 tick=針彈出即墨）
+	// ——針懸空沒碰到就出墨＝視覺謊言（第三者因果：針戳進肉才有墨）。
+	if (!bDrawTipReachable || !bPenStateValid ||
+		(bPenIsMachineAsset && PenNeedleLenCm <= PenNeedleStubCm + 0.01f))
 	{
 		StopPaintingLocal();
+		bHasLastPaintTip = false;
 		return;
 	}
 
-	if (!bPainting || PaintTarget.Get() != Target)
+	// 接觸點＝筆軸與皮膚表面的交點：沿筆軸壓入 trace（筆尾側 2.5cm→筆尖前 3cm，
+	// 涵蓋解算殘差 1.5＋寫入誤差 0.5）→ 表面命中點→UV（容差 1.5mm＝打在褌上
+	// 不落墨的物理遮擋語義原樣保留）；PrevUV 鏈＝縫區兩島搶點的連續性偏好。
+	FCollisionQueryParams TipQP(SCENE_QUERY_STAT(NiceInkTipTrace), /*bInTraceComplex=*/true);
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		if (*It != Target)
+		{
+			TipQP.AddIgnoredActor(*It); // 同 aim trace：只認 LeanTarget、無視其他角色
+		}
+	}
+	auto TipToSurfaceUV = [&](const FVector& TipP, const FVector2D* Prev, FVector2D& OutUV) -> bool
+	{
+		FHitResult Hit;
+		const FVector A = TipP + PenShaftDirWorld * 2.5f;
+		const FVector B = TipP - PenShaftDirWorld * 3.0f;
+		if (!GetWorld()->LineTraceSingleByChannel(Hit, A, B, ECC_Visibility, TipQP) ||
+			Hit.GetActor() != Target)
+		{
+			return false;
+		}
+		return Target->Body->ResolveBodyUV(Hit.ImpactPoint, OutUV, /*MaxDistance=*/0.15f, Prev);
+	};
+
+	// --- 點狀出墨＝距離節拍（07-22 刺青手感 user 定案；二版）---
+	// 墨的釋出＝離散扎針：線不是被拖出來的，是被一針一針組裝出來的。首針在觸發
+	// 接觸瞬間（針彈出=墨流出的因果），其後沿筆尖路徑**每 k×筆寬落一針**——針距=
+	// 構造保證的實線（首版時間節拍被 robo 抓到：姿勢解算的橫向抖動 ±0.2cm 疊在
+	// 前進間距上＝針距尾巴 0.31 破實線界；距離制對抖動免疫）。5Hz 節拍在最高速下
+	// 自然湧現（v_max/間距=f）；預算天花板 f×1.5 防異常快移灌針（robo 傳送/hitch）。
+	// 幀內多針沿路徑內插（hitch 不留縫——覆蓋保證按最壞幀推，r15 老教訓）。
+	// 舊 0.5cm 連續軌跡取樣退役——點與點之間不再內插，縫區內插毛邊整類病失去載體。
+	const FVector TipNow = PenTipWorld;
+	const FVector TipFrom = bHasLastPaintTip ? LastPaintTipWorld : TipNow;
+	// 液線針=距離節拍實線；霧針=時間節拍恆定流量（07-23 四版）——分針分物理
+	const float SpacingCm = FMath::Max(TattooSpacingK * TattooNibDiameterCm, 0.02f);
+	const float DotHzNow = (SelectedNeedle == EInkNeedle::Shader) ? ShaderDotHz : TattooDotHz;
+	const FVector2D* PrevUV = bHasLastPaintTip ? &LastPaintUV : nullptr;
+	TattooDotBudget = FMath::Min(
+		TattooDotBudget + DeltaSeconds * DotHzNow * 1.5f,
+		FMath::Max(2.0f, DotHzNow * 0.25f)); // 桶容量隨頻率（hitch 幀要補得起）
+
+	TArray<FVector2D> DotUVs;
+	auto EmitDotAt = [&](const FVector& TipP)
+	{
+		FVector2D UV;
+		if (!TipToSurfaceUV(TipP, PrevUV, UV))
+		{
+			return; // 針此刻不在皮膚上（滑出剪影邊緣）＝這一針空扎
+		}
+		// 原地扎同一點＝冪等（同 UV 針跳過：資料不灌水、視覺同一顆點）——
+		// 不做「停留越久越大/越深」：筆寬通膨的後門不開（細筆=SPEC 承重不變量）
+		if (PrevUV && UV.Equals(*PrevUV, 1e-4))
+		{
+			return;
+		}
+		if (bHasTattooLastDotTip)
+		{
+			TattooLastDotGapCm = FVector::Dist(TattooLastDotTipWorld, TipP);
+		}
+		TattooLastDotTipWorld = TipP;
+		bHasTattooLastDotTip = true;
+		++TattooDotsEmitted;
+		DotUVs.Add(UV);
+		LastPaintUV = UV;
+		PrevUV = &LastPaintUV;
+	};
+
+	const bool bStrokeOpen = bPainting && PaintTarget.Get() == Target;
+	if (SelectedNeedle == EInkNeedle::Shader)
+	{
+		// 霧針（07-23 五修＝距離節拍）：自由揮掃、沿筆尖路徑每 ShaderStampSpacingCm
+		// 沉積一枚薄軟 stamp——**間距<刷半徑=任何手速單趟都是連續霧帶**（時間節拍版
+		// 被 user 實測抓到：真人快掃 300~1000°/s 把 stamp 攤到不相鄰=看起來沒畫）。
+		// 流量天花板=出針預算（九版：純防外掛——3000 排/s 真人構不到；八版把它
+		// 設在真人手速域正中間=排被腰斬成虛線的真兇）。
+		// 移動閘：LMB 按住「且」aim 在動才出墨——停針=零沉積、疊趟才變深；
+		// 閘同時擋掉解算噪聲位移的距離灌水（liner 巡航閘的老教訓）。
+		if (MistAimSpeedDegS >= MistMinAimSpeedDegS)
+		{
+			const float MistSpacing = FMath::Max(ShaderStampSpacingCm, 0.1f);
+			const float L = FVector::Dist(TipFrom, TipNow);
+			float Walked = 0.0f;
+			// Guard 64：真人快掃 @低幀 一 tick 可走 ~6cm=30 排——12 也是隱性丟排閘
+			for (int32 Guard = 0; Guard < 64; ++Guard)
+			{
+				const float Need = MistSpacing - MistDistAccum;
+				if (Walked + Need > L)
+				{
+					MistDistAccum += (L - Walked);
+					break;
+				}
+				if (TattooDotBudget < 1.0f)
+				{
+					MistDistAccum = MistSpacing; // 天花板擋住：記帳停在「差一枚」
+					break;
+				}
+				Walked += Need;
+				MistDistAccum = 0.0f;
+				TattooDotBudget = FMath::Max(TattooDotBudget - 1.0f, 0.0f);
+				EmitDotAt(FMath::Lerp(TipFrom, TipNow,
+					(L > KINDA_SMALL_NUMBER) ? (Walked / L) : 1.0f));
+			}
+		}
+		else
+		{
+			// 停針：距離帳「保留」不歸零——閘只暫停沉積。歸零版=閘每閃關一幀就
+			// 丟掉累積 ⇒ 排距變成「手速×tick」（斷格真兇之二）；閘關期間 aim 不動
+			// ⇒ 帳本本來就不會被灌水，保留是安全的。
+		}
+	}
+	else if (!bStrokeOpen)
+	{
+		// 首針即點（成功接觸才會真正開筆，見下）
+		TattooDistSinceDot = 0.0f;
+		TattooDotBudget = FMath::Max(TattooDotBudget - 1.0f, 0.0f);
+		EmitDotAt(TipNow);
+	}
+	else if (bTattooCruising)
+	{
+		// 出墨只在巡航推進時前進：真輸入下 LMB 按住時 aim 只會被巡航移動——
+		// 非巡航 tick 的筆尖位移＝解算收斂/濾波尾巴的噪聲，入帳=原地打點灌水
+		//（12Hz robo 實錘：停桿後 1.5s 漏 +4 針）；robo aim 傳送門的跳段同樣
+		// 不落墨（跳不是線）。死區停針=首針之後零出墨=冪等由構造保證。
+		const float L = FVector::Dist(TipFrom, TipNow);
+		TattooGainActAccum += L; // 外環增益的實走量測（tip 路徑=玩家感受到的針速）
+		TattooDbgTipCm += L;
+		float Walked = 0.0f;
+		for (int32 Guard = 0; Guard < 8; ++Guard)
+		{
+			const float Need = SpacingCm - TattooDistSinceDot;
+			if (Walked + Need > L)
+			{
+				TattooDistSinceDot += (L - Walked); // 本幀路徑走完、下一針還沒到
+				break;
+			}
+			if (TattooDotBudget < 1.0f)
+			{
+				// 速率天花板擋住（異常快移）：距離記帳停在「差一針」，預算回來立刻補
+				TattooDistSinceDot = SpacingCm;
+				break;
+			}
+			Walked += Need;
+			TattooDistSinceDot = 0.0f;
+			TattooDotBudget -= 1.0f;
+			EmitDotAt(FMath::Lerp(TipFrom, TipNow,
+				(L > KINDA_SMALL_NUMBER) ? (Walked / L) : 1.0f));
+		}
+	}
+	LastPaintTipWorld = TipNow;
+	bHasLastPaintTip = true;
+
+	if (!bStrokeOpen && DotUVs.IsEmpty())
+	{
+		return; // 首針沒接觸到皮膚＝還沒開筆；下一 tick 首針重試（接觸即墨）
+	}
+	if (!bStrokeOpen)
 	{
 		StopPaintingLocal();
 		bPainting = true;
 		PaintTarget = Target;
 		PendingPoints.Reset();
 		PointFlushTimer = 0.0f;
-		ServerPaintBegin(Target, SelectedColorIndex, SampleUVs[0]);
-		SampleUVs.RemoveAt(0);
+		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle);
+		DotUVs.RemoveAt(0);
 	}
+	// 筆劃保持開著（節拍未到/原地冪等/空扎都不是抬針）——抬針只由放開左鍵/
+	// 失去接觸閘裁決；跨縫跨肢的點間大跳在點刺渲染下＝誠實的兩顆點，無內插垃圾
 
-	PendingPoints.Append(SampleUVs);
+	PendingPoints.Append(DotUVs);
 	PointFlushTimer += DeltaSeconds;
-	if (PendingPoints.Num() >= PointFlushMaxBatch || PointFlushTimer >= PointFlushInterval)
+	if (PendingPoints.Num() > 0 &&
+		(PendingPoints.Num() >= PointFlushMaxBatch || PointFlushTimer >= PointFlushInterval))
 	{
-		ServerPaintPoints(PendingPoints);
-		PendingPoints.Reset();
+		FlushPendingPoints();
 		PointFlushTimer = 0.0f;
 	}
 }
 
+void ANiceInkCharacter::FlushPendingPoints()
+{
+	// 分塊送出（九版）：server 單批上限 256——shader 真人快掃低幀時一 tick 可積
+	// 破百針，整包送=被上限整批拒收（靜默丟墨+各端不同步）
+	constexpr int32 ChunkMax = 200;
+	int32 Cursor = 0;
+	while (Cursor < PendingPoints.Num())
+	{
+		const int32 Count = FMath::Min(ChunkMax, PendingPoints.Num() - Cursor);
+		TArray<FVector2D> Chunk(PendingPoints.GetData() + Cursor, Count);
+		ServerPaintPoints(Chunk);
+		Cursor += Count;
+	}
+	PendingPoints.Reset();
+}
+
 bool ANiceInkCharacter::ResolveCursorToTargetUV(APlayerController* PC, const FVector2D& ScreenPx, FVector2D& OutUV) const
 {
-	ANiceInkCharacter* Target = LeanTarget.Get();
-	if (!Target || !Target->Body)
-	{
-		return false;
-	}
-
+	// 直接畫制：任意螢幕座標→世界射線→中心落墨鏈（robo/診斷用；遊戲路徑走
+	// ResolveAimToTargetUV 的 aim 方向版——螢幕中心與 aim 方向構造恆等）
 	FVector RayOrigin, RayDir;
 	if (!PC->DeprojectScreenPositionToWorld(ScreenPx.X, ScreenPx.Y, RayOrigin, RayDir))
 	{
 		return false;
 	}
-
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NiceInkCursorTrace), /*bInTraceComplex=*/true);
-	QueryParams.AddIgnoredActor(this);
-
-	FHitResult Hit;
-	if (!GetWorld()->LineTraceSingleByChannel(Hit, RayOrigin, RayOrigin + RayDir * 220.0f, ECC_Visibility, QueryParams) ||
-		Hit.GetActor() != Target)
-	{
-		return false;
-	}
-
-	// 容差 1.5mm：褌外表面離皮膚至少一個布厚（2mm）——打在布上的命中解算不到皮膚，
-	// 筆劃被拒＝SPEC「褌下的皮膚不可畫（物理遮擋）」。皮膚直擊的解算距離 ≈ 0。
-	return Target->Body->ResolveBodyUV(Hit.ImpactPoint, OutUV, /*MaxDistance=*/0.15f);
+	return ResolveAimToTargetUV(RayDir, OutUV);
 }
 
 void ANiceInkCharacter::StopPaintingLocal()
 {
+	// 抬針：距離節拍歸零（下次落針=首針即點）；針距量測鏈斷開（跨筆劃不量距）
+	TattooDistSinceDot = 0.0f;
+	MistDistAccum = 0.0f;
+	bHasTattooLastDotTip = false;
 	if (!bPainting)
 	{
 		return;
 	}
 	if (PendingPoints.Num() > 0)
 	{
-		ServerPaintPoints(PendingPoints);
-		PendingPoints.Reset();
+		FlushPendingPoints();
 	}
 	ServerPaintEnd();
 	bPainting = false;
@@ -1509,28 +2546,28 @@ void ANiceInkCharacter::ServerEnterLean_Implementation(ANiceInkCharacter* Target
 		return;
 	}
 
-	// 擠位錯開：與已鎖定的別人距離太近就沿切線推開一點（擠但不穿模）
-	FVector AdjustedPoint = Point;
-	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
-	{
-		if (*It != this && It->bLeanLocked && FVector::Dist(It->LeanPoint, AdjustedPoint) < 30.0f)
-		{
-			const FVector Away = (AdjustedPoint - It->LeanPoint).GetSafeNormal2D();
-			AdjustedPoint += (Away.IsNearlyZero() ? FVector(0, 1, 0) : Away) * 30.0f;
-		}
-	}
-
-	// 站位：沿目前接近方向退到 standoff，腳保持地面高度，面向落筆點
-	const FVector Approach = (GetActorLocation() - AdjustedPoint).GetSafeNormal2D();
-	FVector StandLoc = AdjustedPoint + (Approach.IsNearlyZero() ? FVector(0, -1, 0) : Approach) * LeanStandoff;
+	// 直接畫制（2026-07-18）：獨佔制已廢除——同點多人重疊入座合法（ghost 互穿）；
+	// 唯一拒絕理由＝CanPaintOn／距離／非皮膚（上面已驗過）。
+	// 站位：沿目前接近方向退到「目標高度自適應」standoff（低點站近＝深摺搆得到），面向落筆點
+	const float TargetH = static_cast<float>(Point.Z) - (GetActorLocation().Z - 92.0f);
+	const FVector Approach = (GetActorLocation() - FVector(Point)).GetSafeNormal2D();
+	FVector StandLoc = FVector(Point) + (Approach.IsNearlyZero() ? FVector(0, -1, 0) : Approach) *
+		LeanStandoffForHeight(TargetH);
 	StandLoc.Z = GetActorLocation().Z;
 	const float FaceYaw = (-Approach).Rotation().Yaw;
 
 	bLeanLocked = true;
-	LeanPoint = AdjustedPoint;
+	LeanPoint = Point;
 	LeanNormal = Normal;
 	LeanTarget = Target;
-	bPeeking = false;
+
+	// aim 初值＝從站位看向落筆點（owner 端用同一公式自算——COND_SkipOwner 收不到）
+	{
+		const FVector Eye = StandLoc + FVector(0.0f, 0.0f, 60.0f);
+		const FRotator R = (FVector(Point) - Eye).GetSafeNormal().Rotation();
+		DrawAimAzDeg = R.Yaw;
+		DrawAimTiltDeg = FMath::Clamp(-R.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
+	}
 
 	SetActorLocation(StandLoc, false, nullptr, ETeleportType::TeleportPhysics);
 	SetActorRotation(FRotator(0.0f, FaceYaw, 0.0f));
@@ -1545,6 +2582,12 @@ void ANiceInkCharacter::ServerExitLean_Implementation()
 	ForceExitLean();
 }
 
+void ANiceInkCharacter::ServerSetPenTrigger_Implementation(bool bHeld)
+{
+	// 伸縮針觸發態（他端針視覺用；本人端走 bPenTriggerLocal 零延遲）——鎖定中才有意義
+	bPenTriggerHeld = bHeld && bLeanLocked;
+}
+
 void ANiceInkCharacter::ForceExitLean()
 {
 	if (!HasAuthority() || !bLeanLocked)
@@ -1552,23 +2595,13 @@ void ANiceInkCharacter::ForceExitLean()
 		return;
 	}
 	bLeanLocked = false;
-	bPeeking = false;
+	bPenTriggerHeld = false; // 針收回（任何退出路徑：自願/被踹/相位清場/斷線）
 	LeanTarget = nullptr;
 	if (!bAsleep)
 	{
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 	}
 	OnRep_Lean();
-}
-
-void ANiceInkCharacter::ServerSetPeeking_Implementation(bool bNewPeeking)
-{
-	if (!bLeanLocked)
-	{
-		return;
-	}
-	bPeeking = bNewPeeking;
-	OnRep_Peeking();
 }
 
 void ANiceInkCharacter::OnRep_Lean()
@@ -1579,65 +2612,180 @@ void ANiceInkCharacter::OnRep_Lean()
 	// 鎖定中：靜態身體讓位（藏＋無碰撞），噴射改打膠囊（骨骼 physics asset 未備前的粗命中）
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, bLeanLocked ? ECR_Block : ECR_Ignore);
 
+	// ghost 穿透（全域碰撞面）：入座者的膠囊對 Pawn 通道 Ignore＝任何人可穿過入座者
+	//（互擋問題的碰撞半邊；視覺半邊＝owner 端 ApplyGhostView）
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Pawn, bLeanLocked ? ECR_Ignore : ECR_Block);
+
 	if (bLeanLocked)
 	{
-		ApplyBowPose();
+		bRemoteDrawSnap = true;
+		bLeanPoseDirty = true;
+		bHasLastPaintTip = false;
+		DrawUnreachSecs = 0.0f;
+		// 刺青巡航（07-22）：拉桿/節拍/量測鏈全歸零（robo 拉桿覆寫也解除——
+		// 測試要在進鎖+PaintHold 後才掛桿）
+		TattooStickPx = FVector2D::ZeroVector;
+		bTattooCruising = false;
+		TattooDistSinceDot = 0.0f;
+		TattooDotBudget = 0.0f;
+		TattooSpeedDebtCm = 0.0f;
+		MistDistAccum = 0.0f;
+		MistAimSpeedDegS = 0.0f; // EMA 狀態跨鎖清零
+		bMistPrevAimValid = false;
+		TattooGainCmdAccum = 0.0f;
+		TattooGainActAccum = 0.0f; // 增益本身跨鎖保留（系統性折損比率不隨席位變）
+		TattooDbgCruiseSecs = 0.0f;
+		TattooDbgHopCm = 0.0f;
+		TattooDbgTipCm = 0.0f;
+		bHasTattooLastDotTip = false;
+		TattooLastDotGapCm = -1.0f;
+		TattooDotsEmitted = 0;
+		bDebugPaintStickActive = false;
+		// 剛臂解算暖啟動：yaw 從 aim 起步、增量歸零（Backup4 中性）；P/眼錨快取作廢
+		DrawSolveYawDeg = GetActorRotation().Yaw;
+		DrawSolveHipDeg = 0.0f;
+		DrawSolveAnkleDeg = 0.0f;
+		bDrawTipReachable = false;
+		bDrawTargetValid = false;
+		bDrawEyeAnchorValid = false;
+		// 本人視角藏自己的身體（筆除外）：眼錨定後真頭會越過錨點相機＝看到自己
+		// 後腦勺/肩膀擋畫布；旁人不受影響（OwnerNoSee 只藏 owner）
+		if (IsLocallyControlled())
+		{
+			TInlineComponentArray<UMeshComponent*> OwnMeshes(this);
+			for (UMeshComponent* M : OwnMeshes)
+			{
+				if (M && M != PenMesh && M != GripMesh && M != NeedleMesh)
+				{
+					M->SetOwnerNoSee(true);
+				}
+			}
+		}
 		if (IsLocallyControlled())
 		{
 			LeanLockTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
+			// aim 初值：owner 用與 server 同一公式自算（COND_SkipOwner 收不到複製值）
+			const FVector Eye = GetActorLocation() + FVector(0.0f, 0.0f, 60.0f);
+			const FRotator R = (FVector(LeanPoint) - Eye).GetSafeNormal().Rotation();
+			DrawAimAzLocal = R.Yaw;
+			DrawAimTiltLocal = FMath::Clamp(-R.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
+			LastSentDrawAz = DrawAimAzLocal;
+			LastSentDrawTilt = DrawAimTiltLocal;
+			DrawAimSendAccum = 0.0f;
+			// 濾波器 snap 到入座 aim（進鎖硬切、不從舊值飄過來）
+			AimEuroAz.Snap(DrawAimAzLocal);
+			AimEuroTilt.Snap(DrawAimTiltLocal);
+			DrawAimAzFilt = DrawAimAzLocal;
+			DrawAimTiltFilt = DrawAimTiltLocal;
+			if (FirstPersonCamera)
+			{
+				FirstPersonCamera->SetFieldOfView(LeanLockedFov); // 眼錨定相機＋窄視野（user 二調 36）
+			}
 			if (APlayerController* PC = Cast<APlayerController>(GetController()))
 			{
 				int32 ViewX = 0, ViewY = 0;
 				PC->GetViewportSize(ViewX, ViewY);
-				LeanCursorPx = FVector2D(ViewX * 0.5f, ViewY * 0.5f);
+				LeanCursorPx = FVector2D(ViewX * 0.5f, ViewY * 0.5f); // 直接畫制：筆＝螢幕中心
 			}
+			ApplyGhostView(true);
 		}
+		ApplyBowPose();
 	}
 	else
 	{
+		if (IsLocallyControlled())
+		{
+			ApplyGhostView(false);
+			if (FirstPersonCamera)
+			{
+				FirstPersonCamera->SetFieldOfView(90.0f); // 站姿預設
+			}
+			TInlineComponentArray<UMeshComponent*> OwnMeshes(this);
+			for (UMeshComponent* M : OwnMeshes)
+			{
+				if (M && !Cast<UNeckStretchComponent>(M))
+				{
+					// 還原第一人稱慣例：站姿本人看不見自己身體的全貌（SPEC 視角規則；
+					// Body/BowBody 的 ctor 基線＝OwnerNoSee true）。先前這裡全開自身可見
+					// ＝畫完一次後低頭永久看得到自己的肚子/褌（07-20 user viewport 抓到；
+					// 近裁剪面 4cm 還會把貼臉的自身幾何切開）。「自身可見」只屬於
+					// 躺著睜眼的受害者——那條由 ApplySleepVisual 自管，不歸這裡。
+					M->SetOwnerNoSee(M == Body || M == BowBody);
+				}
+			}
+		}
+		bDrawEyeAnchorValid = false;
+		bDrawTargetValid = false;
 		ResetBowPose();
 		StopPaintingLocal();
 	}
 }
 
-void ANiceInkCharacter::OnRep_Peeking()
+FString ANiceInkCharacter::DebugLeanSummary() const
 {
-	if (bLeanLocked)
+	const FVector HeadW = (BowBody && BowBody->GetSkinnedAsset())
+		? BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation()
+		: FVector::ZeroVector;
+	const FVector HipsW = (BowBody && BowBody->GetSkinnedAsset())
+		? BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace).GetLocation()
+		: FVector::ZeroVector;
+	// 筆尖對齊誤差：PenTipWorld 到「相機中心射線」的垂距（對齊是構造保證，這裡是量測）
+	float PenRayErr = -1.0f;
+	if (bPenStateValid && FirstPersonCamera)
 	{
-		ApplyBowPose(); // 頭頸重擺（含偷瞄轉頭）
+		const FVector O = FirstPersonCamera->GetComponentLocation();
+		const FVector D = FRotator(-EffectiveDrawTilt(), EffectiveDrawAz(), 0.0f).Vector();
+		const FVector Rel = PenTipWorld - O;
+		PenRayErr = FVector::CrossProduct(Rel, D).Size();
 	}
+	return FString::Printf(
+		TEXT("locked=%d az=%.1f tilt=%.1f fov=%.0f ghosts=%d ")
+		TEXT("head=(%.1f,%.1f,%.1f) hips=(%.1f,%.1f,%.1f) point=(%.1f,%.1f,%.1f) ")
+		TEXT("penRayErr=%.1f penValid=%d ")
+		TEXT("solveYaw=%.1f hipDeg=%.1f ankleDeg=%.1f tipErr=%.2f reach=%d unreach=%.2f ")
+		TEXT("needle=%.2f trig=%d nSolve=%.1f grip=%.1f ")
+		TEXT("cruise=%d stick=%.0f dotN=%d dotGapCm=%.2f vmaxCm=%.2f guideN=%d ")
+		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f"),
+		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
+		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
+		GhostedChars.Num(),
+		HeadW.X, HeadW.Y, HeadW.Z, HipsW.X, HipsW.Y, HipsW.Z,
+		LeanPoint.X, LeanPoint.Y, LeanPoint.Z,
+		PenRayErr, bPenStateValid ? 1 : 0,
+		DrawSolveYawDeg, DrawSolveHipDeg, DrawSolveAnkleDeg,
+		DrawTipResidualCm, bDrawTipReachable ? 1 : 0, DrawUnreachSecs,
+		PenNeedleLenCm, (IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld) ? 1 : 0,
+		DrawNeedleSolveLenCm, PenGripLenCm,
+		bTattooCruising ? 1 : 0, TattooStickPx.Size(), TattooDotsEmitted, TattooLastDotGapCm,
+		TattooMaxSpeedCmPerSec(),
+		[this]() { TArray<FVector> G; return BuildTattooGuidePath(G); }(),
+		TattooSpeedGain,
+		TattooDbgCruiseSecs > 0.1f ? TattooDbgHopCm / TattooDbgCruiseSecs : -1.0f,
+		TattooDbgCruiseSecs > 0.1f ? TattooDbgTipCm / TattooDbgCruiseSecs : -1.0f,
+		DrawAimAzLocal,
+		SelectedNeedle == EInkNeedle::Shader ? 1 : 0,
+		MistAimSpeedDegS);
 }
 
-FVector ANiceInkCharacter::GetLeanFaceTargetWorld() const
+FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const
 {
-	// 受害者的頭（偷瞄注視點）——旗艦畫面的注視真相：
-	// 睡姿替身活著＝真頭在替身骨上（甦醒升起 46cm、任意方位、裝睡收回全反映在這裡），
-	// 注視點必須追替身頭骨，否則鏡頭對著枕頭上的空位（2026-07-17 診斷實錘）。
-	const ANiceInkCharacter* Target = LeanTarget.Get();
-	if (Target)
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
 	{
-		if (Target->bSleepDoubleActive && Target->BowBody && Target->BowBody->GetSkinnedAsset())
-		{
-			return Target->BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		}
-		if (Target->Body)
-		{
-			// 替身未啟用的退路：靜態身體的標稱頭錨（腳底原點、頭本地 +Z ~152、臉朝 +Y）
-			return Target->Body->GetComponentTransform().TransformPosition(FVector(0.0f, 15.0f, 152.0f));
-		}
+		return TEXT("MISS no-pc");
 	}
-	return FVector(LeanPoint);
-}
-
-namespace
-{
-	// 對 poseable 骨頭在元件空間左乘一個增量旋轉（子骨自動跟隨）
-	void RotateBoneCS(UPoseableMeshComponent* Poseable, FName Bone, const FQuat& Delta)
+	if (!bLeanLocked)
 	{
-		FTransform T = Poseable->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace);
-		T.SetRotation(Delta * T.GetRotation());
-		Poseable->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
+		return TEXT("MISS not-locked");
 	}
+	int32 ViewX = 0, ViewY = 0;
+	PC->GetViewportSize(ViewX, ViewY);
+	FVector2D UV;
+	if (!ResolveCursorToTargetUV(PC, FVector2D(ViewX * ScreenFracX, ViewY * ScreenFracY), UV))
+	{
+		return TEXT("MISS resolve");
+	}
+	return FString::Printf(TEXT("HIT %.5f %.5f"), UV.X, UV.Y);
 }
 
 bool ANiceInkCharacter::EnsurePoseableAsset(UPoseableMeshComponent* Poseable)
@@ -1694,12 +2842,6 @@ void ANiceInkCharacter::DebugRoboFeignSleep(bool bFeign)
 	bDebugFeignHeld = bFeign;
 }
 
-void ANiceInkCharacter::DebugRoboPeekHold(bool bHold)
-{
-	// 作畫偷瞄的 robo 輸入源：與真 Shift OR、由 PollLockedDraw 的同一條 edge 消化
-	bDebugPeekHeld = bHold;
-}
-
 bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal)
 {
 	if (!Target || !GetWorld())
@@ -1727,13 +2869,20 @@ bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector An
 
 namespace
 {
-	// 作畫基底可能寫到的骨集合（重置與姿勢共用一張名單）
+	// 作畫基底可能寫到的骨集合（重置與姿勢共用一張名單）。
+	// 盤腿坐姿（DrawPoseData）寫全身 37 骨——名單必須全蓋，殘留會漏進睡姿替身。
 	const TCHAR* GDrawPoseBones[] = {
-		TEXT("Hips"), TEXT("Spine"), TEXT("Spine1"), TEXT("Neck"), TEXT("Head"),
+		TEXT("Root"), TEXT("Hips"), TEXT("Spine"), TEXT("Spine1"), TEXT("Neck"), TEXT("Head"),
 		TEXT("LeftShoulder"), TEXT("LeftArm"), TEXT("LeftForeArm"), TEXT("LeftHand"),
+		TEXT("LeftHandIndex1"), TEXT("LeftHandIndex2"), TEXT("LeftHandThumb1"), TEXT("LeftHandThumb2"),
+		TEXT("LeftHandProp"),
 		TEXT("RightShoulder"), TEXT("RightArm"), TEXT("RightForeArm"), TEXT("RightHand"),
+		TEXT("RightHandIndex1"), TEXT("RightHandIndex2"), TEXT("RightHandThumb1"), TEXT("RightHandThumb2"),
+		TEXT("RightHandProp"),
 		TEXT("LeftUpLeg"), TEXT("LeftLeg"), TEXT("LeftFoot"), TEXT("LeftToeBase"),
 		TEXT("RightUpLeg"), TEXT("RightLeg"), TEXT("RightFoot"), TEXT("RightToeBase"),
+		TEXT("Jiggle_Belly"), TEXT("Jiggle_Chest_L"), TEXT("Jiggle_Chest_R"),
+		TEXT("Jiggle_Butt_L"), TEXT("Jiggle_Butt_R"),
 	};
 }
 
@@ -1752,283 +2901,522 @@ void ANiceInkCharacter::ResetBowBodyBones()
 	BowBody->RefreshBoneTransforms();
 }
 
-void ANiceInkCharacter::ApplyDrawBasePose()
+void ANiceInkCharacter::ComposeLeanBaseCS(const FReferenceSkeleton& Ref, TArray<FTransform>& OutCS) const
 {
-	// 長跪作畫基底（2026-07-17 r3，user 定案「畫畫時改成長跪」）：目標關節位置由引擎
-	// rest 骨長「現場解析」算出，不再吃 Blender 匯出資料（蹲姿資料版退役——長跪是可以
-	// 被完全解析描述的姿勢，唯一真相住在程式裡）。
-	// 幾何（元件空間：+Y=臉前、+Z=上、腳底原點）：膝著地、脛骨貼地向後、腳背貼地；
-	// 髖在膝上方沿大腿弧後傾——跪高＝落筆點高度的函數（高點=長跪大腿豎直、低點=跪坐
-	// 向腳跟），每一公分下降都是物理成立的姿勢，取代舊「整體下沉把腳埋進地板」的造假。
-	// 擺法沿用關節位置重定向（r2 教訓：Blender 絕對旋轉跨不過 FBX 每骨軸向重映射，
-	// 位置才是可信的跨界資料；本版連位置都自己算＝零跨界）：每骨最小 swing、
-	// Hips 位置直設＋雙約束（脊椎方向＋跨髖軸）鎖 twist。
-	const FTransform CompT = BowBody->GetComponentTransform();
-
-	// --- rest 量測（reset 後讀，全部來自引擎骨架自己）---
-	auto RestCS = [&](const TCHAR* Bone) {
-		return BowBody->GetBoneTransformByName(FName(Bone), EBoneSpaces::ComponentSpace).GetLocation();
+	// 基準姿 CS 組合（LeanBones=Backup4；單位/scale 鐵坑見 DrawPoseData.h 標頭註解）。
+	// ApplyBowPose 的基準（拆出＝07-20 趴姿戰役遺產；趴姿已移除、共用結構保留）。
+	const int32 NumBones = Ref.GetNum();
+	OutCS.SetNum(NumBones);
+	auto FindPose = [](const FName& Bone) -> const DrawPoseData::FBonePose* {
+		for (const DrawPoseData::FBonePose& P : DrawPoseData::LeanBones)
+		{
+			if (Bone == FName(P.Name))
+			{
+				return &P;
+			}
+		}
+		return nullptr;
 	};
-	const FVector RHips = RestCS(TEXT("Hips"));
-	const FVector RUpLegL = RestCS(TEXT("LeftUpLeg"));
-	const FVector RUpLegR = RestCS(TEXT("RightUpLeg"));
-	const FVector RLegL = RestCS(TEXT("LeftLeg"));
-	const FVector RFootL = RestCS(TEXT("LeftFoot"));
-	const FVector RToeL = RestCS(TEXT("LeftToeBase"));
-	const float ThighLen = FVector::Dist(RUpLegL, RLegL);
-	const float ShinLen = FVector::Dist(RLegL, RFootL);
-	const float FootLen = FVector::Dist(RFootL, RToeL);
-
-	// --- 跪高解算：頭高需求 → 髖高（上限=大腿豎直的長跪、下限=跪坐帶）---
-	constexpr float KneeZ = 11.0f;   // 膝關節著地高（肉墊半徑）
-	constexpr float AnkleZ = 8.0f;   // 踝關節貼地高
-	constexpr float ToeZ = 5.0f;     // 趾根貼地高
-	const FVector HeadTargetW = FVector(LeanPoint) + FVector(LeanNormal).GetSafeNormal() * 22.0f;
-	const float HeadReqZ = CompT.InverseTransformPosition(HeadTargetW).Z;
-	const float HipsZ = FMath::Clamp(HeadReqZ + 10.0f, 38.0f, KneeZ + ThighLen);
-	const float CosThigh = FMath::Clamp((HipsZ - KneeZ) / FMath::Max(1.0f, ThighLen), 0.0f, 1.0f);
-	const float SinThigh = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosThigh * CosThigh)); // 大腿後傾＝跪坐量
-
-	// --- 目標關節位置表 ---
-	TMap<FName, FVector> TargetCS;
-	const float ShinBack = FMath::Sqrt(FMath::Max(1.0f, ShinLen * ShinLen - FMath::Square(KneeZ - AnkleZ)));
-	const float FootBack = FMath::Sqrt(FMath::Max(1.0f, FootLen * FootLen - FMath::Square(AnkleZ - ToeZ)));
-	FVector UpLegMidT = FVector::ZeroVector;
-	for (int32 Side = 0; Side < 2; ++Side)
+	for (int32 i = 0; i < NumBones; ++i)
 	{
-		const bool bLeft = Side == 0;
-		const FVector& RUpLeg = bLeft ? RUpLegL : RUpLegR;
-		const FVector Knee(RUpLeg.X, RUpLeg.Y, KneeZ);                       // 膝在站姿髖關節正下方著地
-		const FVector UpLeg = Knee + FVector(0, -SinThigh, CosThigh) * ThighLen; // 髖沿大腿弧後傾上移
-		const FVector Ankle = Knee + FVector(0, -ShinBack, AnkleZ - KneeZ);  // 脛骨貼地向後
-		const FVector Toe = Ankle + FVector(0, -FootBack, ToeZ - AnkleZ);    // 腳背貼地、趾朝後
-		TargetCS.Add(FName(bLeft ? TEXT("LeftUpLeg") : TEXT("RightUpLeg")), UpLeg);
-		TargetCS.Add(FName(bLeft ? TEXT("LeftLeg") : TEXT("RightLeg")), Knee);
-		TargetCS.Add(FName(bLeft ? TEXT("LeftFoot") : TEXT("RightFoot")), Ankle);
-		TargetCS.Add(FName(bLeft ? TEXT("LeftToeBase") : TEXT("RightToeBase")), Toe);
-		UpLegMidT += UpLeg * 0.5f;
-	}
-	// 骨盆與軀幹：直立疊 rest 相對偏移（前彎由後續解算加上）
-	const FVector RUpLegMid = (RUpLegL + RUpLegR) * 0.5f;
-	const FVector HipsTarget = UpLegMidT + (RHips - RUpLegMid);
-	TargetCS.Add(FName(TEXT("Hips")), HipsTarget);
-	for (const TCHAR* Bone : { TEXT("Spine"), TEXT("Spine1"), TEXT("Neck"), TEXT("Head"),
-		TEXT("LeftShoulder"), TEXT("LeftArm"), TEXT("LeftForeArm"), TEXT("LeftHand"),
-		TEXT("RightShoulder"), TEXT("RightArm"), TEXT("RightForeArm"), TEXT("RightHand") })
-	{
-		TargetCS.Add(FName(Bone), HipsTarget + (RestCS(Bone) - RHips));
-	}
-	auto TargetW = [&](const FName& Bone) { return CompT.TransformPosition(TargetCS[Bone]); };
-	auto BoneW = [&](const FName& Bone) {
-		return BowBody->GetBoneTransformByName(Bone, EBoneSpaces::WorldSpace).GetLocation();
-	};
-	auto HasBone = [&](const TCHAR* Bone) { return BowBody->GetBoneIndex(FName(Bone)) != INDEX_NONE; };
-	for (const TCHAR* Required : { TEXT("Hips"), TEXT("Spine"), TEXT("LeftUpLeg"), TEXT("RightUpLeg") })
-	{
-		if (!HasBone(Required))
+		FTransform Local = Ref.GetRefBonePose()[i];
+		if (const DrawPoseData::FBonePose* P = FindPose(Ref.GetBoneName(i)))
 		{
-			return; // 骨架缺骨＝安靜跳過（姿勢不演，機制照跑）
+			const FVector RefScale = Local.GetScale3D();
+			Local = FTransform(FQuat(P->QX, P->QY, P->QZ, P->QW).GetNormalized(),
+				FVector(P->LX, P->LY, P->LZ));
+			Local.SetScale3D(RefScale); // 保 scale（節點根骨 100 鏈）
+		}
+		const int32 Parent = Ref.GetParentIndex(i);
+		OutCS[i] = Local * (Parent != INDEX_NONE ? OutCS[Parent] : FTransform::Identity);
+	}
+}
+
+bool ANiceInkCharacter::WriteBowPoseConverged(const FReferenceSkeleton& Ref, const TArray<FTransform>& CS,
+	const TArray<FName>& VerifyBones)
+{
+	// 寫入：補償換算＋實測收斂迴圈（07-20 robo 實錘：首寫時 poseable 快取=舊姿，
+	// 單次補償寫入不收斂）。寫→refresh→讀回驗證骨硬驗證（0.5cm 閘）。
+	// **收斂是逐層傳播的（每 pass 修正一層鏈深）⇒ 驗證骨必須含最深的鏈尾（手，
+	// 深度 9）**——只驗 Head（深度 6）會在第 6 pass 提早收工，把深度 8~9 的雙臂
+	// 留在半收斂＝趴姿一臂朝天/一臂扭曲（07-20 viewport 實錘）。
+	const int32 NumBones = Ref.GetNum();
+	float WriteErr = TNumericLimits<float>::Max();
+	TArray<FTransform> Cached;
+	Cached.SetNum(NumBones);
+	for (int32 Pass = 0; Pass < 10 && WriteErr > 0.5f; ++Pass)
+	{
+		for (int32 i = 0; i < NumBones; ++i)
+		{
+			Cached[i] = BowBody->GetBoneTransformByName(Ref.GetBoneName(i), EBoneSpaces::ComponentSpace);
+		}
+		for (int32 i = 0; i < NumBones; ++i)
+		{
+			const int32 Parent = Ref.GetParentIndex(i);
+			FTransform X = CS[i];
+			if (Parent != INDEX_NONE)
+			{
+				X = CS[i].GetRelativeTransform(CS[Parent]) * Cached[Parent];
+			}
+			BowBody->SetBoneTransformByName(Ref.GetBoneName(i), X, EBoneSpaces::ComponentSpace);
+		}
+		BowBody->RefreshBoneTransforms(); // 鏡頭/實體筆/伸縮脖同 tick 讀骨要拿到最終姿勢
+		WriteErr = 0.0f;
+		for (const FName& Bone : VerifyBones)
+		{
+			const int32 Idx = Ref.FindBoneIndex(Bone);
+			if (Idx != INDEX_NONE)
+			{
+				WriteErr = FMath::Max(WriteErr, FVector::Dist(
+					BowBody->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace).GetLocation(),
+					CS[Idx].GetLocation()));
+			}
 		}
 	}
-
-	// --- Hips：位置直設＋雙約束旋轉（Spine 方向對齊＋左右髖軸扭轉對齊）---
-	{
-		const FVector HipsCur = BoneW(TEXT("Hips"));
-		const FVector HipsTgt = TargetW(TEXT("Hips"));
-		const FVector SpineCur = (BoneW(TEXT("Spine")) - HipsCur).GetSafeNormal();
-		const FVector SpineTgt = (TargetW(TEXT("Spine")) - HipsTgt).GetSafeNormal();
-		FQuat Q1 = FQuat::FindBetweenNormals(SpineCur, SpineTgt);
-		const FVector LegAxisCur = Q1.RotateVector(
-			(BoneW(TEXT("LeftUpLeg")) - BoneW(TEXT("RightUpLeg"))).GetSafeNormal());
-		FVector LegAxisTgt = (TargetW(TEXT("LeftUpLeg")) - TargetW(TEXT("RightUpLeg"))).GetSafeNormal();
-		FVector A = LegAxisCur - FVector::DotProduct(LegAxisCur, SpineTgt) * SpineTgt;
-		FVector B = LegAxisTgt - FVector::DotProduct(LegAxisTgt, SpineTgt) * SpineTgt;
-		if (A.Normalize() && B.Normalize())
-		{
-			const float Twist = FMath::Atan2(
-				FVector::DotProduct(FVector::CrossProduct(A, B), SpineTgt), FVector::DotProduct(A, B));
-			Q1 = FQuat(SpineTgt, Twist) * Q1;
-		}
-		FTransform HipsT = BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace);
-		HipsT.SetRotation(Q1 * HipsT.GetRotation());
-		HipsT.SetLocation(HipsTgt);
-		BowBody->SetBoneTransformByName(TEXT("Hips"), HipsT, EBoneSpaces::WorldSpace);
-		BowBody->RefreshBoneTransforms();
-	}
-
-	// --- 鏈骨最小 swing（root→leaf；每骨寫→讀之間 refresh＝poseable 快取陷阱）---
-	static const TCHAR* Chain[][2] = {
-		{ TEXT("Spine"), TEXT("Spine1") },
-		{ TEXT("Spine1"), TEXT("Neck") },
-		{ TEXT("Neck"), TEXT("Head") },
-		{ TEXT("LeftShoulder"), TEXT("LeftArm") },
-		{ TEXT("LeftArm"), TEXT("LeftForeArm") },
-		{ TEXT("LeftForeArm"), TEXT("LeftHand") },
-		{ TEXT("RightShoulder"), TEXT("RightArm") },
-		{ TEXT("RightArm"), TEXT("RightForeArm") },
-		{ TEXT("RightForeArm"), TEXT("RightHand") },
-		{ TEXT("LeftUpLeg"), TEXT("LeftLeg") },
-		{ TEXT("LeftLeg"), TEXT("LeftFoot") },
-		{ TEXT("LeftFoot"), TEXT("LeftToeBase") },
-		{ TEXT("RightUpLeg"), TEXT("RightLeg") },
-		{ TEXT("RightLeg"), TEXT("RightFoot") },
-		{ TEXT("RightFoot"), TEXT("RightToeBase") },
-	};
-	for (const auto& Pair : Chain)
-	{
-		const FName Bone(Pair[0]);
-		const FName Child(Pair[1]);
-		if (BowBody->GetBoneIndex(Bone) == INDEX_NONE || BowBody->GetBoneIndex(Child) == INDEX_NONE ||
-			!TargetCS.Contains(Bone) || !TargetCS.Contains(Child))
-		{
-			continue;
-		}
-		const FVector BCur = BoneW(Bone);
-		const FVector CurDir = (BoneW(Child) - BCur).GetSafeNormal();
-		const FVector TgtDir = (TargetW(Child) - TargetW(Bone)).GetSafeNormal();
-		if (CurDir.IsNearlyZero() || TgtDir.IsNearlyZero())
-		{
-			continue;
-		}
-		const FQuat Q = FQuat::FindBetweenNormals(CurDir, TgtDir);
-		FTransform T = BowBody->GetBoneTransformByName(Bone, EBoneSpaces::WorldSpace);
-		T.SetRotation(Q * T.GetRotation());
-		BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::WorldSpace);
-		BowBody->RefreshBoneTransforms();
-	}
+	return WriteErr <= 0.5f;
 }
 
 void ANiceInkCharacter::ApplyBowPose()
 {
-	if (!BowBody)
+	// 直接畫制作畫姿（2026-07-18 user 定案）：基準＝使用者手擺的站立前傾
+	// DrawPose_Backup4（LeanBones；髖 68cm 半蹲、腳跟離地腳尖踩地、右手前伸），
+	// 程式只在基準附近施加小幅側面增量——Hips=傾多傾少（全身剛轉、相對位置不變）、
+	// 雙腳反轉保持腳尖踩地、Neck=臉向精對；左右=整身 yaw。程式不發明姿勢。
+	// 每 tick 由 aim 驅動（髒檢查：aim 沒動不寫骨）。
+	if (!BowBody || !EnsureBowBodyAsset())
 	{
 		return;
 	}
-
-	if (!EnsureBowBodyAsset())
+	const float Az = EffectiveDrawAz();
+	const float Tilt = EffectiveDrawTilt();
+	// 門檻 0.05°（原 0.2 的量化微跳已由 One Euro 靜止凍結取代——濾波輸出靜止時
+	// 真正收斂、不會在門檻兩側振盪；慢速運筆的姿勢粒度細到 0.5mm 級）。
+	// 巡航中收緊到 0.01°：aim 每幀只走 ~0.01°（皮膚面恆速 ~1cm/s），0.05 門檻會把
+	// 針的路徑量化成 ~0.7mm 階梯＝針距抖動吃掉實線餘裕（k=0.5 的餘裕只有 0.8mm）
+	const float DirtyThresholdDeg = bTattooCruising ? 0.01f : 0.05f;
+	const bool bAimMoved =
+		FMath::Abs(FMath::FindDeltaAngleDegrees(Az, LastAppliedDrawAz)) >= DirtyThresholdDeg ||
+		FMath::Abs(Tilt - LastAppliedDrawTilt) >= DirtyThresholdDeg;
+	if (!bLeanPoseDirty && !bAimMoved)
 	{
 		return;
 	}
+	LastAppliedDrawAz = Az;
+	LastAppliedDrawTilt = Tilt;
+	bLeanPoseDirty = false;
 
-	// 換上可擺骨身體；靜態身體藏起來、連碰撞一起讓位（噴射打彎腰的身體）
+	// 換上可擺骨身體；靜態身體讓位（藏＋無碰撞）
 	if (Body)
 	{
 		Body->SetVisibility(false);
 		Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
 	BowBody->SetVisibility(true);
-
-	// 重置再擺（冪等）：先還原元件相對位置（上次的補位滑移不可累積），再回參考姿勢。
-	// UPoseableMeshComponent 的 CS 快取要等 tick 才重算——每次「寫姿勢→讀骨骼」之間
-	// 都必須 RefreshBoneTransforms()，否則讀到上一幀的舊姿勢（65.9cm 誤差的元凶）。
 	BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
-	ResetBowBodyBones();
 
-	// 臉方向的參考：rest 時臉＝元件 +Y（sumo 匯入慣例）。之後任何擺骨後的臉向
-	// ＝（當下頭骨 CS 旋轉 × rest 旋轉⁻¹）作用在 +Y 上——與擺了什麼無關，讀骨即得。
-	const FQuat HeadRestCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	const int32 NumBones = Ref.GetNum();
+	auto IdxOf = [&](const TCHAR* N) { return Ref.FindBoneIndex(FName(N)); };
 
-	// 基底＝長跪（2026-07-17 r3 user 定案；蹲踞資料版退役）：躺姿受害者全身落筆點的
-	// 頭高需求 25~105cm，長跪直立頭高 ~115cm 全蓋掉；低位點由「跪坐向腳跟」承接
-	// （髖沿大腿弧真的坐下去），不再靠整體下沉把腳埋進地板。
-	ApplyDrawBasePose();
-
-	const FTransform CompT = BowBody->GetComponentTransform();
-	const FVector BendAxisW = CompT.TransformVectorNoScale(FVector(1, 0, 0)).GetSafeNormal(); // 元件 X＝彎折軸
-
-	// --- 前彎解算：讓「頭骨」真的抵達落筆點上方 ---
-	// 目標：頭骨到 LeanPoint + 法線 × 22cm（臉貼著畫，重度近視式）
-	const FVector SpinePivot = BowBody->GetBoneTransformByName(TEXT("Spine"), EBoneSpaces::WorldSpace).GetLocation();
-	const FVector Head0 = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-	const FVector HeadTarget = FVector(LeanPoint) + FVector(LeanNormal).GetSafeNormal() * 22.0f;
-
-	auto ProjectOntoBendPlane = [&BendAxisW](const FVector& V) {
-		return (V - FVector::DotProduct(V, BendAxisW) * BendAxisW);
+	// 基準姿 CS 組合＋子樹剛轉：與趴姿共用（ComposeLeanBaseCS / RotSubtreeAboutPivotCS）
+	TArray<FTransform> CS;
+	ComposeLeanBaseCS(Ref, CS);
+	auto RotSubtreeAboutPivot = [&](int32 RootIdx, const FQuat& Q, const FVector& PivotCS) {
+		RotSubtreeAboutPivotCS(Ref, CS, RootIdx, Q, PivotCS);
 	};
-	const FVector A = ProjectOntoBendPlane(Head0 - SpinePivot);
-	const FVector B = ProjectOntoBendPlane(HeadTarget - SpinePivot);
-	float SpineRad = 0.0f;
-	if (!A.IsNearlyZero() && !B.IsNearlyZero())
-	{
-		const FVector An = A.GetSafeNormal();
-		const FVector Bn = B.GetSafeNormal();
-		SpineRad = FMath::Atan2(FVector::DotProduct(FVector::CrossProduct(An, Bn), BendAxisW), FVector::DotProduct(An, Bn));
-	}
-	SpineRad = FMath::Clamp(SpineRad, FMath::DegreesToRadians(-115.0f), FMath::DegreesToRadians(115.0f));
 
-	// 偷瞄＝先抬起來再看（2026-07-17 改制）：穿膜要修在姿勢層不是相機層——頭真的
-	// 升高，越過肚山看臉，相機照舊長在頭骨上；第三人稱破綻順勢變大聲（頭彈起來，
-	// 全房可見＝SPEC 本意）。上限 45°＝保留一點前傾（不是起身；腿仍蹲踞）。
-	if (bPeeking)
+	// --- 一次性靜態校準（user 原話「手部的位置還需要你再調整一下」的正解）：
+	// 筆焊死在握骨、shaft＝眉→手延長線 ⇒ 筆尖躺在視線正前方、看起來像握著筆。
+	// 校準只定「筆在手裡的長相」；對齊由下方「解筆尖=P」保證，與校準精度無關。---
+	const int32 HeadBoneIdx = IdxOf(TEXT("Head"));
+	if (!bPenGripCalibrated && HeadBoneIdx != INDEX_NONE)
 	{
-		SpineRad = FMath::Clamp(SpineRad, FMath::DegreesToRadians(-45.0f), FMath::DegreesToRadians(45.0f));
-	}
-
-	// 彎角分攤 Spine/Spine1 各半：單骨 90°+ 的 LBS 直接摺爆肚子（第三人稱三病之三）；
-	// 每骨角度減半，蒙皮崩壞超線性下降。頭端殘差由補位滑移收斂（維持落點精確）。
-	RotateBoneCS(BowBody, TEXT("Spine"), FQuat(FVector(1, 0, 0), SpineRad * 0.5f));
-	BowBody->RefreshBoneTransforms();
-	RotateBoneCS(BowBody, TEXT("Spine1"), FQuat(FVector(1, 0, 0), SpineRad * 0.5f));
-	BowBody->RefreshBoneTransforms();
-
-	// 彎腰半徑不足以抵達 HeadTarget 時，整個 BowBody 補位湊過去（上半身探出去的誇張感）。
-	// 偷瞄不補位：頭回到自己身體上方＝「坐起來看」，下一 tick 恢復作畫時再滑回。
-	if (!bPeeking)
-	{
-		const FVector HeadAfterSpine = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector Gap = HeadTarget - HeadAfterSpine;
-		BowBody->AddWorldOffset(Gap);
-		BowBody->RefreshBoneTransforms();
-	}
-
-	// --- 臉 aim（頭頸硬轉，Neck+Head 繞頭骨樞軸）---
-	// 作畫＝臉對準落筆點（埋頭盯筆尖；恢復「你看的方向≡臉表達的方向」——相機在
-	// UpdateLeanCamera 同樣朝落筆點，第一/第三人稱不再脫鉤。pose-true batch 舊解，
-	// 轆轤首改制時遺失，2026-07-17 修回）；偷瞄＝臉對準受害者的真頭。
-	// 全框解（r3）：臉方向＋頭頂朝向雙約束——最小旋轉解會留下任意 roll（歪著頭看＝
-	// 詭異讀感的實質來源）。頭頂提示：臉近水平＝頭頂朝上；臉近垂直（低頭看肚皮）＝
-	// 頭頂朝「身體外」（低頭看紙的自然姿）。美術語言＝程式化硬轉；上限 95°（貓頭鷹護欄）。
-	{
-		const FVector AimTargetW = bPeeking ? GetLeanFaceTargetWorld() : FVector(LeanPoint);
-		const FVector HeadPosNow = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector FaceDirW = (AimTargetW - HeadPosNow).GetSafeNormal();
-		FVector CrownHintW = FVector::UpVector;
-		if (FMath::Abs(FaceDirW.Z) > 0.7f)
+		int32 GripIdx = IdxOf(TEXT("RightHandProp"));
+		if (GripIdx == INDEX_NONE)
 		{
-			CrownHintW = HeadPosNow - CompT.TransformPosition(
-				BowBody->GetBoneTransformByName(TEXT("Spine"), EBoneSpaces::ComponentSpace).GetLocation());
-			CrownHintW.Z = 0.0f;
-			if (!CrownHintW.Normalize())
-			{
-				CrownHintW = GetActorForwardVector();
-			}
+			GripIdx = IdxOf(TEXT("RightHand"));
 		}
-		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(FaceDirW);
-		const FVector CrownCS = CompT.InverseTransformVectorNoScale(CrownHintW);
-		const FQuat HeadNowCSQ = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetRotation();
-		if (!DesiredCS.IsNearlyZero())
+		if (GripIdx != INDEX_NONE)
 		{
-			// 目標視覺框（相對 rest 的 delta）：+Y=臉、+Z≈頭頂；現況 delta 反解出增量
-			const FQuat DeltaDesired = FRotationMatrix::MakeFromYZ(DesiredCS, CrownCS).ToQuat();
-			const FQuat DeltaNow = HeadNowCSQ * HeadRestCSQ.Inverse();
-			FQuat AimQ = DeltaDesired * DeltaNow.Inverse();
-			FVector Axis;
-			float Angle;
-			AimQ.ToAxisAndAngle(Axis, Angle);
-			AimQ = FQuat(Axis, FMath::Min(Angle, FMath::DegreesToRadians(95.0f)));
-			const FVector PivotCS =
-				BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace).GetLocation();
-			for (const TCHAR* BoneName : { TEXT("Neck"), TEXT("Head") })
-			{
-				FTransform BoneCS = BowBody->GetBoneTransformByName(BoneName, EBoneSpaces::ComponentSpace);
-				BoneCS.SetLocation(PivotCS + AimQ.RotateVector(BoneCS.GetLocation() - PivotCS));
-				BoneCS.SetRotation(AimQ * BoneCS.GetRotation());
-				BowBody->SetBoneTransformByName(BoneName, BoneCS, EBoneSpaces::ComponentSpace);
-				BowBody->RefreshBoneTransforms(); // 寫姿勢→讀骨骼之間必須刷新（poseable 快取陷阱）
-			}
+			PenGripBoneName = Ref.GetBoneName(GripIdx);
+			// 站姿元件空間臉朝 +Y、上 +Z（粗眉心對校準足夠）
+			const FVector BrowCS = CS[HeadBoneIdx].GetLocation() + FVector(0.0f, 13.0f, 8.0f);
+			const FVector HandLoc = CS[GripIdx].GetLocation();
+			const FQuat HandQ = CS[GripIdx].GetRotation().GetNormalized();
+			const FVector Shaft = (HandLoc - BrowCS).GetSafeNormal();
+			PenTipLocalCm = HandQ.UnrotateVector(Shaft * PenTipAheadCm);
+			// roll 約束（刺青機非旋轉對稱）：資產 -Y=骨架側（FBX 匯入 Y 翻轉實測）——
+			// Y hint 給 -Z_CS ⇒ 骨架/線圈塔朝 +Z_CS（站姿校準的頭上方＝握姿的手背側）。
+			// 麥克筆圓對稱，同式無感。-Shaft 與 -Z_CS 夾角遠離平行（shaft≈前下 45°）＝無退化。
+			PenRotInHand = HandQ.Inverse() *
+				FRotationMatrix::MakeFromZY(-Shaft, FVector(0.0f, 0.0f, -1.0f)).ToQuat();
+			bPenGripCalibrated = true;
 		}
 	}
-	BowBody->RefreshBoneTransforms(); // 收尾：鏡頭/實體筆同 tick 讀頭骨要拿到最終姿勢
+
+	// --- 剛臂姿勢解算（2026-07-20 user 定案「手就一直伸直就好」）：手臂＝Backup4 原樣，
+	// 筆尖＝身體的固定末端；3-DOF（整身 yaw＋Hips 傾＋雙踝搖——後兩者=四關節白名單的
+	// 側面自由度、Backup4 腳尖站態天生的搖桿支點）數值解「筆尖=落墨點 P」。
+	// 碰到皮膚是解出來的，不是手追出來的；解不到＝搆不到＝不落墨（走近再畫）。---
+	const int32 HipsIdx = IdxOf(TEXT("Hips"));
+	const int32 LFootIdx = IdxOf(TEXT("LeftFoot"));
+	const int32 RFootIdx = IdxOf(TEXT("RightFoot"));
+	const int32 LToeIdx = IdxOf(TEXT("LeftToeBase"));
+	const int32 RToeIdx = IdxOf(TEXT("RightToeBase"));
+	const int32 GripBoneIdx = (PenGripBoneName != NAME_None) ? Ref.FindBoneIndex(PenGripBoneName) : INDEX_NONE;
+	const bool bSolverReady = HipsIdx != INDEX_NONE && LFootIdx != INDEX_NONE &&
+		RFootIdx != INDEX_NONE && GripBoneIdx != INDEX_NONE && bPenGripCalibrated;
+
+	// 樞軸與參考點全取中性姿（未施增量的 CS）——前向模型與套用步驟共用同一組
+	const FVector HipPivot = HipsIdx != INDEX_NONE ? CS[HipsIdx].GetLocation() : FVector::ZeroVector;
+	const FVector AnklePivot = bSolverReady
+		? (CS[LFootIdx].GetLocation() + CS[RFootIdx].GetLocation()) * 0.5f : FVector::ZeroVector;
+
+	float HipDeg = DrawSolveHipDeg;
+	float AnkleDeg = DrawSolveAnkleDeg;
+	if (bSolverReady)
+	{
+		const FVector Tip0 = CS[GripBoneIdx].GetLocation() +
+			CS[GripBoneIdx].GetRotation().RotateVector(PenTipLocalCm);
+		const FVector Foot0[2] = { CS[LFootIdx].GetLocation(), CS[RFootIdx].GetLocation() };
+		const FVector Toe0[2] = {
+			LToeIdx != INDEX_NONE ? CS[LToeIdx].GetLocation() : Foot0[0],
+			RToeIdx != INDEX_NONE ? CS[RToeIdx].GetLocation() : Foot0[1] };
+
+		// 前向模型：與下方套用步驟逐步同構（Hips 剛轉→腳反轉→踝搖→腳反轉→落地）；
+		// PointCsFor 可追蹤任意剛體點（筆尖=解算目標、頭=解析眼錨點）
+		auto GroundDzFor = [&](const FQuat& QH, const FQuat& QA) -> float
+		{
+			float MinZ = TNumericLimits<float>::Max();
+			for (int32 F = 0; F < 2; ++F)
+			{
+				const FVector Foot1 = HipPivot + QH.RotateVector(Foot0[F] - HipPivot);
+				FVector Toe1 = HipPivot + QH.RotateVector(Toe0[F] - HipPivot);
+				Toe1 = Foot1 + QH.Inverse().RotateVector(Toe1 - Foot1); // 腳反轉＝趾姿不變
+				const FVector Foot2 = AnklePivot + QA.RotateVector(Foot1 - AnklePivot);
+				FVector Toe2 = AnklePivot + QA.RotateVector(Toe1 - AnklePivot);
+				Toe2 = Foot2 + QA.Inverse().RotateVector(Toe2 - Foot2);
+				MinZ = FMath::Min(MinZ,
+					FMath::Min(static_cast<float>(Foot2.Z), static_cast<float>(Toe2.Z)));
+			}
+			return DrawToePadCm - MinZ;
+		};
+		auto PointCsFor = [&](const FVector& P0, float H, float A) -> FVector
+		{
+			const FQuat QH(FVector::XAxisVector, FMath::DegreesToRadians(H));
+			const FQuat QA(FVector::XAxisVector, FMath::DegreesToRadians(A));
+			FVector Pt = HipPivot + QH.RotateVector(P0 - HipPivot);
+			Pt = AnklePivot + QA.RotateVector(Pt - AnklePivot);
+			Pt.Z += GroundDzFor(QH, QA);
+			return Pt;
+		};
+		// 解算目標點＝虛擬筆尖（出針口+標稱針長）；伸針解（2026-07-21）會沿針軸外推
+		const FVector GripLocCS = CS[GripBoneIdx].GetLocation();
+		const FVector TipDirCS = (Tip0 - GripLocCS) / FMath::Max(PenTipAheadCm, 1.0f); // 單位針軸（離手向）
+		const FVector ExitCS = Tip0 - TipDirCS * PenNeedleNominalCm;                   // 出針口
+		FVector SolveTipCS = Tip0;
+		auto TipCsFor = [&](float H, float A) -> FVector { return PointCsFor(SolveTipCS, H, A); };
+		const FVector Head0 = (HeadBoneIdx != INDEX_NONE)
+			? CS[HeadBoneIdx].GetLocation() : FVector::ZeroVector;
+		const FVector ActorLoc = GetActorLocation();
+		auto TipWorldFor = [&](float Psi, float H, float A) -> FVector
+		{
+			const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
+				FTransform(FRotator(0.0f, Psi, 0.0f), ActorLoc);
+			return CompW.TransformPosition(TipCsFor(H, A));
+		};
+
+		// P 取得：aim 動了才重新 trace；aim 靜止下的重跑（寫入收斂等）沿用快取 P。
+		// 眼睛長在會被解算搬動的頭上——每 tick 重 trace＝「眼→P→姿勢→眼」自我參照
+		// 回饋迴圈，aim 不動 P 也會漂移到鉗位角落（07-20 探針：三幀漂 10cm）。
+		if (bAimMoved || !bDrawTargetValid)
+		{
+			FVector Traced;
+			if (TraceAimToTarget(FRotator(-Tilt, Az, 0.0f).Vector(), Traced))
+			{
+				DrawTargetWorld = Traced;
+				bDrawTargetValid = true;
+			}
+			else
+			{
+				bDrawTargetValid = false;
+			}
+		}
+
+		if (bDrawTargetValid)
+		{
+			const FVector P = DrawTargetWorld;
+			auto Det3 = [](const FVector& X, const FVector& Y, const FVector& Z)
+			{ return static_cast<float>(FVector::DotProduct(X, FVector::CrossProduct(Y, Z))); };
+			// Newton（數值 Jacobian＋Cramer）：暖啟動=上次解；失敗再從乾淨初值重解一次
+			//（proxy 首幀的壞暖啟動會把 Newton 掐死在鉗位角落——07-20 探針實錘）
+			auto Solve = [&](float PsiIn, float HIn, float AIn, float& PsiOut, float& HOut, float& AOut) -> float
+			{
+				float Psi = PsiIn, H = HIn, A = AIn;
+				for (int32 It = 0; It < 6; ++It)
+				{
+					const FVector T0 = TipWorldFor(Psi, H, A);
+					const FVector R = P - T0;
+					if (R.Size() < 0.25f)
+					{
+						break;
+					}
+					constexpr float D = 0.75f;
+					const FVector J0 = (TipWorldFor(Psi + D, H, A) - T0) / D;
+					const FVector J1 = (TipWorldFor(Psi, H + D, A) - T0) / D;
+					const FVector J2 = (TipWorldFor(Psi, H, A + D) - T0) / D;
+					const float Den = Det3(J0, J1, J2);
+					if (FMath::Abs(Den) < KINDA_SMALL_NUMBER)
+					{
+						break;
+					}
+					Psi += FMath::Clamp(Det3(R, J1, J2) / Den, -25.0f, 25.0f);
+					H = FMath::Clamp(H + FMath::Clamp(Det3(J0, R, J2) / Den, -25.0f, 25.0f),
+						-DrawHipDeltaClampDeg, DrawHipDeltaClampDeg);
+					A = FMath::Clamp(A + FMath::Clamp(Det3(J0, J1, R) / Den, -25.0f, 25.0f),
+						-DrawAnkleDeltaClampDeg, DrawAnkleDeltaClampDeg);
+				}
+				PsiOut = Psi;
+				HOut = H;
+				AOut = A;
+				return (P - TipWorldFor(Psi, H, A)).Size();
+			};
+			float Psi, HOut, AOut;
+			float Res = Solve(DrawSolveYawDeg, HipDeg, AnkleDeg, Psi, HOut, AOut);
+			if (Res > DrawTipSolveTolCm)
+			{
+				float Psi2, H2, A2;
+				const float Res2 = Solve(Az, 0.0f, 0.0f, Psi2, H2, A2);
+				if (Res2 < Res)
+				{
+					Res = Res2;
+					Psi = Psi2;
+					HOut = H2;
+					AOut = A2;
+				}
+			}
+
+			// 伸縮針解（2026-07-21 user 定案「指到哪畫哪」）：標稱針長＋身體鉗位仍搆
+			// 不到＝深度差交給針——虛擬筆尖沿針軸外推 L（=出針口→P 實距、外迭代 2 輪
+			// 與姿勢互相收斂），針軸構造上穿過 P（落墨中心對齊不是湊的）。橫向殘差仍受
+			// DrawTipSolveTolCm 裁決＝針只補深度、不歪著扎。身體先扛（前傾讀感保留），
+			// 針只補鉗位外的殘餘。
+			DrawNeedleSolveLenCm = -1.0f;
+			if (Res > DrawTipSolveTolCm)
+			{
+				auto ExitWorldFor = [&](float PsiE, float HE, float AE) -> FVector
+				{
+					const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
+						FTransform(FRotator(0.0f, PsiE, 0.0f), ActorLoc);
+					return CompW.TransformPosition(PointCsFor(ExitCS, HE, AE));
+				};
+				float PsiE = Psi, HE = HOut, AE = AOut;
+				float LenE = PenNeedleNominalCm, ResE = Res;
+				for (int32 Outer = 0; Outer < 2; ++Outer)
+				{
+					LenE = FMath::Clamp(
+						static_cast<float>((P - ExitWorldFor(PsiE, HE, AE)).Size()),
+						PenNeedleNominalCm, 300.0f);
+					SolveTipCS = ExitCS + TipDirCS * LenE;
+					ResE = Solve(PsiE, HE, AE, PsiE, HE, AE);
+				}
+				if (ResE < Res)
+				{
+					Res = ResE;
+					Psi = PsiE;
+					HOut = HE;
+					AOut = AE;
+					if (ResE <= DrawTipSolveTolCm)
+					{
+						DrawNeedleSolveLenCm = LenE;
+					}
+				}
+				SolveTipCS = Tip0;
+			}
+			HipDeg = HOut;
+			AnkleDeg = AOut;
+			DrawSolveYawDeg = FMath::UnwindDegrees(Psi);
+			DrawTipResidualCm = Res;
+			bDrawTipReachable = Res <= DrawTipSolveTolCm;
+
+			// 眼錨定＝解析算「入座目標姿勢的眉心」（07-20 三修：舊版等首寫收斂才抓
+			// ＝抓到平滑層剛起步的半直立姿＝錨點恆在站直眉心高（~135cm）——
+			// 「點低處鏡頭吊在上面、看不到下側」的真兇。前向模型直接給收斂後的頭位，
+			// 零等待、與目標深度一致；頭骨位置不受臉向 delta 影響（樞軸=頭底））
+			if (!bDrawEyeAnchorValid && HeadBoneIdx != INDEX_NONE)
+			{
+				const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
+					FTransform(FRotator(0.0f, DrawSolveYawDeg, 0.0f), ActorLoc);
+				const FVector HeadW = CompW.TransformPosition(PointCsFor(Head0, HipDeg, AnkleDeg));
+				const FRotator AnchorRot(-Tilt, Az, 0.0f);
+				DrawEyeAnchorWorld = HeadW + AnchorRot.Vector() * 13.0f +
+					FRotationMatrix(AnchorRot).GetUnitAxis(EAxis::Z) * 8.0f;
+				bDrawEyeAnchorValid = true;
+				bDrawTargetValid = false; // P 改由錨點重取（準星=P 自錨點起構造精確）
+				bLeanPoseDirty = true;
+				// aim 重瞄：眼睛從高處退路換到深摺錨點＝視差可達數十度，沿用舊方向會
+				// 從低眼射進地板＝P 永久丟失（07-20 robo 實錘：模特低位卡 hold pose）。
+				// 重算「從錨點看向 P」＝準星停在玩家點的同一個世界點、只有眼睛換位。
+				const FRotator ReAim = (P - DrawEyeAnchorWorld).Rotation();
+				const float NewAz = ReAim.Yaw;
+				const float NewTilt = FMath::Clamp(-ReAim.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
+				if (IsLocallyControlled())
+				{
+					DrawAimAzLocal = NewAz;
+					DrawAimTiltLocal = NewTilt;
+					LastSentDrawAz = NewAz;
+					LastSentDrawTilt = NewTilt;
+					// 錨點視差重瞄＝瞬時跳變，濾波器必須跟著 snap（不然筆會慢動作
+					// 掃過整個視差角＝假演出）
+					AimEuroAz.Snap(NewAz);
+					AimEuroTilt.Snap(NewTilt);
+					DrawAimAzFilt = NewAz;
+					DrawAimTiltFilt = NewTilt;
+				}
+				else
+				{
+					RemoteDrawAzDeg = NewAz;
+					RemoteDrawTiltDeg = NewTilt;
+				}
+				if (HasAuthority())
+				{
+					DrawAimAzDeg = NewAz;
+					DrawAimTiltDeg = NewTilt;
+				}
+			}
+		}
+		else
+		{
+			// 射線 miss（看向空處/房間）：身體 yaw 跟 aim（恆等式讀感）、傾角保持現狀
+			DrawSolveYawDeg = Az;
+			bDrawTipReachable = false;
+			DrawTipResidualCm = -1.0f;
+		}
+		DrawSolveHipDeg = HipDeg;
+		DrawSolveAnkleDeg = AnkleDeg;
+	}
+	else
+	{
+		DrawSolveYawDeg = Az;
+		bDrawTipReachable = false;
+	}
+
+	// （07-20 筆即游標：固定係數追趕層退役——濾波已在 aim 輸入層做完（本人=1€、
+	// 他端=複製追趕），姿勢＝濾波 aim 的直接解、零額外滯後）
+	const float ShownHip = DrawSolveHipDeg;
+	const float ShownAnkle = DrawSolveAnkleDeg;
+
+	// 整身 yaw（不彎任何關節）：lean 中所有端都套本地解值——simulated proxy 若吃
+	// 引擎壓縮複製（~1.4° 量化）＝旁人看到的身體階梯跳（07-20 抖動病因之一）
+	SetActorRotation(FRotator(0.0f, DrawSolveYawDeg, 0.0f));
+
+	// --- 套用增量（與前向模型逐步同構；樞軸=中性姿座標）---
+	if (HipsIdx != INDEX_NONE && FMath::Abs(ShownHip) > 0.05f)
+	{
+		const FQuat QLean(FVector::XAxisVector, FMath::DegreesToRadians(ShownHip));
+		RotSubtreeAboutPivot(HipsIdx, QLean, HipPivot);
+		const FQuat QFoot(FVector::XAxisVector, FMath::DegreesToRadians(-ShownHip));
+		for (const int32 FootIdx : { LFootIdx, RFootIdx })
+		{
+			if (FootIdx != INDEX_NONE)
+			{
+				RotSubtreeAboutPivot(FootIdx, QFoot, CS[FootIdx].GetLocation());
+			}
+		}
+	}
+	if (HipsIdx != INDEX_NONE && bSolverReady && FMath::Abs(ShownAnkle) > 0.05f)
+	{
+		const FQuat QRock(FVector::XAxisVector, FMath::DegreesToRadians(ShownAnkle));
+		RotSubtreeAboutPivot(HipsIdx, QRock, AnklePivot);
+		const FQuat QFoot(FVector::XAxisVector, FMath::DegreesToRadians(-ShownAnkle));
+		for (const int32 FootIdx : { LFootIdx, RFootIdx })
+		{
+			if (FootIdx != INDEX_NONE)
+			{
+				RotSubtreeAboutPivot(FootIdx, QFoot, CS[FootIdx].GetLocation());
+			}
+		}
+	}
+
+	// --- 落地補償：腳/趾最低點貼地（元件 Z ∥ 世界 Z：BodyStandRelRot 只轉 yaw）---
+	float MinZ = TNumericLimits<float>::Max();
+	for (const int32 I : { LFootIdx, RFootIdx, LToeIdx, RToeIdx })
+	{
+		if (I != INDEX_NONE)
+		{
+			MinZ = FMath::Min(MinZ, static_cast<float>(CS[I].GetLocation().Z));
+		}
+	}
+	if (MinZ != TNumericLimits<float>::Max())
+	{
+		const FVector Dz(0.0f, 0.0f, DrawToePadCm - MinZ);
+		for (int32 i = 0; i < NumBones; ++i)
+		{
+			CS[i].SetLocation(CS[i].GetLocation() + Dz);
+		}
+	}
+
+	// --- Neck 臉向精對（全框解：+Y=臉、+Z≈頭頂＝零 roll；恆等式的骨骼側閉環）---
+	const int32 NeckIdx = IdxOf(TEXT("Neck"));
+	const int32 HeadIdx = IdxOf(TEXT("Head"));
+	if (NeckIdx != INDEX_NONE && HeadIdx != INDEX_NONE)
+	{
+		const FTransform CompT = BowBody->GetComponentTransform();
+		// 臉向：有 P＝look-at P（從真眉心看向落墨點——相機在錨點、臉在真頭，兩者於 P
+		// 匯聚＝「你看的點≡臉看的點≡旁人讀到的點」）；無 P＝平行 aim 自由看
+		FRotator AimRot(-Tilt, Az, 0.0f);
+		if (bDrawTargetValid)
+		{
+			const FVector BrowEstW = CompT.TransformPosition(CS[HeadIdx].GetLocation()) +
+				AimRot.Vector() * 13.0f + FRotationMatrix(AimRot).GetUnitAxis(EAxis::Z) * 8.0f;
+			const FVector ToP = DrawTargetWorld - BrowEstW;
+			if (ToP.SizeSquared() > 25.0f)
+			{
+				AimRot = ToP.Rotation();
+			}
+		}
+		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(AimRot.Vector());
+		const FVector CrownCS = CompT.InverseTransformVectorNoScale(
+			FRotationMatrix(AimRot).GetUnitAxis(EAxis::Z));
+		FQuat HeadRestCSQ = FQuat::Identity;
+		for (int32 I = HeadIdx; I != INDEX_NONE; I = Ref.GetParentIndex(I))
+		{
+			HeadRestCSQ = Ref.GetRefBonePose()[I].GetRotation() * HeadRestCSQ;
+		}
+		const FQuat TargetHeadQ =
+			FRotationMatrix::MakeFromYZ(DesiredCS, CrownCS).ToQuat() * HeadRestCSQ;
+		FQuat DeltaQ = TargetHeadQ * CS[HeadIdx].GetRotation().Inverse();
+		FVector Axis;
+		float Angle;
+		DeltaQ.ToAxisAndAngle(Axis, Angle);
+		if (Angle > PI)
+		{
+			Angle -= 2.0f * PI; // 短弧
+		}
+		// 45°＝生理域（07-20 三修：75° 讓頭殼把身體不肯彎的角度全吃下——陡俯時開放
+		// 切緣刺穿胸背=脖子破洞。身體增量域放寬後頭只補殘差；極陡時臉鉗在 45°、
+		// 相機仍正對落墨點，臉=「幾乎看著」）
+		Angle = FMath::Clamp(Angle, -FMath::DegreesToRadians(45.0f), FMath::DegreesToRadians(45.0f));
+		DeltaQ = FQuat(Axis, Angle);
+		// 施加在 Head 骨（樞軸=頭底），Neck 保持 Backup4 原值——脖切架構鐵則：
+		// 頭殼（Head=1.0 硬權重）自由動、身側脖樁（帶 Neck 權重的後頸肉）不准被程式
+		// 甩動、兩者由 NeckStretch 每幀橋接。07-20 viewport 實錘：轉 Neck 子樹＝
+		// 後頸隆起＋髮下裂縫（脖樁整圈被甩＋橋接身側錨環被搬離）。
+		RotSubtreeAboutPivot(HeadIdx, DeltaQ, CS[HeadIdx].GetLocation());
+	}
+
+	// --- 寫入：補償換算＋實測收斂迴圈（WriteBowPoseConverged；07-20 robo 實錘教訓）
+	// 驗證骨＝雙臂鏈尾（最深）＋Head——收斂逐層傳播，驗淺骨會留下半收斂手臂 ---
+	TArray<FName> VerifyBones;
+	VerifyBones.Add((GripBoneIdx != INDEX_NONE) ? PenGripBoneName : FName(TEXT("RightHand")));
+	VerifyBones.Add(TEXT("LeftHandProp"));
+	VerifyBones.Add(TEXT("LeftHand"));
+	VerifyBones.Add(TEXT("Head"));
+	if (!WriteBowPoseConverged(Ref, CS, VerifyBones))
+	{
+		bLeanPoseDirty = true; // 本 tick 沒收斂＝下 tick 續寫（髒檢查不得凍結半收斂姿勢）
+	}
 }
 
 bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV)
@@ -2084,57 +3472,129 @@ bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& Impac
 
 void ANiceInkCharacter::UpdatePenVisual()
 {
+	// 筆焊死在右手（2026-07-20 剛臂制）：入鎖恆顯示——旁人 100% 的時間看得到筆。
+	// 位置/朝向＝握骨現值 ∘ 一次性校準常數（校準在 ApplyBowPose；shaft=眉→手延長線）。
+	// 舊制「筆尖跟著最後墨點」退役——那讓筆只在墨水流出的瞬間存在（07-20 診斷病灶一）。
 	if (!PenMesh)
 	{
 		return;
 	}
 
 	bool bShow = false;
-	if (bLeanLocked)
+	if (bLeanLocked && bPenGripCalibrated && BowBody && BowBody->GetSkinnedAsset() && BowBody->IsVisible())
 	{
-		ANiceInkCharacter* Target = LeanTarget.Get();
-		FVector2D UV;
-		if (Target && Target->InkCanvas && Target->Body &&
-			Target->InkCanvas->GetLastPointForAuthor(GetInkAuthorId(), UV))
+		const FTransform HandT = BowBody->GetBoneTransformByName(PenGripBoneName, EBoneSpaces::WorldSpace);
+		const FQuat HandQ = HandT.GetRotation().GetNormalized();
+		const FQuat PenQ = HandQ * PenRotInHand;
+		const FVector ShaftOut = PenQ.GetAxisZ(); // 資產 +Z＝筆尖→筆尾（離皮膚向）
+		// 出針口基準＝校準常數的固定點；虛擬筆尖＝出針口沿針軸前推「本 tick 針長語義」：
+		// 標稱針長（身體解到）或伸針解針長（深度交給針）——兩者都由解算保證落在 P
+		const FVector ExitBaseW = HandT.GetLocation() + HandQ.RotateVector(
+			PenTipLocalCm * ((PenTipAheadCm - PenNeedleNominalCm) / PenTipAheadCm));
+		const float TipAhead = (bDrawTipReachable && DrawNeedleSolveLenCm > 0.0f)
+			? DrawNeedleSolveLenCm : PenNeedleNominalCm;
+		const FVector TipW = ExitBaseW - ShaftOut * TipAhead;
+		constexpr float PenHalfLen = 7.5f;
+		if (bPenIsMachineAsset)
 		{
-			FVector InkPos, SkinNormal;
-			if (Target->Body->ResolveUVToWorldWithNormal(UV, InkPos, SkinNormal))
+			// 機械體 pivot=握管頂接點（焊死在手的固定端；伸長時機械不動、握管+針動）
+			PenMesh->SetWorldLocationAndRotation(
+				ExitBaseW + ShaftOut * PenGripBaseLenCm, PenQ.Rotator());
+		}
+		else
+		{
+			// 真麥克筆資產：pivot=筆尖；圓柱退路：pivot=中心 → 沿筆身前推半長
+			PenMesh->SetWorldLocationAndRotation(
+				bPenIsMarkerAsset ? TipW : TipW + ShaftOut * PenHalfLen, PenQ.Rotator());
+		}
+		PenTipWorld = TipW;
+		PenShaftDirWorld = ShaftOut;
+		bShow = true;
+
+		// --- 伸縮件（07-21「按下左鍵才伸長」＋07-22 分帳制 user 定案「伸長量一半給針、
+		// 一半給握管」）：觸發＝沿針軸實測出針深度 D（瞬時、無動畫=「啪」的機械讀感）、
+		// 伸長 e=max(0, D-標稱) → 握管拉長 e/2（出針口前移 e/2）、針長=D-e/2；
+		// 放開＝握管回基準長、針收樁。各端同構解算＝同長度，無需複製；墨的真相＝針尖。---
+		PenNeedleLenCm = 0.0f;
+		PenGripLenCm = 0.0f;
+		if (NeedleMesh && bPenIsMachineAsset)
+		{
+			float NeedleLen = PenNeedleStubCm;
+			float GripLen = PenGripBaseLenCm;
+			FVector ExitVisW = ExitBaseW;
+			const bool bTrig = IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld;
+			ANiceInkCharacter* Target = LeanTarget.Get();
+			if (bTrig && Target && Target->Body && GetWorld())
 			{
-				// 筆尖釘在墨點上（畫布真相＝零 offset）。筆身＝離表面法線斜 40°、
-				// 倒向自己頭的方位——真持筆的斜度（舊制「筆桿指向頭」＝插在皮膚上的
-				// 釘子，第三人稱讀不出「握著筆」；2026-07-17 改制）。
-				FVector HeadPos = GetActorLocation() + FVector(0, 0, 40.0f);
-				if (BowBody && BowBody->GetSkinnedAsset() && BowBody->IsVisible())
+				FCollisionQueryParams NeedleQP(SCENE_QUERY_STAT(NiceInkNeedleTrace), /*bInTraceComplex=*/true);
+				for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
 				{
-					HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-				}
-				const FVector N = SkinNormal.GetSafeNormal();
-				const FVector ToHead = (HeadPos - InkPos).GetSafeNormal();
-				FVector Tan = ToHead - FVector::DotProduct(ToHead, N) * N;
-				if (!Tan.Normalize())
-				{
-					Tan = FVector::CrossProduct(N, FVector::UpVector);
-					if (!Tan.Normalize())
+					if (*It != Target)
 					{
-						Tan = FVector::CrossProduct(N, FVector::RightVector).GetSafeNormal();
+						NeedleQP.AddIgnoredActor(*It); // 同 aim trace：只認 LeanTarget
 					}
 				}
-				constexpr float PenTiltRad = 0.698f; // 40°
-				const FVector ShaftDir = (N * FMath::Cos(PenTiltRad) + Tan * FMath::Sin(PenTiltRad)).GetSafeNormal();
-				constexpr float PenHalfLen = 7.5f; // 15cm 筆，圓柱 pivot 在中心
-				PenMesh->SetWorldLocationAndRotation(InkPos + ShaftDir * PenHalfLen,
-					FRotationMatrix::MakeFromZ(ShaftDir).Rotator());
-				PenTipWorld = InkPos;
-				PenShaftDirWorld = ShaftDir;
-				bShow = true;
+				FHitResult Hit;
+				if (GetWorld()->LineTraceSingleByChannel(Hit, ExitBaseW + ShaftOut * 1.0f,
+						ExitBaseW - ShaftOut * 300.0f, ECC_Visibility, NeedleQP) &&
+					Hit.GetActor() == Target)
+				{
+					const float D = static_cast<float>(FVector::Dist(ExitBaseW, Hit.ImpactPoint));
+					const float Ext = FMath::Max(D - PenNeedleNominalCm, 0.0f);
+					GripLen = PenGripBaseLenCm + Ext * 0.5f;
+					ExitVisW = ExitBaseW - ShaftOut * (Ext * 0.5f);
+					NeedleLen = FMath::Max(D - Ext * 0.5f, 0.5f);
+					PenTipWorld = Hit.ImpactPoint; // 墨與針同一真相（落墨鏈/HUD 錨都吃這裡）
+				}
 			}
+			if (GripMesh)
+			{
+				// 握管：頂錨在機械體接點、沿 -Z 伸縮（scale.Z=長度 cm）
+				GripMesh->SetWorldLocationAndRotation(
+					ExitBaseW + ShaftOut * PenGripBaseLenCm, PenQ.Rotator());
+				GripMesh->SetWorldScale3D(FVector(1.0f, 1.0f, GripLen));
+			}
+			if (bNeedleIsAsset)
+			{
+				// 針資產：基座在（前移後的）出針口沿 -Z、單位長 1cm ⇒ scale.Z=針長 cm
+				NeedleMesh->SetWorldLocationAndRotation(ExitVisW, PenQ.Rotator());
+				NeedleMesh->SetWorldScale3D(FVector(1.0f, 1.0f, NeedleLen));
+			}
+			else
+			{
+				// 圓柱退路：100cm 高、pivot=中心
+				NeedleMesh->SetWorldLocationAndRotation(
+					ExitVisW - ShaftOut * (NeedleLen * 0.5f), PenQ.Rotator());
+				NeedleMesh->SetWorldScale3D(FVector(0.006f, 0.006f, NeedleLen / 100.0f));
+			}
+			PenNeedleLenCm = NeedleLen;
+			PenGripLenCm = GripLen;
 		}
+
 	}
 
 	bPenStateValid = bShow;
+	// FP 2D 筆制（07-22）：本人入鎖時 TP 三件 OwnerNoSee——本人畫面上的筆由
+	// NiceInkHUD 畫 2D 貼圖＋針線（viewmodel 體感）；旁人看 3D 原樣
+	const bool bOwnerHudPen = bPenIsMachineAsset && IsLocallyControlled();
+	for (UStaticMeshComponent* Part : { PenMesh.Get(), GripMesh.Get(), NeedleMesh.Get() })
+	{
+		if (Part)
+		{
+			Part->SetOwnerNoSee(bOwnerHudPen);
+		}
+	}
 	if (PenMesh->IsVisible() != bShow)
 	{
 		PenMesh->SetVisibility(bShow);
+	}
+	const bool bPartsVis = bShow && bPenIsMachineAsset;
+	for (UStaticMeshComponent* Part : { GripMesh.Get(), NeedleMesh.Get() })
+	{
+		if (Part && Part->IsVisible() != bPartsVis)
+		{
+			Part->SetVisibility(bPartsVis);
+		}
 	}
 }
 
@@ -2470,27 +3930,11 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 		return;
 	}
 
-	// 鏡頭長在臉上：姿勢是唯一真相——彎多深＝看得多低、臉對哪＝看向哪。
-	// 偷瞄＝頭真的轉過去，第一人稱畫面自然跟著甩向受害者的臉。
-	//
-	// 承載體＝本體 FirstPersonCamera（2026-07-17 改制）：舊制走 CinematicCamera view
-	// target，OwnerNoSee 對外部相機失效（ViewActor≠owner）→ 自己的彎腰身體/頭殼/手臂
-	// 全被渲染在離鏡頭十幾 cm 處＝第一人稱穿膜主因。本體相機讓 OwnerNoSee 恢復生效，
-	// 鎖定畫面只剩畫布與筆。進鎖＝硬切（美術語言 #24；0.18s 混成會穿身飛行）。
-	FVector EyePos;
-	FVector AimTarget = bPeeking ? GetLeanFaceTargetWorld() : FVector(LeanPoint);
-	if (BowBody && BowBody->GetSkinnedAsset())
-	{
-		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector Dir = (AimTarget - HeadPos).GetSafeNormal();
-		EyePos = HeadPos + Dir * 12.0f; // 眼窩在頭骨往視線方向前移
-	}
-	else
-	{
-		// 無骨骼資產的退路：貼皮膚定位（舊法）
-		EyePos = FVector(LeanPoint) + FVector(LeanNormal).GetSafeNormal() * (LeanCameraHeight - 14.0f);
-	}
-
+	// 平面畫布制（2026-07-18）：作畫視圖＝畫布相機（地下畫室、定格、FOV 72）——
+	// 你的螢幕就是那張攤平的紙；偷瞄＝眉心相機（甦醒者同構：頭骨＋臉向 13cm＋
+	// 頭頂向 8cm、朝向＝臉朝向、FOV 同 72）——從紙上抬眼、畫面甩向受害者的臉。
+	// 承載體＝本體 FirstPersonCamera（OwnerNoSee 生效；外部相機會讓自己的頭殼穿膜）。
+	// 進鎖/切換一律硬切（美術語言 #24）。
 	if (!bLeanCamActive)
 	{
 		bLeanCamActive = true;
@@ -2504,12 +3948,34 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 			LastViewWorkId = INDEX_NONE;
 		}
 	}
-	FirstPersonCamera->SetWorldLocationAndRotation(EyePos, (AimTarget - EyePos).Rotation());
+
+	// 直接畫制（07-20 眼錨定）：相機＝入畫定格的眉心世界定點＋aim 朝向——與 trace
+	// 共用同一定點。臉（Neck）look-at P、筆尖追 P（濾波鏈），三者於 P 匯聚。
+	// 相機用「生」aim（本人視角零延遲）；姿勢/筆/墨用濾波 aim（筆即游標：
+	// 筆尖＝視線中心的低通追隨——靜止恆等、動態自然尾隨）。
+	const FRotator AimRot(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f);
+	FVector EyePos;
+	if (bDrawEyeAnchorValid)
+	{
+		EyePos = DrawEyeAnchorWorld;
+	}
+	else if (BowBody && BowBody->GetSkinnedAsset())
+	{
+		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector FaceDir = AimRot.Vector();
+		const FVector Crown = FRotationMatrix(AimRot).GetUnitAxis(EAxis::Z); // 零 roll 頭頂
+		EyePos = HeadPos + FaceDir * 13.0f + Crown * 8.0f; // 眉心（錨定前的入畫首幀）
+	}
+	else
+	{
+		EyePos = GetActorLocation() + FVector(0.0f, 0.0f, 40.0f); // 無骨骼退路
+	}
+	FirstPersonCamera->SetWorldLocationAndRotation(EyePos, AimRot);
 }
 
 // --- 畫墨 RPC ---
 
-void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV)
+void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle)
 {
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
 	if (!GM || !Target || !GM->CanPaintOn(this, Target))
@@ -2519,19 +3985,51 @@ void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Targe
 	}
 
 	ServerPaintTarget = Target;
-	Target->MulticastPaintBegin(GetInkAuthorId(), FNiceInkPalette::Get(ColorIndex), UV);
+	// 出墨驗速（07-22；07-23 桶補充率分針）：點數令牌桶開帳——覆蓋率被時間定價，
+	// 改裝客戶端不得偷速（shader 大針慢節拍、不得用 liner 針速灌大點）
+	ServerPaintNeedle = Needle;
+	ServerPaintDotBudget = 2.0f;
+	ServerPaintLastRefill = GetWorld()->GetTimeSeconds();
+	// 玩家作畫一律點刺筆劃（工具=刺青機；robo 線畫走 GameMode DebugRoboStroke=false）
+	Target->MulticastPaintBegin(GetInkAuthorId(), FNiceInkPalette::Get(ColorIndex), UV,
+		/*bDotStroke=*/true, Needle);
 }
 
 void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>& UVs)
 {
 	ANiceInkCharacter* Target = ServerPaintTarget.Get();
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
-	if (!Target || !GM || !GM->CanPaintOn(this, Target) || UVs.Num() == 0 || UVs.Num() > 64)
+	// 單批上限 256（九版；舊 64 在 shader 3000 排/s 低幀下一批就破=整批靜默拒收）
+	if (!Target || !GM || !GM->CanPaintOn(this, Target) || UVs.Num() == 0 || UVs.Num() > 256)
 	{
 		return;
 	}
 
-	Target->MulticastPaintPoints(GetInkAuthorId(), UVs);
+	// 點數令牌桶（07-22；07-23 分針）：針數/秒 ≤ 該針型 Hz×1.5＋小桶突發（與客端
+	// 出針預算天花板同率——距離節拍的抖動路徑膨脹合法多出幾針）。按「數量」限流
+	//（每針=該針型固定面積=墨的真幣）；UV 距離驗速會被跨縫合法大跳誤傷，不用。
+	const float NowS = GetWorld()->GetTimeSeconds();
+	const float RefillHz = (ServerPaintNeedle == EInkNeedle::Shader ? ShaderDotHz : TattooDotHz);
+	// 桶容量隨針型（九版）：硬編 10 在 shader 合法 3000 排/s 下=server 端第二層
+	// 飢餓點（每批 30~100 針、桶只裝 10=靜默丟針+各端墨不同步）
+	ServerPaintDotBudget = FMath::Min(
+		ServerPaintDotBudget + (NowS - ServerPaintLastRefill) * RefillHz * 1.5f,
+		FMath::Max(10.0f, RefillHz * 0.35f));
+	ServerPaintLastRefill = NowS;
+	const int32 Allowed = FMath::FloorToInt(ServerPaintDotBudget);
+	if (Allowed <= 0)
+	{
+		return;
+	}
+	if (UVs.Num() <= Allowed)
+	{
+		ServerPaintDotBudget -= UVs.Num();
+		Target->MulticastPaintPoints(GetInkAuthorId(), UVs);
+		return;
+	}
+	TArray<FVector2D> Accepted(UVs.GetData(), Allowed); // 超額針裁掉（順序保留）
+	ServerPaintDotBudget -= Accepted.Num();
+	Target->MulticastPaintPoints(GetInkAuthorId(), Accepted);
 }
 
 void ANiceInkCharacter::ServerPaintEnd_Implementation()
@@ -2545,11 +4043,11 @@ void ANiceInkCharacter::ServerPaintEnd_Implementation()
 
 // --- 畫墨重播 ---
 
-void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV)
+void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle)
 {
 	if (InkCanvas)
 	{
-		InkCanvas->BeginStroke(AuthorId, Color, UV);
+		InkCanvas->BeginStroke(AuthorId, Color, UV, bDotStroke, Needle);
 	}
 }
 
@@ -2557,10 +4055,14 @@ void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, cons
 {
 	if (InkCanvas)
 	{
+		// 批次蓋章：整批只開關一次 RT context（細針點排每點 20 tile、逐點開關
+		// 4096 霧層 context 會拖垮幀率——robo superfast 實錘）
+		InkCanvas->BeginStampBatchFor(AuthorId);
 		for (const FVector2D& UV : UVs)
 		{
 			InkCanvas->AddStrokePoint(AuthorId, UV);
 		}
+		InkCanvas->EndStampBatch();
 	}
 }
 
@@ -2681,166 +4183,6 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 		BodyStandRelLoc + FVector(0.0f, 0.0f, BobZ),
 		(WaddleQ * FQuat(BodyStandRelRot)).Rotator());
 	bWalkAnimApplied = true;
-}
-
-namespace
-{
-	// 兩骨解析 IK（餘弦定理）：重置→解，冪等；姿勢寫→讀之間必須 RefreshBoneTransforms
-	//（poseable 快取陷阱）。回傳解算後的手骨世界位置。
-	bool SolveArmTwoBoneCS(UPoseableMeshComponent* Mesh, const FName& ArmBone, const FName& ForeBone,
-		const FName& HandBone, const FVector& Target, const FVector& PoleHint, FVector& OutHandPos)
-	{
-		if (Mesh->GetBoneIndex(ArmBone) == INDEX_NONE ||
-			Mesh->GetBoneIndex(ForeBone) == INDEX_NONE ||
-			Mesh->GetBoneIndex(HandBone) == INDEX_NONE)
-		{
-			return false; // 骨架缺鏈＝安靜跳過（姿勢不演，機制照跑）
-		}
-
-		Mesh->ResetBoneTransformByName(ArmBone);
-		Mesh->ResetBoneTransformByName(ForeBone);
-		Mesh->ResetBoneTransformByName(HandBone);
-		Mesh->RefreshBoneTransforms();
-
-		const FTransform ArmT = Mesh->GetBoneTransformByName(ArmBone, EBoneSpaces::WorldSpace);
-		const FTransform ForeT = Mesh->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
-		const FTransform HandT = Mesh->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
-		const FVector S = ArmT.GetLocation();
-		const FVector E = ForeT.GetLocation();
-		const FVector H = HandT.GetLocation();
-
-		const float UpperLen = FVector::Dist(S, E);
-		const float LowerLen = FVector::Dist(E, H);
-		FVector ToTarget = Target - S;
-		const float Dist = FMath::Clamp(static_cast<float>(ToTarget.Size()),
-			FMath::Abs(UpperLen - LowerLen) + 1.0f, (UpperLen + LowerLen) * 0.999f);
-		const FVector N = ToTarget.GetSafeNormal();
-		if (N.IsNearlyZero() || UpperLen < 1.0f || LowerLen < 1.0f)
-		{
-			return false;
-		}
-
-		FVector Pole = PoleHint - FVector::DotProduct(PoleHint, N) * N;
-		if (!Pole.Normalize())
-		{
-			Pole = FVector::CrossProduct(N, FVector::UpVector).GetSafeNormal();
-		}
-
-		const float CosShoulder = FMath::Clamp(
-			(UpperLen * UpperLen + Dist * Dist - LowerLen * LowerLen) / (2.0f * UpperLen * Dist), -1.0f, 1.0f);
-		const float SinShoulder = FMath::Sqrt(FMath::Max(0.0f, 1.0f - CosShoulder * CosShoulder));
-		const FVector NewElbow = S + N * (UpperLen * CosShoulder) + Pole * (UpperLen * SinShoulder);
-		const FVector NewHand = S + N * Dist;
-
-		// 上臂：把 S→E 轉到 S→NewElbow（世界空間旋轉、位置不動）
-		const FQuat Q1 = FQuat::FindBetweenNormals((E - S).GetSafeNormal(), (NewElbow - S).GetSafeNormal());
-		FTransform NewArmT = ArmT;
-		NewArmT.SetRotation(Q1 * ArmT.GetRotation());
-		Mesh->SetBoneTransformByName(ArmBone, NewArmT, EBoneSpaces::WorldSpace);
-		Mesh->RefreshBoneTransforms();
-
-		// 前臂：轉完上臂後重讀（子骨已被帶走），再把 E'→H' 轉向 E'→NewHand
-		const FTransform ForeT2 = Mesh->GetBoneTransformByName(ForeBone, EBoneSpaces::WorldSpace);
-		const FTransform HandT2 = Mesh->GetBoneTransformByName(HandBone, EBoneSpaces::WorldSpace);
-		const FVector E2 = ForeT2.GetLocation();
-		const FQuat Q2 = FQuat::FindBetweenNormals(
-			(HandT2.GetLocation() - E2).GetSafeNormal(), (NewHand - E2).GetSafeNormal());
-		FTransform NewForeT = ForeT2;
-		NewForeT.SetRotation(Q2 * ForeT2.GetRotation());
-		Mesh->SetBoneTransformByName(ForeBone, NewForeT, EBoneSpaces::WorldSpace);
-		Mesh->RefreshBoneTransforms();
-
-		OutHandPos = NewHand;
-		return true;
-	}
-}
-
-void ANiceInkCharacter::UpdateLeanArm()
-{
-	static const FName RArm(TEXT("RightArm"));
-	static const FName RFore(TEXT("RightForeArm"));
-	static const FName RHand(TEXT("RightHand"));
-	static const FName LArm(TEXT("LeftArm"));
-	static const FName LFore(TEXT("LeftForeArm"));
-	static const FName LHand(TEXT("LeftHand"));
-
-	const bool bActive = bPenArmIkEnabled && bLeanLocked && BowBody && BowBody->IsVisible();
-	if (!bActive)
-	{
-		if (bLeanArmApplied && BowBody && BowBody->GetSkinnedAsset())
-		{
-			for (const FName& Bone : { RArm, RFore, RHand, LArm, LFore, LHand })
-			{
-				BowBody->ResetBoneTransformByName(Bone);
-			}
-			BowBody->RefreshBoneTransforms();
-			bLeanArmApplied = false;
-		}
-		return;
-	}
-
-	const FTransform CompT = BowBody->GetComponentTransform();
-
-	// --- 右臂：握筆。目標＝筆桿上段握點（筆已斜 40°）；未落筆退回鎖定點 ---
-	const FVector GripTarget = bPenStateValid
-		? PenTipWorld + PenShaftDirWorld * 11.0f
-		: FVector(LeanPoint);
-	const FVector RPole = CompT.TransformVectorNoScale(FVector(-1, 0, 0)) - FVector(0, 0, 0.6f); // 肘朝右外偏下
-	FVector RHandPos;
-	if (SolveArmTwoBoneCS(BowBody, RArm, RFore, RHand, GripTarget, RPole, RHandPos))
-	{
-		bLeanArmApplied = true;
-
-		// 手腕朝向：手指沿筆桿向筆尖、掌側壓向皮膚（舊制手腕從不解算＝A-pose 掌向
-		// 抓著空氣——「手沒作勢畫畫」三病之二；2026-07-17 補齊）。
-		// 手指/拇指方向從「當幀骨骼位置」現量（位置與骨軸慣例無關——絕對旋轉跨界
-		// 搬運的煎餅教訓同 ApplyDrawBasePose）；施加的是世界空間 delta。
-		if (bPenStateValid &&
-			BowBody->GetBoneIndex(TEXT("RightHandIndex1")) != INDEX_NONE &&
-			BowBody->GetBoneIndex(TEXT("RightHandThumb1")) != INDEX_NONE)
-		{
-			const FVector FingerW = (-PenShaftDirWorld).GetSafeNormal(); // 握點→筆尖
-			FVector PalmW = -FVector(LeanNormal).GetSafeNormal();        // 掌心壓向皮膚
-			PalmW = PalmW - FVector::DotProduct(PalmW, FingerW) * FingerW;
-			const FVector HandP = BowBody->GetBoneTransformByName(RHand, EBoneSpaces::WorldSpace).GetLocation();
-			const FVector FingerCur = (BowBody->GetBoneTransformByName(TEXT("RightHandIndex1"), EBoneSpaces::WorldSpace).GetLocation() - HandP).GetSafeNormal();
-			const FVector ThumbCur = (BowBody->GetBoneTransformByName(TEXT("RightHandThumb1"), EBoneSpaces::WorldSpace).GetLocation() - HandP).GetSafeNormal();
-			if (PalmW.Normalize() && !FingerCur.IsNearlyZero() && !ThumbCur.IsNearlyZero())
-			{
-				// 先 swing：現況手指方向→筆桿方向；再繞筆桿 twist 對齊掌向
-				//（掌心方向＝Cross(手指, 拇指)，右手解剖恆定式）
-				const FQuat Q1 = FQuat::FindBetweenNormals(FingerCur, FingerW);
-				FVector PalmCur = FVector::CrossProduct(FingerW, Q1.RotateVector(ThumbCur));
-				PalmCur = PalmCur - FVector::DotProduct(PalmCur, FingerW) * FingerW;
-				if (PalmCur.Normalize())
-				{
-					const float Twist = FMath::Atan2(
-						FVector::DotProduct(FVector::CrossProduct(PalmCur, PalmW), FingerW),
-						FVector::DotProduct(PalmCur, PalmW));
-					const FQuat DeltaQ = FQuat(FingerW, Twist) * Q1;
-					FTransform HandT = BowBody->GetBoneTransformByName(RHand, EBoneSpaces::WorldSpace);
-					HandT.SetRotation(DeltaQ * HandT.GetRotation());
-					BowBody->SetBoneTransformByName(RHand, HandT, EBoneSpaces::WorldSpace);
-					BowBody->RefreshBoneTransforms();
-				}
-			}
-		}
-	}
-
-	// --- 左臂：撐在自己左膝上（長跪的支撐手——大腿豎直後「大腿面」不存在，膝頭是
-	// 自然的撐點；吊著的 A-pose 左臂＝「沒在畫畫」讀感）---
-	if (BowBody->GetBoneIndex(TEXT("LeftLeg")) != INDEX_NONE)
-	{
-		const FVector Knee = BowBody->GetBoneTransformByName(TEXT("LeftLeg"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector KneeRest = Knee + FVector(0, 0, 8.0f) +
-			CompT.TransformVectorNoScale(FVector(0, 1, 0)) * 4.0f; // 膝頭上緣偏前
-		const FVector LPole = CompT.TransformVectorNoScale(FVector(1, 0, 0)) - FVector(0, 0, 0.6f); // 肘朝左外偏下
-		FVector LHandPos;
-		if (SolveArmTwoBoneCS(BowBody, LArm, LFore, LHand, KneeRest, LPole, LHandPos))
-		{
-			bLeanArmApplied = true;
-		}
-	}
 }
 
 float ANiceInkCharacter::EffectiveLookSensitivity() const

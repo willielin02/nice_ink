@@ -107,9 +107,15 @@
 
 ## 技術地圖
 
-- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/長跪作畫姿（解析式，v3.8）/
-  鎖定本體相機/筆/程式化走路/握筆雙臂 IK/ESC 系統選單）、`InkCanvasComponent`（筆劃=真相、RT=快取、作者 ID/碳黑/
-  雷射/洗掉）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache、換睡姿網格、眼睛開閉）、
+- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/**直接畫制**（2026-07-20 起：
+  眼錨定 FP 相機 FOV36、螢幕中心=針尖、剛臂 3-DOF 解筆尖觸膚、2D viewmodel 筆、ghost 穿透）/
+  **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**雙針制**（滾輪切換：
+  Liner=方向拉桿巡航＋守恆式 v_max=k·d·f＋行進蟻導引＋浮雕跨越；Shader=自由揮掃＋
+  移動閘（EMA 短窗）＋距離節拍細針點排）/程式化走路/ESC 系統選單）、
+  `InkCanvasComponent`（筆劃=真相、**三層 RT 快取**：線層 4096+Valve 銳化／霧層 4096
+  軟半透明（銳化不咬）／刺青層；作者 ID/碳黑/雷射/洗掉；批次蓋章＋預烘 stipple 條帶＋
+  縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
+  FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/導航/旋轉）。
 - **前端與配對（2026-07-17 上架衝刺）**：`NiceInkMenuGameMode/PlayerController/HUD`
@@ -124,9 +130,10 @@
   皮膚質感＝M_InkBodyChar 材質內假光（SPEC 定案 #37：全啞光＋頭燈假光＋掃描色度血色場；
   旋鈕全是 Scalar Parameter：Headlight*/SkinBrightness/SkinDesat/ChromaStrength/SkinSpecular；
   血色場再生=Tools/AssetPrep/sumo_body_chroma_*；**皮膚零烘焙陰影鐵律不破，勿再提案皮膚陰影/AO**）。
-- 墨水圖集 UV0＝**均勻紋素密度**0.898 px/mm@2048（`Tools/AssetPrep/uv0_uniform.py`，
-  四個匯出腳本都會呼叫）；筆寬 `MarkerUvRadius 0.00085`＝3.8mm 全身一致；跨縫縫合＝螢幕空間
-  4px 細分。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
+- 墨水圖集 UV0＝**均勻紋素密度**（sumo 實測 0.617 px/mm；RT 解析度 4096＝筆寬 4.7px
+  ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000584`＝3.8mm 全身一致；線的跨縫
+  ＝點刺制逐點解算天然安全；**排針（面積章）的跨縫＝InkBody 縫資料層＋表面攤平補丁
+  逐點落墨（縫 2.5cm 內自動切換）**。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
 - 臉部管線：`Tools/FacePipeline`（自拍→臉貼圖 v7、閉眼變體、眼球禁畫遮罩烘焙）；
   臉照片走 FaceUV（通道1），墨水走 UV0（通道0），互不影響。
   python 環境：`C:\games\Unreal Engine\nice_ink_face_pipeline\venv\Scripts\python.exe`。
@@ -137,8 +144,13 @@
   開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、鎖定畫布空間感
   ——眼位 20–25cm＋游標 A5 鉗位提案（待定 #16）、EOS 憑證＋語音接入
   （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
-  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、握筆雙臂 IK（bPenArmIkEnabled）、
-  長跪作畫姿＋偷瞄追真頭（v3.8）、音效組（MasterVolume）。
+  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
+  **刺青作畫全制（2026-07-20~24，帳本=Docs/DIRECT_DRAW_PLAN.md 逐版全史：直接畫制
+  →刺青機伸縮針→液線巡航手感→雙針制→打霧十一版（細針點排＝小半透明點 30%→5%
+  弧形衰減、5 趟近實心勞動量校準、冷墨底色、跨縫表面補丁）；長跪作畫姿/雙臂 IK/
+  平面畫布全退役；robo_directdraw_test.py=59 檢查常駐套件（含真人手速探針），
+  迴歸組=orbit/feign/maze）**。SPEC 敘事對齊（麥克筆→刺青機、定案 #19 針寬）
+  由 user 統一處理（明示），SPEC 未動。
 
 ## 收尾紀律
 

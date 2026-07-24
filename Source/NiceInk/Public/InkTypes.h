@@ -39,8 +39,18 @@ namespace InkEvidence
 	}
 }
 
+// 針型（2026-07-23 雙針制，user 定案「先只加 Shader」）：真實刺青師的最小工作組——
+// Liner 液線針（3.9mm 實線，勾輪廓）＋ Shader 打霧針（~9mm 寬、點距>直徑=stipple
+// 打霧，填色漸層）。渲染半徑/點距/節拍逐針查表；SPEC 對齊由 user 統一處理（記帳）。
+UENUM(BlueprintType)
+enum class EInkNeedle : uint8
+{
+	Liner,
+	Shader
+};
+
 // 一次落筆到抬筆的連續筆劃。Points 為身體 UV 空間折線。
-// 固定筆寬是全域常數（SPEC：麥克筆同一種筆觸、粗度），不存在筆劃裡。
+// 筆寬由 NeedleType 查表（雙針制前=全域常數；舊存檔預設 Liner=原行為）。
 USTRUCT(BlueprintType)
 struct FInkStroke
 {
@@ -54,6 +64,17 @@ struct FInkStroke
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
 	float StartTimestamp = 0.0f;
+
+	// 點刺筆劃（2026-07-22 刺青手感改制）：Points＝出墨節拍（TattooDotHz）落下的獨立
+	// 針點，渲染逐點蓋章、永不內插連線——「實線」由作畫端的巡航速率上限保證
+	//（v_max = k×筆寬×頻率；跨縫/跨肢的點間大跳＝誠實的兩顆點，不再有內插垃圾線）。
+	// 舊存檔預設 false＝折線筆劃照舊段落渲染（不遷移）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
+	bool bDotStroke = false;
+
+	// 針型（雙針制 07-23）：渲染半徑查表；舊存檔預設 Liner＝原行為
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
+	EInkNeedle NeedleType = EInkNeedle::Liner;
 };
 
 // 傑作：一位作者在一個回合畫下的全部筆劃。

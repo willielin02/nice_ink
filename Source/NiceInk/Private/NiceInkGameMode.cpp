@@ -830,7 +830,9 @@ void ANiceInkGameMode::DebugRoboStroke(FVector2D FromUV, FVector2D ToUV, int32 C
 		}
 		const FLinearColor Color = FNiceInkPalette::Get(ColorIndex);
 		const int32 AuthorId = Artist->GetInkAuthorId();
-		Victim->MulticastPaintBegin(AuthorId, Color, FromUV);
+		// robo 線畫維持折線語義（bDotStroke=false）＋液線針
+		Victim->MulticastPaintBegin(AuthorId, Color, FromUV, /*bDotStroke=*/false,
+			EInkNeedle::Liner);
 		TArray<FVector2D> Points;
 		for (int32 Step = 1; Step <= 10; ++Step)
 		{
