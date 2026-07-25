@@ -75,6 +75,7 @@ void ANiceInkHUD::EnsureUiAssets()
 	IconSleep  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Sleep.T_UI_Sleep"));
 	IconNose   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Nose.T_UI_Nose"));
 	PenSprite  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
+	MarkerSprite = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_MarkerPen.T_UI_MarkerPen"));
 }
 
 float ANiceInkHUD::TierSize(ETextTier Tier) const
@@ -954,15 +955,60 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			// 的像素跳動；「兩支筆」禁令針對的矛盾源（實體筆＋UI 準星並存）在 2D 筆制
 			// 下已不存在。墨照舊從世界針尖出（偏差=解算容差 ≤1.5cm、感知可忽略）。
 			// 可落墨才顯示（搆不到=無點的訊號語義保留）。
+			// 07-24 皮繩制二修：畫面屬於針（作畫中相機=針 aim）⇒ 螢幕中心構造上
+			// 恆=針尖=墨的出生點——2D 筆/落點/針線錨死中心即與墨重合，viewmodel
+			// 恆定（07-22 定案）不破。（一修曾把筆錨到針的投影＝筆離開中心，被
+			// user 打回「筆要維持在螢幕中間」——正解是畫面歸針，不是筆追針。）
 			const FVector2D Aim(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
 			const bool bReach = MyChar->IsDrawTipReachable();
-			// 雙針制（07-23 四版）：液線針=小方點；霧針=筆刷範圍圈（3.5cm 大軟刷的
-			// 皮膚投影——自由揮掃要知道霧會落在哪一圈）
+			// 三工具制（07-25 打稿制）：打稿筆=龍膽紫小方點（3D 麥克筆本人可見、無 2D
+			// viewmodel）；液線針=選色小方點；霧針=筆刷範圍圈（自由揮掃要知道落在哪圈）
 			const bool bShaderNeedle = MyChar->SelectedNeedle == EInkNeedle::Shader;
+			const bool bStencilPen = MyChar->SelectedNeedle == EInkNeedle::Stencil;
 			if (bReach && !bShaderNeedle)
 			{
 				const float B = UiScale;
-				DrawRect(CrosshairColor, Aim.X - 2.5f * B, Aim.Y - 2.5f * B, 5.0f * B, 5.0f * B);
+				const FLinearColor DotCol = bStencilPen ? NiceInkStencil::Color() : CrosshairColor;
+				DrawRect(DotCol, Aim.X - 2.5f * B, Aim.Y - 2.5f * B, 5.0f * B, 5.0f * B);
+			}
+			if (bStencilPen)
+			{
+				// 2D 麥克筆 viewmodel（07-25 二修 user 定案「與機器同構：旁人 3D＋本人
+				// 2D」；貼圖版=SM_Marker 染紫 Blender 渲染 T_UI_MarkerPen）：
+				// 貼圖以筆尖為樞軸右傾 30°（同機器握姿）、按住 LMB＝筆壓近落點（壓筆感）。
+				const bool bInkingPen = MyChar->IsPenTriggerHeldLocal() && bReach;
+				constexpr float PenTiltDeg = 30.0f;
+				const float TiltRad = FMath::DegreesToRadians(PenTiltDeg);
+				const FVector2D AxisUp(FMath::Sin(TiltRad), -FMath::Cos(TiltRad));
+				const float GapPx = (bInkingPen ? 2.0f : 14.0f) * UiScale;
+				const FVector2D TipPt = Aim + AxisUp * GapPx;
+				if (MarkerSprite)
+				{
+					// 筆尖在貼圖內的正規化座標（render_marker_ui.py 印出）
+					constexpr float TipU = 0.5000f, TipV = 0.9310f;
+					const float SpriteW = Canvas->ClipY * 0.46f; // 方形貼圖邊長（筆長≈0.4×ClipY）
+					DrawTexture(MarkerSprite, TipPt.X - TipU * SpriteW, TipPt.Y - TipV * SpriteW,
+						SpriteW, SpriteW, 0.0f, 0.0f, 1.0f, 1.0f, FLinearColor::White,
+						EBlendMode::BLEND_Translucent, 1.0f, false,
+						PenTiltDeg, FVector2D(TipU, TipV));
+					DrawTok(TEXT("STENCIL"), TipPt.X + 22.0f * UiScale, TipPt.Y - 8.0f * UiScale,
+						ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+				}
+				else
+				{
+					// 貼圖缺席退路：向量筆（深筆頭＋紫筆桿＋淺尾帽）
+					const FVector2D NibEnd = TipPt + AxisUp * 26.0f * UiScale;
+					const FVector2D BodyEnd = TipPt + AxisUp * (Canvas->ClipY * 0.34f);
+					const FVector2D CapEnd = BodyEnd + AxisUp * 16.0f * UiScale;
+					const FLinearColor BodyCol = NiceInkStencil::Color() * FLinearColor(0.6f, 0.6f, 0.6f, 1.0f);
+					DrawLine(NibEnd.X, NibEnd.Y, BodyEnd.X, BodyEnd.Y, BodyCol, 40.0f * UiScale);
+					DrawLine(BodyEnd.X, BodyEnd.Y, CapEnd.X, CapEnd.Y,
+						FLinearColor(0.82f, 0.80f, 0.86f, 1.0f), 40.0f * UiScale);
+					DrawLine(TipPt.X, TipPt.Y, NibEnd.X, NibEnd.Y,
+						FLinearColor(0.10f, 0.04f, 0.16f, 1.0f), 18.0f * UiScale);
+					DrawTok(TEXT("STENCIL"), NibEnd.X + 18.0f * UiScale, NibEnd.Y - 8.0f * UiScale,
+						ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+				}
 			}
 			if (bShaderNeedle && bReach)
 			{
@@ -1077,7 +1123,7 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			// 真人握筆右傾」）：貼圖以出針口為樞軸右傾 PEN_TILT、出針口錨在準星
 			// 沿筆軸外推一小段——待機=留間隙+針樁（收）、按住 LMB=針線補滿間隙且
 			// 機身微壓近（伸/壓筆感）。恆定大小角度=viewmodel 體感不變。
-			if (PenSprite && MyChar->IsPenMachineMode())
+			if (PenSprite && MyChar->IsPenMachineMode() && !bStencilPen)
 			{
 				const bool bInking = MyChar->IsPenTriggerHeldLocal() && bReach;
 				constexpr float PenTiltDeg = 30.0f;                    // 右傾（人握筆攻角）

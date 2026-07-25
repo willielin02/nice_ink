@@ -83,6 +83,12 @@
   StartupScripts tick harness，不要用 MCP python。
 - **quit_editor 在 PIE 中會 assert crash**：先 stop_pie、分開呼叫、再 quit。
 - **HighResShot 只有聚焦的 PIE 視窗會處理**；同檔名不覆蓋（小心看到舊圖）。
+- **編輯器失焦被「Use Less CPU in Background」節流到 3~6fps**（user 用機時 robo
+  編輯器永遠在背景）→ 牆鐘×頻率敏感的探針假 FAIL（superfast 混疊成慢爬實錘）。
+  防法＝robo harness 啟動時 python 直設 CDO（find_object Default__EditorPerformanceSettings、
+  屬性名要用原始 **bThrottleCPUWhenNotForeground**——snake 名 5.7 解析失敗；此類
+  config=EditorSettings 住 Saved/Config/WindowsEditor/EditorSettings.ini，寫
+  EditorPerProjectUserSettings 白跑）；診斷法＝log 幀計數器差÷時間戳差先驗幀率。
 - **骨骼 FBX 重匯入會綁回舊骨架**（一骨陷阱）→ 匯入前先刪 SK＋Skeleton 資產。
 - **Blender 存檔在 Pose Mode＋use_selection 匯出會悄悄丟 armature** → 全場景匯出＋先回 Object Mode。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。
@@ -108,9 +114,15 @@
 ## 技術地圖
 
 - `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/**直接畫制**（2026-07-20 起：
-  眼錨定 FP 相機 FOV36、螢幕中心=針尖、剛臂 3-DOF 解筆尖觸膚、2D viewmodel 筆、ghost 穿透）/
-  **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**雙針制**（滾輪切換：
-  Liner=方向拉桿巡航＋守恆式 v_max=k·d·f＋行進蟻導引＋浮雕跨越；Shader=**填色
+  眼錨定 FP 相機 FOV36、螢幕中心=針尖、剛臂 3-DOF 解筆尖觸膚、2D viewmodel 筆、ghost 穿透、
+  **鎖定靈敏度 FOV 縮放**（07-24 開鏡定律 ×0.33＋DrawSensitivity 旋鈕——不縮放=游標三倍速））/
+  **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**三工具制**（07-25 打稿制：
+  滾輪三檔 **Stencil 麥克筆（預設）**→Liner→Shader；Stencil=結晶紫 #703593 稿線
+  （手速自由直畫、甦醒收束 EnterTour 全洗=不進巡禮不可指認、旁人 3D 拉伸筆+本人
+  2D 貼圖筆 T_UI_MarkerPen）；Liner=**皮繩追趕巡航**（07-24 拉桿退役：滑鼠恆指哪、
+  針以 v_max 追意圖點、**畫面歸針**=相機/螢幕中心/2D 筆構造上恆=針尖=墨；貼手域
+  直接落點防繞點震盪）＋守恆式 v_max=k·d·f＋行進蟻＋浮雕跨越＋**壓稿線 1.5cm 內
+  =沿稿自動走**（手勢歸打稿、慢工歸機器；動滑鼠=取消）；Shader=**填色
   收斂制**（平頂＋線性羽化剖面=塗均勻構造保證、單趟 55% 疊趟收斂實墨、軟橢圓
   章 COLA 疊平、暈開烘製鏈=高解烘→高斯→箱式下取樣 1:1；流量恆定、
   FInkStroke.PointFlow byte 鏈保留）＋**Crayola 官方十色調色盤**（user 驗收
@@ -155,9 +167,14 @@
   鐘形/手速濃淡/5 趟近實心均退役）＋調色盤全戰役（換色即時生效/色票列/
   三輪公式選色落選→Crayola 官方十色 user 驗收定案；選色儀器=Tools/AssetPrep/
   palette_pick.py+canonical_palette.py+Tools/RoboTest/robo_palette_matrix.py）**；
-  長跪作畫姿/雙臂 IK/平面畫布全退役；robo_directdraw_test.py=64 檢查常駐套件
-  （含真人手速探針＋流量恆定＋紅墨像素契約），迴歸組=orbit/feign/maze）**。SPEC 敘事對齊（麥克筆→刺青機、定案 #19 針寬）
-  由 user 統一處理（明示），SPEC 未動。
+  長跪作畫姿/雙臂 IK/平面畫布全退役）**＋**操作優化與轉印打稿制（07-24~25：割線
+  「難操作」診斷鏈=靈敏度三倍速（FOV 縮放修）→拉桿→皮繩追趕（畫面歸針）→真病根
+  =手勢矛盾（恆速針殺手勢肌肉記憶）→**轉印打稿制**（現實刺青工作流：紫麥克筆
+  打稿→機器沿稿上墨；user 定案預設紫筆+滾輪三檔）；robo_directdraw_test.py=**72
+  檢查**常駐套件（含真人手速探針＋流量恆定＋紅墨像素＋稿線/沿稿契約），迴歸組
+  =orbit/feign/maze；**編輯器背景節流=假 FAIL 元凶**（user 用機時編輯器失焦被壓到
+  3~6fps——harness 已自動關 bThrottleCPUWhenNotForeground，見陷阱年鑑）**。
+  SPEC 敘事對齊（麥克筆→打稿筆、刺青機、定案 #19 針寬）由 user 統一處理（明示），SPEC 未動。
 
 ## 收尾紀律
 

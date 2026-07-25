@@ -188,6 +188,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void WashAllMarker();
 
+	// 打稿制（07-25）：只洗稿線筆劃（Stencil 針型）＋清空掉的 Marker 作品——
+	// 甦醒收束時呼叫（GameMode EnterTour → Multicast）
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void WashStencil();
+
 	// 證據標記：以 Seed 決定的濺射圖案蓋在 UV 附近（跨端同種子＝同圖案）。
 	// 噴漬＝大片不規則濺點；瘀青＝緊密圓斑。
 	UFUNCTION(BlueprintCallable, Category = "Ink")

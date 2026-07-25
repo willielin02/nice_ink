@@ -126,6 +126,26 @@ class Test:
         self.host_pid = None
         self.model_pid = None
         self.tp_i = 0
+        # 編輯器背景 CPU 節流必關（07-24 實錘：user 用機時編輯器失焦→整場 PIE 3fps
+        # →superfast 探針的 2.66Hz 正弦被混疊成慢爬=假 FAIL；ini 寫檔會被編輯器
+        # 退出回寫蓋掉，python 直設 CDO=運行時權威）
+        # 5.7 沒把類別曝露成 unreal.EditorPerformanceSettings——CDO 用 find_object
+        #（Default__LevelEditorPlaySettings 同 pattern）；引擎每幀讀這個設定=立即生效。
+        # 屬性名兩試（snake 名在 5.7 解析失敗過）；ini 防線=Saved/Config/WindowsEditor/
+        # EditorSettings.ini（config=EditorSettings，不是 EditorPerProjectUserSettings——
+        # 07-24 踩坑：寫錯 ini 檔整輪白跑）
+        perf = unreal.find_object(None, "/Script/UnrealEd.Default__EditorPerformanceSettings")
+        ok = False
+        for prop in ("throttle_cpu_when_not_foreground", "bThrottleCPUWhenNotForeground"):
+            try:
+                perf.set_editor_property(prop, False)
+                ok = True
+                log("editor bg-throttle disabled via " + prop)
+                break
+            except Exception:
+                pass
+        if not ok:
+            log("WARN: cannot disable bg-throttle (both property names failed)")
         self.handle = unreal.register_slate_post_tick_callback(self.tick)
 
     def advance(self, stage):
@@ -200,7 +220,13 @@ class Test:
         elif s == "lock_belly":
             if self.elapsed() < 0.8:
                 return
-            self.enter_lean(find_char(self.server(), self.host_pid), "belly", BELLY, BELLY_N)
+            host = find_char(self.server(), self.host_pid)
+            self.enter_lean(host, "belly", BELLY, BELLY_N)
+            # 打稿制（07-25）：預設工具=麥克筆打稿（needleSel 2）——驗過預設後切
+            # Liner，讓既有的機器/巡航契約群在原語義下續跑
+            raw, d = summary(host)
+            check("default tool is stencil marker", d.get("needleSel") == 2, raw)
+            host.call_method("DebugRoboNeedle", (0,))
             self.advance("verify_belly")
         elif s == "verify_belly":
             if self.elapsed() < 1.5:
@@ -345,9 +371,10 @@ class Test:
             check("cruise speed capped (aim crawls)", 3.0 <= daz <= 14.0, f"dAz={daz:.2f}")
             check("pen tip still rides centre ray in cruise",
                   d.get("penValid") == 1 and 0.0 <= d.get("penRayErr", 99) < 3.0, raw)
-            # 導引預測路徑（07-22 五修：前瞻 16cm/0.75cm 步＝23 點；浮雕跳段容差讓
-            # 凸起不再截斷）：肚皮中央 → 預期近滿額（≥15 容忍掠射/曲率早停）
-            check("guide path predicts ahead on skin", d.get("guideN", -1.0) >= 15.0, raw)
+            # 導引預測路徑（07-24 皮繩制：導引=針→游標的待走路徑、長度=追趕殘距
+            # ≤皮繩 2.5cm／步長 0.75 ⇒ 預期 4-5 點；16cm 固定前瞻退役——游標之外
+            # 的方向是未知的，預測它=捏造）
+            check("guide path predicts ahead on skin", d.get("guideN", -1.0) >= 3.0, raw)
             # 巡航中截圖：行進蟻導引虛線＋針尖中心＋機身——「要位移去哪」讀感自查
             unreal.SystemLibrary.execute_console_command(
                 self.server(), "HighResShot 1280x720 filename=directdraw_fp_cruising")
@@ -374,6 +401,90 @@ class Test:
                   d.get("dotN", 0.0) - self.cruise_dot1 <= 1.0,
                   f"dotN {self.cruise_dot1:.0f} -> {d.get('dotN', 0):.0f}")
             check("cruise disengaged in deadzone", d.get("cruise") == 0, raw)
+            self.advance("stencil_switch")
+        elif s == "stencil_switch":
+            # 打稿制（07-25）：切麥克筆、瞄到乾淨帶（tilt-5≈上方 ~5cm）準備畫稿線
+            if self.elapsed() < 0.5:
+                return
+            host = find_char(self.server(), self.host_pid)
+            host.call_method("DebugRoboNeedle", (2,))
+            host.call_method("DebugRoboDrawAim", (self.paint_az0, self.paint_tilt0 - 5.0))
+            self.advance("stencil_sweep")
+        elif s == "stencil_sweep":
+            # 麥克筆＝手速自由直畫（無巡航）：勻速掃 az+ 畫一條稿線
+            t = self.elapsed()
+            host = find_char(self.server(), self.host_pid)
+            if t < 0.8:
+                if t > 0.5 and not hasattr(self, "stencil_dot0_set"):
+                    self.stencil_dot0_set = True
+                    raw, d = summary(host)
+                    check("stencil marker selected", d.get("needleSel") == 2, raw)
+                    self.stencil_dot0 = d.get("dotN", 0.0)
+                return
+            if t < 2.4:
+                host.call_method("DebugRoboDrawAim",
+                                 (self.paint_az0 + (t - 0.8) * 5.0, self.paint_tilt0 - 5.0))
+                return
+            raw, d = summary(host)
+            dn = d.get("dotN", 0.0) - self.stencil_dot0
+            # 8° ≈ 4.8cm 稿線 / 0.195cm 節拍 ≈ 24 點（寬帶容掠射/幀況）
+            check("stencil line deposits at hand speed", 10.0 <= dn <= 80.0,
+                  f"d_dotN={dn:.0f} over 8deg stencil sweep")
+            # FP 截圖：2D 向量麥克筆＋紫稿線讀感自查（視覺件必附截圖鐵律）
+            unreal.SystemLibrary.execute_console_command(
+                self.server(), "HighResShot 1280x720 filename=directdraw_fp_stencil")
+            host.call_method("DebugRoboPaintHold", (False,))
+            self.advance("stencil_follow_prep")
+        elif s == "stencil_follow_prep":
+            # 上墨沿稿：切 Liner、針壓回稿線起點（抬針重壓=乾淨的吸附起手）
+            if self.elapsed() < 0.6:
+                return
+            host = find_char(self.server(), self.host_pid)
+            host.call_method("DebugRoboNeedle", (0,))
+            host.call_method("DebugRoboDrawAim", (self.paint_az0 + 0.5, self.paint_tilt0 - 5.0))
+            self.advance("stencil_follow_engage")
+        elif s == "stencil_follow_engage":
+            if self.elapsed() < 0.8:
+                return
+            host = find_char(self.server(), self.host_pid)
+            raw, d = summary(host)
+            self.follow_az0 = d.get("az", 0.0)
+            self.follow_dot0 = d.get("dotN", 0.0)
+            host.call_method("DebugRoboPaintHold", (True,))
+            self.advance("stencil_follow_verify")
+        elif s == "stencil_follow_verify":
+            # 沿稿契約：無任何方向命令（無 PaintStick）——針自己沿稿線走。
+            # 稿線 ~4.8cm、v_max 2.34cm/s ⇒ ~2s 走完＝follow 態要在中途取樣
+            host = find_char(self.server(), self.host_pid)
+            if self.elapsed() < 1.2:
+                return
+            if not hasattr(self, "follow_mid"):
+                raw, d = summary(host)
+                self.follow_mid = d
+                log("FOLLOW MID | " + raw)
+                return
+            if self.elapsed() < 2.8:
+                return
+            raw, d = summary(host)
+            check("needle auto-follows stencil (mid-run)", self.follow_mid.get("follow") == 1,
+                  f"mid follow={self.follow_mid.get('follow')}")
+            check("follow keeps machine speed (cruising mid-run)",
+                  self.follow_mid.get("cruise") == 1, raw)
+            daz = abs(d.get("az", 0.0) - self.follow_az0)
+            check("follow walks along the stencil line", 2.0 <= daz <= 14.0, f"dAz={daz:.2f}")
+            gap = d.get("dotGapCm", -1.0)
+            check("follow ink holds solid-line bound", 0.02 <= gap <= 0.28, f"gapCm={gap:.3f}")
+            dn = d.get("dotN", 0.0) - self.follow_dot0
+            check("follow deposits ink dots", dn >= 12.0, f"d_dotN={dn:.0f}")
+            host.call_method("DebugRoboPaintHold", (False,))
+            self.advance("stencil_restore")
+        elif s == "stencil_restore":
+            # 回到肚皮中央、重新按住＝shader 段照舊語義起跑
+            if self.elapsed() < 0.5:
+                return
+            host = find_char(self.server(), self.host_pid)
+            host.call_method("DebugRoboDrawAim", (self.paint_az0, self.paint_tilt0))
+            host.call_method("DebugRoboPaintHold", (True,))
             self.advance("shader_switch")
         elif s == "shader_switch":
             if self.elapsed() < 0.5:

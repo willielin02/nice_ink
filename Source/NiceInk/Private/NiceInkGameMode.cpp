@@ -590,6 +590,13 @@ void ANiceInkGameMode::EnterTour()
 	ForceExitAllLeans(); // 他醒了——所有埋著的頭都得抬起來
 	ClearFlipProposal(); // 作畫收束＝未決的翻身提案作廢
 
+	// 打稿制（07-25）：甦醒收束＝稿線全洗——沒上墨的稿從未存在過；洗在收集
+	// 傑作之前（稿線拔掉後空掉的作品不進巡禮=不會出現空白傑作）
+	if (Victim)
+	{
+		Victim->MulticastWashStencil();
+	}
+
 	TourWorkIds.Reset();
 	if (Victim && Victim->InkCanvas)
 	{

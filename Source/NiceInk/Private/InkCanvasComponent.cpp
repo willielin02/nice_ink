@@ -556,6 +556,27 @@ void UInkCanvasComponent::WashAllMarker()
 	RebuildRenderTargets();
 }
 
+void UInkCanvasComponent::WashStencil()
+{
+	// 打稿制（07-25）：稿線在受害者甦醒收束時全洗——沒上墨的部分從未存在過。
+	// 稿線與真墨同住作者的 Marker 作品裡（同一套筆劃管線）；只拔 Stencil 筆劃、
+	// 空掉的 Marker 作品一併移除（空作品進巡禮＝空白傑作）。
+	OpenStrokeWorkByAuthor.Empty();
+	LastPointByAuthor.Empty();
+	for (FInkWork& W : Works)
+	{
+		if (W.State == EInkWorkState::Marker)
+		{
+			W.Strokes.RemoveAll([](const FInkStroke& S) { return S.NeedleType == EInkNeedle::Stencil; });
+		}
+	}
+	Works.RemoveAll([](const FInkWork& W)
+	{
+		return W.State == EInkWorkState::Marker && W.Strokes.Num() == 0;
+	});
+	RebuildRenderTargets();
+}
+
 void UInkCanvasComponent::RestoreWork(const FInkWork& Work)
 {
 	if (Work.WorkId == INDEX_NONE || FindWork(Work.WorkId))

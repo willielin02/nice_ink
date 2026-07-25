@@ -781,6 +781,110 @@ robo 新契約：settle 後筆尖釘中心射線、遠點（對側手、骨骼�
   色值=不受換盤影響（色存在 FInkStroke.Color）。色票列/HUD 自動跟新盤。
   選色全戰役終局：三輪公式落選→權威照抄勝出；即時調色工具提案擱置
   （Crayola 版過關=暫無消費者，需要時再建）。
+- **07-24 操作優化二刀（user「割線蠻難操作、打霧容易打出去」→洞見輪：我先誤診
+  「刷子超尺寸」（引用貼臉世代眼位 10cm 舊幾何）被 user 截圖否證→重量測=直接
+  畫制眼距 69~86cm、真兇在控制鏈；robo directdraw 64/0＋orbit 24/0＋feign 26/0
+  ＋maze 15/0 全綠、未提交、手感待 viewport）**：
+  ①**鎖定靈敏度 FOV 縮放（開鏡定律）**：站姿 FOV90 與鎖定 FOV36 共用同一
+  LookSensitivity＝07-20 直接畫制沿用疏漏——螢幕投影速度差 tan45°/tan18°≈3.1×，
+  進鎖游標三倍速=打霧打出去/割線瞄不準主因。修=DrawAimSensitivity()（×0.33）
+  ＋DrawSensitivity 口味旋鈕（1.0=剛好抵銷）。robo 直設 aim 不走滑鼠=對測試透明。
+  ②**割線拉桿→皮繩追趕制（lazy-mouse）**：拉桿三病=模式切換（LMB 按下滑鼠換
+  語義）/手停針不停（無煞車）/等速+方向命令=最小轉彎半徑（小圓寫不出）。
+  改制=滑鼠恆「指哪」（游標=手的意圖、相機照常生 aim），針 aim 分離
+  （TattooNeedleAz/Tilt）沿皮膚以 v_max 上限追趕游標——**手擁路徑、機器擁速度**；
+  皮繩 TattooChaseLeashCm 2.5（游標超前被鉗回=釘邊/慢針的張力體感）、追趕死區
+  StopCm 0.08（手停=針停=原地扎 dotwork 保留）。步長=min(v_max·dt·gain+債, 殘距)
+  ——**意圖受限小步不記債不進增益視窗**（手的節奏≠環境折損）；CruiseStepOnSkin
+  /速度債/外環增益/浮雕跨越/邊緣釘住/距離節拍/令牌桶全部原樣。One Euro 濾波源
+  =追趕中吃針 aim（追趕本身=平滑器）、上報同源（他端姿勢=針位）；導引行進蟻
+  =針→游標待走路徑（長度=殘距、16cm 固定前瞻退役——游標之外的方向是未知的，
+  預測它=捏造；TattooGuideShowPx→ShowCm 0.25）。DebugRoboPaintStick 語義重解
+  =方向命令（游標恆掛針前皮繩處=無限走廊、(0,0)=游標收回針上——不收回會殘留
+  皮繩距多追 ~1s 打破停針冪等契約）；速度/針距/冪等契約與拉桿時代同構全過
+  （tipSpd 2.19/gap 0.19/dotN 節拍/guideN 契約改 ≥3）。
+  ③**假 FAIL 戰役（編輯器背景節流）**：首三輪 superfast 探針 FAIL（80/79/66 排
+  vs ≥500）且決定性——log 幀計數器實錘整場 PIE 3~6fps＝**編輯器失焦被「Use
+  Less CPU in Background」節流（user 正在用機器）**，2.66Hz 正弦被 4fps 混疊成
+  慢爬。修三段：EditorPerProjectUserSettings 加 section＝白跑（**這個類
+  config=EditorSettings→Saved/Config/WindowsEditor/EditorSettings.ini 才對**）；
+  python CDO find_object("/Script/UnrealEd.Default__EditorPerformanceSettings")
+  ＋屬性名 snake 版解析失敗、**原始名 bThrottleCPUWhenNotForeground 成功**（已
+  進 robo_directdraw harness init=未來 run 一體免疫）。鐵則：**wall-clock×頻率
+  敏感的探針先驗幀率（log 幀計數器差÷時間戳差），編輯器 3~6fps=背景節流簽名**。
+  待 viewport：靈敏度手感（DrawSensitivity）、皮繩長（貼手 vs 平滑）、放開左鍵
+  姿勢 ~100ms 滑移讀感、打霧修完增益後還打不打得出去（備刀=Liner 線當 Shader
+  堤防，未動工）。
+- **07-24 皮繩二修＝畫面歸針（user 一修後三連炸「筆為什麼沒維持在螢幕中間／
+  FP 在抖什麼／TP 反覆橫跳什麼」；robo 64/0×2＋fp_cruising 截圖=筆尖回正中心、
+  墨線終點=筆尖=中心；一修（筆錨針投影）全數還原）**：一修的病根=我讓「游標=手」
+  佔住螢幕中心、叫筆在畫面裡追——**違反 07-22 定案（2D 筆=viewmodel 恆定位置、
+  準星固定中心）**，且相機吃生滑鼠=FP 手抖直進畫面。正解方向反轉：**畫面屬於針**
+  ——作畫中相機=針 aim（螢幕中心構造上恆=針尖=墨的出生點、2D 筆錨死中心、手抖
+  不進畫面；慢畫=針貼手=畫面跟手、快甩=限速慢移=拉桿時代「機器的重量」讀感
+  回歸）；手 aim=隱形意圖點（皮繩內、放開左鍵收斂到針位=相機零跳）。
+  **TP 反覆橫跳真兇=band 步進器被強迫走 [0.9,1.05]×Step、貼近目標時繞著意圖點
+  過衝、下一 tick 方向反轉=繞點震盪**→修=貼手域（殘距<一步）針直接落在意圖點
+  （不走步進器；不記債不進增益視窗）。TattooChaseP/HUD 投影錨全拆。
+  **鐵則：追蹤器要有 arrival 分支——被迫走固定步長的步進器在目標附近必震盪；
+  「畫面/中心/viewmodel 屬於誰」是 user 已裁決的設計，補償修法不得偷改所有權。**
+- **07-25 轉印打稿制（stencil）BUILT-自驗（user 追問「找出不好創作的原因了？」→
+  診斷=手勢矛盾：人畫圖靠零點幾秒的手勢肌肉記憶，針恆速把每筆拉成 4 秒轉向任務
+  =手勢編碼作廢——換任何輸入映射都救不了（三輪「沒感覺優化」的病根）；現實刺青
+  的解=轉印打稿；user 定案「查紫色色號＋用現有麥克筆模型＋預設紫麥克筆＋滾輪切
+  割線/打霧」；robo directdraw 72/72（+8 新契約）＋orbit 24/0＋feign 26/0＋
+  maze 15/0＋RT 像素/裁圖自查=紫稿線+黑墨疊走稿上；未提交、手感待 viewport）**：
+  ①**色號考證**：結晶紫 #703593（龍膽紫染料標準色票；Spirit 轉印紙「高可視紫」
+  同一染料——color-name 的 Gentian Violet #A887A4 是灰紫色名不是染料色，棄用）
+  =NiceInkStencil::Color()（sRGB→linear）；server 端強制（稿不吃調色盤）。
+  ②**三工具制**：EInkNeedle 加 Stencil（排第三=線上值/舊存檔零遷移）；預設工具
+  =麥克筆打稿；滾輪三檔循環 Stencil→Liner→Shader（上滾次/下滾前）；RepNeedle
+  （COND_SkipOwner）+ServerSetNeedle=他端 3D 手持模型跟著換。
+  ③**打稿=手速自由直畫**：非巡航路徑（視角跟手）、距離節拍 k×筆寬=實線、
+  移動閘共用 MistAimSpeedDegS、頻率天花板走 ShaderDotHz（純防外掛）；稿線
+  落麥克筆層（非 Shader 自動路由=零圖層新工程、Valve 銳化同鍋）；稿劃與真墨
+  同住作者 Marker 作品。④**甦醒洗稿**：EnterTour 收集傑作前
+  MulticastWashStencil——拔稿劃+空作品移除（不進巡禮/不可指認/永不成刺青）。
+  ⑤**上墨沿稿自動走**：Liner 壓針 SnapCm 1.5 內有稿線=吸附（UV 空間量距
+  CmPerUv 332；跨縫=誠實斷開）、方向=朝點多端；沿稿 waypoints 走
+  CruiseStepOnSkin=v_max/浮雕跨越/邊緣釘住全沿用；動滑鼠>6 units=取消回自由
+  巡航；稿走完=停針、放開重壓=續。⑥**視覺**：MarkerPen 元件（SM_Marker、
+  pivot=筆尖、筆身染暗紫=工具識別）與機器三件套互斥顯示；本人 FP 直接看 3D
+  麥克筆（細長不遮畫布、07-18 原味）；HUD=紫色小方點+STENCIL 標籤、機器 2D
+  viewmodel 只在機器檔；ghost 豁免名單+MarkerPen（07-21 鐵則）。
+  ⑦坑：DebugRoboNeedle 硬編 0/1 映射=枚舉擴充時 hook 沒跟上（首輪 5 FAIL
+  全是它）；follow 契約要 mid-run 取樣（稿 4.8cm×v_max=2s 走完、2.5s 後驗=
+  假陰性）。記帳：深膚白稿變體（現實做法）待做；稿線公開全房=設計紅利記帳
+  待 user 追認；SPEC（麥克筆敘事角色→打稿筆）隨敘事對齊由 user 統一處理。
+- **07-25 麥克筆追修（user 首驗抓「抖動嚴重＋沒有確實伸長」；robo 72/72 續綠）**：
+  兩病同根=麥克筆分支缺機器有的兩件事——①機器落筆有沿筆軸 trace 把針尖釘到
+  皮膚真實命中點（墨與針同一真相），麥克筆跳過了=筆尖懸在解算值上（標稱 4cm+
+  殘差=「沒伸長」）；②機器 FP 是 2D 貼圖（天然零抖），麥克筆是 FP 可見 3D 件
+  =骨骼解算角度噪聲被 13cm 筆桿放大成搖擺直接進眼睛。修=落筆 trace 補上
+  （按住=筆尖貼命中點/放開=懸回標稱間隙=抬筆讀感；TipEffective 進墨鏈）＋
+  筆身「朝向」顯示層平滑 slerp dt×12（純化妝：筆尖與墨不經平滑=零延遲；
+  懸筆時位置也平滑、落筆=釘死零平滑；隱藏時重置=不從舊值飄）。
+  **鐵則：FP 可見的 3D 手持件=解算噪聲的放大器——顯示層平滑只准施於化妝屬性
+  （朝向/懸空位），墨/接觸點永遠走生真相；「觸膚」語義必須由 trace 命中承載，
+  解算值只配當懸空姿。**
+- **07-25 麥克筆二修（user 再抓「FP 抖動仍太重＋TP 伸長沒做好」、定案「與機器
+  同構：旁人 3D＋本人 2D」；robo 72/72×2＋fp_stencil 截圖自查=2D 向量筆貼中心
+  ＋紫稿線同點落墨）**：①本人端 3D 麥克筆 OwnerNoSee（抖動源整個離開 FP）、
+  HUD 畫免資產 2D 向量筆（深筆頭+龍膽紫筆桿+淺尾帽、右傾 30° 同機器握姿、
+  LMB=筆壓近落點=壓筆感；貼圖版待 user 要再換）；顯示層平滑保留服務 TP。
+  ②TP 伸長=筆身沿筆軸 scale.Z 拉伸跨接「筆尖→手」（機器伸縮分帳的麥克筆版：
+  手離皮膚多遠筆多長、鉗 [1,8]×原長 13cm；夠近=原長）。
+- **07-25 麥克筆三修＝加粗＋貼圖版 2D 筆（user 兩輪「太細」→2D 40px/3D 徑向 2.2×；
+  user「UI 圖哪來」→誠實=向量線非貼圖→授權做貼圖版；robo 72/72×2＋fp_stencil
+  截圖自查=貼圖筆壓稿線落點）**：管線=render_marker_ui.py（Blender headless：
+  sumo_marker.fbx→三分區染色〔筆頭深紫黑/筆身龍膽紫/尾帽淺灰〕→徑向 1.6×
+  〔2.2×=罐頭讀感，UI 比例 3.7:1；螢幕粗細由 SpriteW 控〕→EEVEE 正交前視
+  透明背景 1024²→印筆尖 UV (0.5, 0.9310)）→headless 匯入 T_UI_MarkerPen
+  （/Game/UI 已在 AlwaysCook）→HUD DrawTexture（筆尖樞軸、傾 30°、
+  SpriteW=ClipY×0.46、LMB 壓筆感；貼圖缺席退向量筆）。
+  **坑重演：匯入前 Get-Process 清點抓到 4 隻殭屍編輯器（歷輪 robo PIE 殘留）
+  ——殭屍鎖=存檔無聲失敗年鑑條目，清場後匯入才成功（uasset mtime 驗證）。**
+  Blender 5.1 引擎枚舉=BLENDER_EEVEE（無 _NEXT）。
 
 ### 07-21 九輪調查（未修）：作畫者後頸隆起（user viewport）——診斷定案、修法待裁
 量測（robo_neckbulge_probe.py，弦長+A/B 對照）：①作畫者的轆轤首橋接面**恆常可見**

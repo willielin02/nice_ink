@@ -84,6 +84,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "24", ClampMax = "110"))
 	float LeanLockedFov = 36.0f;
 
+	// 鎖定作畫的滑鼠增益口味旋鈕（07-24 操作優化）。實際增益＝LookSensitivity ×
+	// FOV 比例縮放 × 本值——開鏡定律：鎖定 FOV 36 對站姿 90，同一角速度的螢幕
+	// 投影速度差 tan(45°)/tan(18°)≈3.1×，不縮放＝進鎖游標三倍速（打霧打出去／
+	// 割線瞄不準的主因）。1.0＝剛好抵銷放大（游標螢幕速度回到站姿肌肉記憶）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.2", ClampMax = "3"))
+	float DrawSensitivity = 1.0f;
+
+	// 鎖定作畫滑鼠增益（度/單位）＝EffectiveLookSensitivity × FOV 縮放 × DrawSensitivity
+	float DrawAimSensitivity() const;
+
 	// One Euro 濾波旋鈕（筆即游標，2026-07-20 定案）：aim→姿勢/筆/墨的速度自適應濾波。
 	// 靜止＝截止壓到 MinCutoff（強濾手抖）；快掃＝截止隨速度拉高（近零滯後）——
 	// 取代固定係數顯示平滑（100ms 慣性＝實體筆 lag 的真兇）。相機恆用生訊號。
@@ -132,6 +142,19 @@ public:
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMeshComponent> NeedleMesh;
 
+	// 打稿麥克筆（07-25 打稿制）：Stencil 工具時的手持模型（SM_Marker、pivot=筆尖、
+	// 筆身 +Z）——與刺青機三件套互斥顯示；本人 FP 直接看 3D 筆（細長不遮畫布，
+	// 07-18 直接畫制原味），不走 2D viewmodel
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMeshComponent> MarkerPen;
+
+	// 麥克筆顯示層平滑（純化妝——機器 FP 走 2D 貼圖天然零抖、麥克筆是 FP 可見 3D 件：
+	// 骨骼解算噪聲被 13cm 筆桿放大成搖擺）。筆尖=trace 真實命中點不經平滑（墨零延遲）；
+	// 只平滑筆身朝向＋懸筆時的位置
+	FQuat MarkerPenSmoothedQ = FQuat::Identity;
+	FVector MarkerPenSmoothedTip = FVector::ZeroVector;
+	bool bMarkerPenSmoothValid = false;
+
 	// 標稱針長＝非觸發時出針口懸在皮膚上方的間隙；解算的「虛擬筆尖」=出針口+此值
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "1", ClampMax = "10"))
 	float PenNeedleNominalCm = 4.0f;
@@ -144,11 +167,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "5", ClampMax = "80"))
 	float PenGripBaseLenCm = 23.17f;
 
-	// --- 刺青手感（2026-07-22 user 定案：高頻點狀出墨＋方向拉桿恆速巡航）---
-	// 本質＝把「線的速率所有權」從手沒收、交給機器：墨的釋出＝離散扎針（TattooDotHz）、
-	// LMB 按住時滑鼠拉出方向桿、針以皮膚面恆速 v_max 巡航——實線由守恆式保證：
+	// --- 刺青手感（2026-07-22 user 定案：高頻點狀出墨＋機器恆速；07-24 皮繩追趕制
+	// 取代方向拉桿——「割線難操作」優化）---
+	// 本質不變＝線的「速率」所有權歸機器：墨的釋出＝離散扎針（TattooDotHz）、
+	// 針速上限由守恆式保證：
 	//   v_max = TattooSpacingK × TattooNibDiameterCm × TattooDotHz
 	//（最高速下相鄰針心距 = k×筆寬；k=0.5＝間距=半徑＝數位筆刷實線標準）。
+	// 07-24 改制＝「路徑」所有權還給手：LMB 按住時滑鼠照常指哪（游標=手的意圖、
+	// 相機照常跟生 aim），針沿皮膚以 v_max 上限**追趕游標**（lazy-mouse／拉繩穩定器
+	// 的業界標準結構）——手停=針停、曲率=手畫、小圓畫得出來；模式切換（滑鼠變拉桿）
+	// 退役。游標最多跑在針前「皮繩長」，超出被鉗回（針釘邊緣/慢針時游標拉不動=
+	// 皮繩張力體感）。守恆式/點距/流量/令牌桶全部原樣。
 	// 嫌慢只准動 f（TattooDotHz）——動 k>0.7＝針珠讀成虛線＝自毀機制目的。
 
 	// 出墨頻率（Hz）：最高速下的針節拍。每針＝皮膚上一顆固定筆寬的點。
@@ -167,23 +196,31 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "2"))
 	float TattooNibDiameterCm = 0.39f;
 
-	// 方向拉桿死區（滑鼠累積量；桿長≤死區＝停針原地扎＝點刺）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "2", ClampMax = "60"))
-	float TattooStickDeadzonePx = 12.0f;
+	// 皮繩長（cm，皮膚面距離）：游標最多跑在針前這麼遠，超出＝游標被鉗回。
+	// 短繩=貼手（針幾乎恆在螢幕中心）、長繩=平滑強但針尾隨感重
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "8"))
+	float TattooChaseLeashCm = 2.5f;
 
-	// 方向拉桿長度鉗（超出只取方向、徑向多拉丟棄不入帳——入帳=放手後針還在走=失控）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "30", ClampMax = "400"))
-	float TattooStickMaxPx = 120.0f;
+	// 追趕死區（cm）：針距游標小於此＝針已到手＝停針原地扎（點刺；原地冪等由
+	// 距離節拍構造保證）。要蓋住 One Euro 靜止殘抖＋trace 量化，不能為 0
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.02", ClampMax = "1"))
+	float TattooChaseStopCm = 0.08f;
+
+	// 沿稿吸附半徑（cm）：Liner 落針時針下 SnapCm 內有稿線＝機器沿稿自動走（07-25
+	// 打稿制）；壓在空皮膚上＝照舊自由巡航。UV 空間近似量距（跨縫稿線在縫上斷開
+	// ＝誠實限制，放開重壓另一側接續）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.3", ClampMax = "5"))
+	float TattooStencilSnapCm = 1.5f;
 
 	// 導引預測路徑前瞻距離（cm，皮膚弧長）——業界式導引（07-22 二改；五修 user
 	//「還是太短」8→16 ≈ 7s 路程）：與速度同域，調速時導引自動等比
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "2", ClampMax = "40"))
 	float TattooGuideLookaheadCm = 16.0f;
 
-	// 導引顯示門檻（px）——與巡航死區（12px）分離：拉一點點虛線就先現身、
-	// 引擎到死區才起步（門檻共用=「虛線慢半拍」的延遲感真兇，07-22 三修）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "1", ClampMax = "30"))
-	float TattooGuideShowPx = 4.0f;
+	// 導引顯示門檻（cm）——針落後游標超過此距離才畫行進蟻（皮繩制：導引=針→游標
+	// 的待走路徑；貼手時針就在游標上、虛線=噪音）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.05", ClampMax = "3"))
+	float TattooGuideShowCm = 0.25f;
 
 	// 導引取樣步長（cm）——沿皮膚曲面每步一個世界點（線=貼膚曲線；
 	// 0.75×21 步＝前瞻拉長後 trace 成本持平）
@@ -243,29 +280,27 @@ public:
 	// 濃度屬於機器不屬於手速——手速調濃淡=塗均勻殺手。FInkStroke.PointFlow
 	// 資料鏈保留（恆滿值；存檔/RPC 格式不動、未來漸層工具可回收））
 
-	// 當前針型（本地工具狀態；跟選色同壽命——回合內持續、不複製、隨筆劃 RPC 上服）
-	EInkNeedle SelectedNeedle = EInkNeedle::Liner;
+	// 當前工具（07-25 打稿制：預設=麥克筆打稿——先打稿再上墨的正規流程；滾輪三檔循環
+	// Stencil→Liner→Shader。本地真相；RepNeedle 複製給他端選 3D 筆模型）
+	EInkNeedle SelectedNeedle = EInkNeedle::Stencil;
+
+	// 他端可見的工具狀態（麥克筆 vs 刺青機的 3D 手持模型切換；pattern 同 bPenTriggerHeld）
+	UPROPERTY(Replicated)
+	EInkNeedle RepNeedle = EInkNeedle::Stencil;
+
+	// 本端視角下的有效工具（本人=本地真相、他端=複製值）
+	EInkNeedle ActiveNeedle() const { return IsLocallyControlled() ? SelectedNeedle : RepNeedle; }
+
+	// 工具切換上服（變化時發；server 直寫＋SkipOwner 複製）
+	UFUNCTION(Server, Reliable)
+	void ServerSetNeedle(EInkNeedle Needle);
 
 	// 巡航速率上限（cm/s，皮膚表面距離）＝液線針守恆式（巡航/導引=液線針專屬；
 	// 霧針=自由揮掃不經巡航）
 	float TattooMaxSpeedCmPerSec() const { return TattooSpacingK * TattooNibDiameterCm * TattooDotHz; }
 
-	// HUD：巡航方向拉桿（導引預測的輸入源，07-22 user 定案）。
-	// 回傳=LMB 按住且桿超「顯示門檻」（4px，低於巡航死區＝導引先現身）；
-	// OutDirScreen=螢幕方向（stick 與螢幕同號空間：正Y=下）、OutStrength=0..1。
-	// 液線針專屬（霧針=自由揮掃無巡航、導引線無意義）。
-	bool GetTattooStickForHud(FVector2D& OutDirScreen, float& OutStrength) const
-	{
-		const float Len = TattooStickPx.Size();
-		if (!bLeanLocked || !bPenTriggerLocal || SelectedNeedle != EInkNeedle::Liner ||
-			Len <= TattooGuideShowPx)
-		{
-			return false;
-		}
-		OutDirScreen = TattooStickPx / Len;
-		OutStrength = FMath::Clamp(Len / FMath::Max(TattooStickMaxPx, 1.0f), 0.0f, 1.0f);
-		return true;
-	}
+	// （07-24 皮繩制：GetTattooStickForHud 拉桿介面退役——導引輸入改為針→游標
+	// 追趕向量，直接在 BuildTattooGuidePath 內部計算）
 
 	// --- FP 2D 筆（07-22 user 定案「FP 要 2D 感、像 FPS viewmodel」）：本人入鎖時
 	// TP 三件套 OwnerNoSee，取而代之由 NiceInkHUD 畫 2D 筆貼圖＋針線（出針口→墨點
@@ -497,6 +532,10 @@ public:
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastWashAllMarker();
+
+	// 打稿制（07-25）：甦醒收束＝稿線全洗（GameMode EnterTour 呼叫）
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastWashStencil();
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastLockWorkPermanent(int32 WorkId);
@@ -828,10 +867,22 @@ private:
 	FVector2D PendingDebugDrawAim = FVector2D::ZeroVector;
 	bool bDebugPaintHeld = false;           // robo「模擬按住左鍵」輸入源
 
-	// --- 刺青巡航內部（本人端；07-22 刺青手感）---
-	FVector2D TattooStickPx = FVector2D::ZeroVector; // 方向拉桿（LMB 按住時滑鼠累積；
-	                                                 // Y 已翻成 tilt 同號空間：正=向下）
-	bool bTattooCruising = false;      // 本 tick 拉桿超出死區且 aim 由巡航推進中
+	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---
+	float TattooNeedleAz = 0.0f;       // 針 aim（皮繩追趕者；LMB 按住期間＝姿勢/筆/墨
+	float TattooNeedleTilt = 45.0f;    // 的驅動源。手 aim=DrawAim*Local=游標與相機）
+	bool bTattooChaseActive = false;   // 本次按住的追趕鏈已初始化（起點=按下瞬間的手 aim）
+	float TattooChaseErrCm = 0.0f;     // 針落後意圖點的皮膚距估計（導引/summary）
+	bool bTattooCruising = false;      // 本 tick 針由追趕步進推進中（出墨閘）
+	// --- 上墨沿稿（07-25 打稿制）：Liner 落針點 SnapCm 內有稿線＝針吸附沿稿自動走
+	//（手勢歸打稿、慢工歸機器——玩家不再操縱方向；動滑鼠即取消回自由巡航）---
+	bool bStencilFollowActive = false;
+	bool bStencilFollowTried = false;  // 每次壓針只嘗試吸附一次（失敗=整段自由巡航）
+	int32 FollowWorkId = INDEX_NONE;   // 追蹤中的稿線（受害者畫布 Works 內定位）
+	int32 FollowStrokeIdx = INDEX_NONE;
+	int32 FollowPointIdx = INDEX_NONE;
+	int32 FollowDir = 1;               // 沿 Points 的行進方向（±1；起步=往點多的一端）
+	bool TryAcquireStencilFollow(const FVector& NeedleWorld); // 壓針時找最近稿線
+	bool UpdateStencilFollow(float DeltaSeconds, const FVector& PNow); // 沿稿步進（回 false=稿走完/失效）
 	// 出墨=距離節拍（首版時間節拍被 robo 抓到：筆尖解算橫向抖動 ±0.2cm 疊在前進
 	// 間距上＝針距尾巴 0.31>實線界——距離制針距=構造保證、對抖動免疫；5Hz 在最高速
 	// 下自然湧現 v_max/間距=f）；預算=速率天花板 f×1.5（防 robo 傳送/異常快移灌針）
@@ -843,8 +894,9 @@ private:
 	bool bHasTattooLastDotTip = false;
 	float TattooLastDotGapCm = -1.0f;  // 最近兩針的世界距（robo 實線契約：≤k×筆寬×1.35）
 	int32 TattooDotsEmitted = 0;       // 本鎖定累計出針數（robo）
-	FVector2D DebugPaintStickPx = FVector2D::ZeroVector; // robo 拉桿覆寫（巡航中每 tick 重申）
-	bool bDebugPaintStickActive = false;
+	FVector2D DebugPaintStickPx = FVector2D::ZeroVector; // robo 方向命令（皮繩制語義：
+	bool bDebugPaintStickActive = false;                 // 游標恆掛針前皮繩處＝無限走廊
+	                                                     // 巡航；(0,0)=游標收回針上=停）
 	bool bHasPendingDebugNeedle = false;                 // DebugRoboNeedle 待消化（poll 內切針）
 	EInkNeedle PendingDebugNeedle = EInkNeedle::Liner;
 	// --- 霧針自由揮掃狀態（07-23 四版；五修改距離節拍）---
@@ -853,7 +905,8 @@ private:
 	float MistPrevAimTilt = 0.0f;
 	bool bMistPrevAimValid = false;
 	float MistAimSpeedDegS = 0.0f;     // 本 tick aim 角速（診斷/robo）
-	void UpdateTattooCruise(float DeltaSeconds); // 拉桿→aim 皮膚面恆速推進（trace 回饋鉗）
+	void UpdateTattooCruise(float DeltaSeconds); // 皮繩追趕：針 aim 以 v_max 上限沿皮膚
+	                                             // 追游標（trace 回饋鉗）＋游標皮繩鉗
 	float TattooSpeedDebtCm = 0.0f;    // 速度債（07-22 三修）：上幀短差本幀補——
 	                                   // 平均速度恆=v_max、對單幀收斂好壞免疫；
 	                                   // 貼邊/死區/邊緣清債（催討過猛=爆衝）
@@ -874,7 +927,7 @@ private:
 	bool CruiseStepOnSkin(float& AzDeg, float& TiltDeg, const FVector2D& Dir,
 		float StepCm, float& AngPerCmEst, FVector& InOutP, float& OutMovedCm) const;
 
-	void PollDrawAim(APlayerController* PC, float DeltaSeconds, bool bCruise); // 作畫中滑鼠→臉指向/拉桿
+	void PollDrawAim(APlayerController* PC, float DeltaSeconds, bool bCruise); // 作畫中滑鼠→臉指向（＋皮繩追趕）
 	float EffectiveDrawAz() const;   // 本人=local、他端=remote 平滑值
 	float EffectiveDrawTilt() const;
 	// 中心射線→受害者皮膚（PrevUV=縫區連續性偏好：兩島搶點時選離上一點近的島）

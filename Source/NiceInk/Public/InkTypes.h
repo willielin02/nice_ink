@@ -39,15 +39,26 @@ namespace InkEvidence
 	}
 }
 
-// 針型（2026-07-23 雙針制，user 定案「先只加 Shader」）：真實刺青師的最小工作組——
-// Liner 液線針（3.9mm 實線，勾輪廓）＋ Shader 打霧針（~9mm 寬、點距>直徑=stipple
-// 打霧，填色漸層）。渲染半徑/點距/節拍逐針查表；SPEC 對齊由 user 統一處理（記帳）。
+// 針型（2026-07-23 雙針制；07-25 打稿制加 Stencil，user 定案）：真實刺青工作流——
+// Stencil 麥克筆打稿（龍膽紫稿線、手速自由、甦醒時全洗＝從不進巡禮）→
+// Liner 液線針（3.9mm 實線，勾輪廓；壓在稿線上＝機器沿稿自動走）＋
+// Shader 打霧針（填色）。渲染半徑/點距/節拍逐針查表；SPEC 對齊由 user 統一處理。
+// Stencil 排第三＝Liner/Shader 線上值與舊存檔零遷移。
 UENUM(BlueprintType)
 enum class EInkNeedle : uint8
 {
 	Liner,
-	Shader
+	Shader,
+	Stencil
 };
+
+// 稿線墨色（07-25 打稿制）：結晶紫 #703593（sRGB）→ linear——龍膽紫染料的標準色票；
+// Spirit 轉印紙「高可視紫」同一染料＝全世界刺青稿線的顏色（考證 07-25）。
+// 固定色不吃調色盤（稿=導引不是作品；一眼與墨區分）。
+namespace NiceInkStencil
+{
+	inline FLinearColor Color() { return FLinearColor::FromSRGBColor(FColor(0x70, 0x35, 0x93)); }
+}
 
 // 一次落筆到抬筆的連續筆劃。Points 為身體 UV 空間折線。
 // 筆寬由 NeedleType 查表（雙針制前=全域常數；舊存檔預設 Liner=原行為）。
