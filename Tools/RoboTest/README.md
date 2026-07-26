@@ -74,6 +74,12 @@
   外觀）：(az,tilt) 陣列 × side/close 兩機位，neckobs_azXXX_tXXX_*.png。
 - `robo_neck_probe.py`＝脖管幾何診斷（GetDebugSummary 現場數字＋DumpNeckMesh CSV
   傾印＋A/B 隱藏對照截圖）。
+- `robo_neckdraw_probe.py`（2026-07-26）＝**作畫姿勢（lean-lock）脖子探針**：模特兒
+  DebugRoboEnterLean 鎖三點（belly/face/flank）→ 旁觀機位拍後頸/喉側特寫＋
+  DumpNeckMesh CSV＋弦長/骨骼數字；配套離線分析（逐列折角/軸向跨距/環半徑）見
+  memory `project_neck_drawpose_fix`。抓到「壓縮域設計錯配」（喉摺 111°）與
+  「隱藏判定用環心距誤殺」（後頸破洞）兩隻。**讀數注意：DumpNeckMesh 在 vis=0 時
+  回傳的是上一次可見的舊 section——先對 vis 旗標再信 CSV。**
 - 陷阱補充：CameraComponent 世界旋轉 python 沒有 get_component_rotation——
   用 get_socket_rotation("None")；PC 取 pawn＝get_controlled_pawn()；
   debug_robo_emerge() 無參數；set_actor_location 只吃 3 參數。

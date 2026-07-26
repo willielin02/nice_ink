@@ -95,6 +95,7 @@ private:
 	FVector HeadN0 = FVector::ZeroVector;   // rest 環平面法線
 	FVector HeadE1 = FVector::ZeroVector;   // 平面內正交基
 	FVector HeadE2 = FVector::ZeroVector;
+	float HeadRingRadius = 17.8f;           // rest 環平均半徑（隱藏判定的縫寬估計）
 	TArray<float> HeadAng0;                  // 每頂點 rest 角（沿環序）
 	bool bHeadAngAscending = true;
 	int32 HeadBoneSlot = 0;                  // SkinBoneNames 中 Head 的索引

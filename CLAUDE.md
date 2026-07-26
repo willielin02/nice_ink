@@ -110,6 +110,10 @@
   懷疑時 `Get-Process UnrealEditor` 清點＋用 Rename-Item 測檔案鎖。
 - **headless 匯入 FBX 部件（combine=False）頂點烘進 FBX 世界空間**（含 Y 翻轉）：
   所有部件 actor 擺同一個基準點即可原樣重現；Y 翻不翻用非對稱特徵射線實測，不要猜。
+- **引擎網路預設值＝同步遲鈍元凶**：NetServerMaxTickRate 30（所有 server→client 33ms
+  量化）、GameStateBase 10Hz、**PlayerState 1Hz**——相位切換頓/罰酒慢一秒的隱形真兇
+  （07-26 已調：ini 60Hz＋ctor SetNetUpdateFrequency）。「主機視窗手感好、客戶端鈍」
+  ＝缺本地預測的簽名（listen server RPC 同幀本地執行）。
 
 ## 技術地圖
 
@@ -175,6 +179,13 @@
   =orbit/feign/maze；**編輯器背景節流=假 FAIL 元凶**（user 用機時編輯器失焦被壓到
   3~6fps——harness 已自動關 bThrottleCPUWhenNotForeground，見陷阱年鑑）**。
   SPEC 敘事對齊（麥克筆→打稿筆、刺青機、定案 #19 針寬）由 user 統一處理（明示），SPEC 未動。
+  **＋07-26 網路同步遲鈍根治＋lean-lock 脖子修（皆已提交）**：墨線本地預測（客戶端當幀
+  上屏、StrokeSeq 回播對消——robo/GameMode 直呼恆傳 0 不對消）＋net tick 60Hz＋
+  GameState/PlayerState 複製頻率＋aim 上報 30Hz/追趕 K20；NeckStretch **壓縮域直紋面**
+  （lean-lock 埋頭＝弦長 1.6cm＋彎 30° 在管面解算器設計域外→喉摺 111°/後頸凸；弦長
+  4~12cm 交叉回管面＝沉睡 46cm 零改動）＋隱藏判定改縫寬（環心距誤殺＝後頸破洞）；
+  探針=robo_neckdraw_probe.py；directdraw 72/0＋orbit/feign/maze 迴歸綠；
+  **未了（user 已點名）：作畫者全身抖動（位置閃爍）＋筆尖與出墨不對齊（延長不及時）。**
 
 ## 收尾紀律
 

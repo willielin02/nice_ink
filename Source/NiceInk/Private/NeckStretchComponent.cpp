@@ -183,6 +183,12 @@ void UNeckStretchComponent::InitFromSource(UPoseableMeshComponent* InSource, UMa
 	HeadE1 = FVector::VectorPlaneProject(
 		SeamPos(NeckSeamData::HeadRing[0]) - HeadC0, HeadN0).GetSafeNormal();
 	HeadE2 = FVector::CrossProduct(HeadN0, HeadE1).GetSafeNormal();
+	HeadRingRadius = 0.0f;
+	for (int32 k = 0; k < GRing; ++k)
+	{
+		HeadRingRadius += static_cast<float>(FVector::Dist(SeamPos(NeckSeamData::HeadRing[k]), HeadC0));
+	}
+	HeadRingRadius /= GRing; // 隱藏判定的縫寬估計用（rest 環半徑 ≈17.8cm）
 	// 環向形狀曲線的座標基準：頭環 rest 平面內的臉方向（CS +Y 投影）——頭部錨定
 	HeadFaceInPlane = FVector::VectorPlaneProject(FVector::YAxisVector, HeadN0).GetSafeNormal();
 	HeadAng0.SetNumUninitialized(GRing);
@@ -272,7 +278,17 @@ void UNeckStretchComponent::UpdateNeck()
 	DbgHc = Hc;
 	DbgChord = static_cast<float>(FVector::Dist(Bc, Hc));
 	const float ChordCm = DbgChord;
-	if (ChordCm < NeckHideChordCm)
+
+	const FVector NB = NewellNormal(BP);
+	const FVector NH = HeadT.TransformVectorNoScale(HeadN0).GetSafeNormal();
+
+	// 隱藏判定＝「縫真正閉合」（07-26 破洞修）：舊制只量環心距——埋頭是「原地旋轉」，
+	// 環心距 ~1.5cm 但後頸已張開 10cm 楔縫，一過門檻整件被隱藏＝後頸開天窗
+	//（user viewport 實錘）。最壞縫寬估計＝環心距＋sin(彎角)×環半徑（旋轉把縫寬
+	// 攤在環緣）；安座（彎角≈0）時退化回舊判定。
+	const float BendSin = FVector::CrossProduct(NB, NH).Size();
+	const float WorstGapCm = ChordCm + BendSin * HeadRingRadius;
+	if (WorstGapCm < NeckHideChordCm)
 	{
 		SetVisibility(false); // 頭安座＝脖子收合、物理上不存在
 		return;
@@ -280,8 +296,6 @@ void UNeckStretchComponent::UpdateNeck()
 	SetVisibility(true);
 
 	// --- 中線 Hermite（端切向＝環 Newell 法線；兩環同繞向 → 兩端 Newell 都指向頭側）---
-	const FVector NB = NewellNormal(BP);
-	const FVector NH = HeadT.TransformVectorNoScale(HeadN0).GetSafeNormal();
 	const FVector T0v = NB * ChordCm * NeckTangentK;
 	const FVector T1v = NH * ChordCm * NeckTangentK;
 	const int32 Rows = FMath::Clamp(NeckRows, 6, 32);
@@ -403,6 +417,15 @@ void UNeckStretchComponent::UpdateNeck()
 		OutFrontFactor = 1.0f;
 	};
 
+	// 壓縮域＝直紋面（2026-07-26 作畫姿勢脖子戰役）：管面解算器的設計域是「伸長」
+	//（弦長 20~46cm 的轆轤首）；lean-lock 埋頭的脖子是「壓縮＋彎折」（弦長 ~1.6cm、
+	// 彎 25~30°）——實測 40/84 列的頭端點穿到身環平面下 5~7cm＝無平滑管面解，
+	// 逐列折角最壞 111°（喉嚨褶皺真兇）；後頸側 10cm 楔縫再被 NapeBulge 中段膨脹
+	// 加料（後頸凸起真兇）。壓縮域正解＝逐列直線帶（BP[k]→頭環對應點）：折角構造上
+	// 為零、互穿列沉進殼內不外翻、裝飾曲線不參與；弦長 4→12cm smoothstep 交叉回管面
+	//（沉睡平台 46cm＝純管面，路徑零改動）。
+	const float Compress = SmoothStep01((ChordCm - 4.0f) / 8.0f);
+
 	TArray<FVector> HeadResPos, HeadResNrm, HeadLocal;
 	TArray<FLinearColor> HeadResCol;
 	TArray<float> ColFront; // 每列環向形狀係數（頭部錨定，每幀隨頭向重算）
@@ -460,7 +483,10 @@ void UNeckStretchComponent::UpdateNeck()
 					+ (NeckChinTuck - 1.0f) * SmoothStep01(F);
 				const float Scale = Taper * (1.0f + (SCol - 1.0f) * MidEnv);
 				const FVector L = FMath::Lerp(BodyLocal[k], HeadLocal[k], Blend) * Scale;
-				Verts[Idx] = CP[j] + CU[j] * L.X + CW[j] * L.Y + CT[j] * L.Z;
+				const FVector Tube = CP[j] + CU[j] * L.X + CW[j] * L.Y + CT[j] * L.Z;
+				// 壓縮域直紋帶：端點對應沿用零扭轉重取樣＝列身分同一套
+				const FVector Ruled = FMath::Lerp(BP[k], HeadResPos[k], Blend);
+				Verts[Idx] = FMath::Lerp(Ruled, Tube, Compress);
 			}
 			UV0[Idx] = FVector2D(static_cast<float>(k) / GRing, T);
 			const FLinearColor RingCol = (WB > 0.0f)
