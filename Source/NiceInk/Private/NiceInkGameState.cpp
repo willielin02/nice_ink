@@ -6,6 +6,8 @@
 ANiceInkGameState::ANiceInkGameState()
 {
 	bReplicates = true;
+	// 引擎預設 10Hz＝相位切換/計時 HUD 最多慢 100ms（07-26 遲鈍根治）
+	SetNetUpdateFrequency(30.0f);
 }
 
 void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const

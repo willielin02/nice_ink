@@ -435,7 +435,9 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	{
 		if (!IsLocallyControlled())
 		{
-			const float K = FMath::Clamp(DeltaSeconds * 12.0f, 0.0f, 1.0f);
+			// 追趕係數 12→20（07-26 遲鈍根治）：τ 83ms→50ms——上報 30Hz＋server
+			// tick 60Hz 後包距縮半，較快的追趕不再顯跳格
+			const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
 			if (bRemoteDrawSnap)
 			{
 				RemoteDrawAzDeg = DrawAimAzDeg;
@@ -921,9 +923,9 @@ void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
 			}
 		}
 
-		// 頭部轉動破綻：臉指向節流上報（閉眼不送＝盲瞄不洩漏）
+		// 頭部轉動破綻：臉指向節流上報（閉眼不送＝盲瞄不洩漏）；30Hz（07-26 20→30）
 		SleepLookSendAccum += DeltaSeconds;
-		if (SleepLookSendAccum >= 0.05f &&
+		if (SleepLookSendAccum >= 0.0333f &&
 			(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentAimAz, SleepAimAzLocal)) > 0.5f ||
 			 FMath::Abs(LastSentAimTilt - SleepAimTiltLocal) > 0.5f))
 		{
@@ -1376,10 +1378,10 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 		AimEuroTilt.Step(SrcTilt, DeltaSeconds, DrawAimFilterMinCutoffHz, DrawAimFilterBeta),
 		DrawTiltMinDeg, DrawTiltMaxDeg);
 
-	// 上報節流（20Hz、變化 >0.5 度）——pattern 同 SleepAim（他端只拿來擺姿，
+	// 上報節流（30Hz、變化 >0.5 度；07-26 20→30）——pattern 同 SleepAim（他端只拿來擺姿，
 	// 送姿勢驅動源＝追趕中送針 aim，他端針視覺與本人一致）
 	DrawAimSendAccum += DeltaSeconds;
-	if (DrawAimSendAccum >= 0.05f &&
+	if (DrawAimSendAccum >= 0.0333f &&
 		(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentDrawAz, SrcAz)) > 0.5f ||
 			FMath::Abs(LastSentDrawTilt - SrcTilt) > 0.5f))
 	{
@@ -2348,6 +2350,10 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	{
 		return; // 首針沒接觸到皮膚＝還沒開筆；下一 tick 首針重試（接觸即墨）
 	}
+	// 本地預測（07-26）：客戶端自己的墨當幀上屏——舊制連本人的墨都等完整來回
+	//（批次 50ms＋RTT＋server tick）＝筆到墨不到的遲鈍主因。與回播嚴格同構
+	//（同 BeginStroke/AddStrokePoint 鏈），回播端以 StrokeSeq 對消防重複蓋章。
+	const bool bLocalEcho = !HasAuthority(); // listen 主機 multicast 同幀本地執行＝已零延遲
 	if (!bStrokeOpen)
 	{
 		StopPaintingLocal();
@@ -2356,7 +2362,16 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		PendingPoints.Reset();
 		PendingFlows.Reset();
 		PointFlushTimer = 0.0f;
-		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte);
+		++LocalStrokeSeq;
+		if (bLocalEcho && Target->InkCanvas)
+		{
+			// 開筆預測：Stencil 強制紫與 server 端同式（稿不吃調色盤）
+			const FLinearColor EchoColor = (SelectedNeedle == EInkNeedle::Stencil)
+				? NiceInkStencil::Color() : FNiceInkPalette::Get(SelectedColorIndex);
+			Target->InkCanvas->BeginStroke(GetInkAuthorId(), EchoColor, DotUVs[0],
+				/*bDotStroke=*/true, SelectedNeedle, FlowByte);
+		}
+		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte, LocalStrokeSeq);
 		DotUVs.RemoveAt(0);
 	}
 	// 筆劃保持開著（節拍未到/原地冪等/空扎都不是抬針）——抬針只由放開左鍵/
@@ -2370,6 +2385,17 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		{
 			PendingFlows.Add(FlowByte);
 		}
+	}
+	if (bLocalEcho && DotUVs.Num() > 0 && Target->InkCanvas)
+	{
+		// 落墨預測：與 MulticastPaintPoints 重播同構（整批一次 RT context）
+		Target->InkCanvas->BeginStampBatchFor(GetInkAuthorId());
+		for (const FVector2D& EchoUv : DotUVs)
+		{
+			Target->InkCanvas->AddStrokePoint(GetInkAuthorId(), EchoUv,
+				SelectedNeedle == EInkNeedle::Shader ? FlowByte : 255);
+		}
+		Target->InkCanvas->EndStampBatch();
 	}
 	PointFlushTimer += DeltaSeconds;
 	if (PendingPoints.Num() > 0 &&
@@ -2435,6 +2461,18 @@ void ANiceInkCharacter::StopPaintingLocal()
 	if (PendingPoints.Num() > 0)
 	{
 		FlushPendingPoints();
+	}
+	if (!HasAuthority())
+	{
+		// 本地預測收筆（回播 End 由對消跳過；server 拒收開筆時這裡收的是
+		// 本地預測那條——冪等）
+		if (ANiceInkCharacter* EchoTarget = PaintTarget.Get())
+		{
+			if (EchoTarget->InkCanvas)
+			{
+				EchoTarget->InkCanvas->EndStroke(GetInkAuthorId());
+			}
+		}
 	}
 	ServerPaintEnd();
 	bPainting = false;
@@ -4115,7 +4153,8 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 		}
 		else
 		{
-			const float K = FMath::Clamp(DeltaSeconds * 12.0f, 0.0f, 1.0f);
+			// 追趕係數 12→20（07-26）：同 draw-aim——頭部破綻旁人要早 30ms 看到
+			const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
 			const float DAz = FMath::FindDeltaAngleDegrees(RemoteAimAzDeg, SleepAimAzDeg);
 			RemoteAimAzDeg = FMath::Fmod(FMath::Fmod(RemoteAimAzDeg + DAz * K, 360.0f) + 360.0f, 360.0f);
 			RemoteAimTiltDeg += (SleepAimTiltDeg - RemoteAimTiltDeg) * K;
@@ -4408,7 +4447,7 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 
 // --- 畫墨 RPC ---
 
-void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow)
+void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq)
 {
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
 	if (!GM || !Target || !GM->CanPaintOn(this, Target))
@@ -4429,7 +4468,7 @@ void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Targe
 	const FLinearColor InkColor = (Needle == EInkNeedle::Stencil)
 		? NiceInkStencil::Color() : FNiceInkPalette::Get(ColorIndex);
 	Target->MulticastPaintBegin(GetInkAuthorId(), InkColor, UV,
-		/*bDotStroke=*/true, Needle, Flow);
+		/*bDotStroke=*/true, Needle, Flow, StrokeSeq);
 }
 
 void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows)
@@ -4487,8 +4526,24 @@ void ANiceInkCharacter::ServerPaintEnd_Implementation()
 
 // --- 畫墨重播 ---
 
-void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle, uint8 Flow)
+void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq)
 {
+	// 本地預測對消（07-26）：StrokeSeq≠0＝作畫者客戶端已預畫整條筆劃——該端
+	// 跳過自己的 Begin/Points/End（半透明針重播=重複蓋章變深）。server 世界
+	//（listen 主機）恆重播；robo/GameMode 直呼恆傳 0＝永不對消（server 發起的
+	// 筆劃沒有任何端預畫過）。reliable multicast 同 actor channel 有序＝集合
+	// 進出與封包順序一致。
+	if (StrokeSeq != 0 && !HasAuthority())
+	{
+		APlayerController* LocalPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+		ANiceInkCharacter* LocalChar = LocalPC ? Cast<ANiceInkCharacter>(LocalPC->GetPawn()) : nullptr;
+		if (LocalChar && LocalChar->IsLocallyControlled() && LocalChar->GetInkAuthorId() == AuthorId)
+		{
+			ReplaySkipAuthors.Add(AuthorId);
+			return;
+		}
+	}
+	ReplaySkipAuthors.Remove(AuthorId);
 	if (InkCanvas)
 	{
 		InkCanvas->BeginStroke(AuthorId, Color, UV, bDotStroke, Needle, Flow);
@@ -4497,6 +4552,10 @@ void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLine
 
 void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, const TArray<FVector2D>& UVs, const TArray<uint8>& Flows)
 {
+	if (ReplaySkipAuthors.Contains(AuthorId))
+	{
+		return; // 作畫者本人：這批已在本地預測時蓋過
+	}
 	if (InkCanvas)
 	{
 		// 批次蓋章：整批只開關一次 RT context（細針點排每點 20 tile、逐點開關
@@ -4513,6 +4572,10 @@ void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, cons
 
 void ANiceInkCharacter::MulticastPaintEnd_Implementation(int32 AuthorId)
 {
+	if (ReplaySkipAuthors.Remove(AuthorId) > 0)
+	{
+		return; // 作畫者本人：本地預測已收筆
+	}
 	if (InkCanvas)
 	{
 		InkCanvas->EndStroke(AuthorId);

@@ -501,8 +501,10 @@ public:
 
 	// Flow/Flows＝逐針出墨流量 0–255（手速→濃淡；Flows 與 UVs 逐索引對齊，
 	// 空陣列=全滿濃度——液線針恆走空陣列省頻寬）
+	// StrokeSeq（07-26 本地預測）：作畫者客戶端遞增的筆劃序號——回播對消用；
+	// 0＝非玩家路徑（robo/GameMode 直呼），永不對消
 	UFUNCTION(Server, Reliable)
-	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow);
+	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq);
 
 	UFUNCTION(Server, Reliable)
 	void ServerPaintPoints(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
@@ -515,9 +517,10 @@ public:
 	// bDotStroke：玩家路徑（ServerPaintBegin）恆 true＝點刺筆劃；
 	// robo 線畫（GameMode DebugRoboStroke）傳 false 保留折線語義。Needle=針型（07-23）；
 	// Flow/Flows=逐針流量（十二版；空陣列=全滿濃度）
+	// StrokeSeq≠0＝作畫者客戶端已本地預測整條筆劃——該端跳過自己的回播（見實作）
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintBegin(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke,
-		EInkNeedle Needle, uint8 Flow);
+		EInkNeedle Needle, uint8 Flow, int32 StrokeSeq);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintPoints(int32 AuthorId, const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
@@ -775,6 +778,15 @@ private:
 	// 作畫中（本地端）
 	bool bPainting = false;
 	TWeakObjectPtr<ANiceInkCharacter> PaintTarget;
+	// 本地預測（07-26 網路遲鈍根治）：客戶端落墨當幀直接蓋本地 RT，不等 server
+	// 來回；LocalStrokeSeq 隨每次開筆遞增、經 ServerPaintBegin 進 multicast——
+	// 作畫者自己的回播整條對消（否則半透明針重複蓋章=變深）。listen 主機不預測
+	//（multicast 同幀本地執行、已零延遲）。代價記帳：server 拒收/令牌桶裁針時
+	// 本人比他端多幾針（相位邊緣競態/外掛才會發生），回合結算全洗歸零。
+	int32 LocalStrokeSeq = 0;
+	// 被畫角色端：目前「回播跳過中」的作者集合（Begin 進、End 出；reliable RPC
+	// 同 channel 有序＝狀態機安全）
+	TSet<int32> ReplaySkipAuthors;
 	TArray<FVector2D> PendingPoints;
 	TArray<uint8> PendingFlows;    // 與 PendingPoints 逐索引對齊（手速→濃淡）
 	uint8 ComputeMistFlowByte() const; // EMA 手速→流量因子（Shader 專用；Liner=255）
