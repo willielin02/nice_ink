@@ -986,10 +986,20 @@ private:
 	// trace 命中但解不到＝aim 回捲到最後可達值——「畫不到」對玩家不存在，域邊界
 	// =游標推不過去的牆。ReachWall*=最後一次解算成功的 aim；FailSecs=自癒計時
 	//（回捲點本身持續解不到＝釋放，寧可自由+舊提示、不可困死）。
+	//（構造牆上線後降級為安全網：表格粒度/內插誤差/域內孤島的兜底。）
 	float ReachWallAz = 0.0f;
 	float ReachWallTilt = 45.0f;
 	bool bReachWallValid = false;
 	float ReachWallFailSecs = 0.0f;
+	// 游標撞牆·構造版（07-28 業界制）：入鎖眼錨定後烘「方位→最深可畫俯角」邊界表，
+	// 輸入層直接鉗位（甦醒臉指向 SleepAimMaxTiltDeg 同模式：約束=事先算好的明確邊界
+	// 在輸入層鉗，不是越界後偵測回彈）——牆=構造保證零抖動。烘焙與活解算同一
+	// FLeanSolveCtx＝同源（恆等式要同源不要巧合）。
+	static constexpr int32 ReachTableAzBins = 24; // 15°/柱，全圓
+	TArray<float> ReachTiltMaxByAz;               // 每柱最深可解 tilt；無牆柱=全域 tilt 上限
+	int32 ReachTableBakedCols = 0;                // 漸進烘焙游標（每 tick 4 柱、~6 tick 烘完）
+	bool bReachTableReady = false;
+	float ReachTableMaxTiltAt(float AzDeg) const; // 柱間線性內插；未烘好=全域上限（無牆）
 	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
 	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
 	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。

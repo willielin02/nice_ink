@@ -1314,7 +1314,9 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	{
 		bHasPendingDebugDrawAim = false;
 		DrawAimAzLocal = FMath::UnwindDegrees(PendingDebugDrawAim.X);
-		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg, DrawTiltMaxDeg);
+		// 構造牆（07-28）：robo 命令同過邊界表——「指得到=畫得到」對測試也成立
+		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg,
+			FMath::Min(DrawTiltMaxDeg, ReachTableMaxTiltAt(DrawAimAzLocal)));
 		TattooNeedleAz = DrawAimAzLocal;
 		TattooNeedleTilt = DrawAimTiltLocal;
 	}
@@ -1325,8 +1327,12 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	// 增益=FOV 縮放後的鎖定靈敏度（開鏡定律：不縮放=游標三倍速）
 	const float Sens = DrawAimSensitivity();
 	DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * Sens);
+	// 構造牆（07-28）：tilt 上限=邊界表（方位內插）——身體搆不到的方向游標推不過去，
+	// 沿牆斜推=az 照走、tilt 貼著 tilt_max(az) 滑（甦醒臉指向同模式、零抖動）。
+	// az 恆自由（看向房間/他的臉不設牆）；每 tick 無條件鉗=表烘完瞬間也把停在
+	// 域外的游標收回牆內。
 	DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * Sens,
-		DrawTiltMinDeg, DrawTiltMaxDeg);
+		DrawTiltMinDeg, FMath::Min(DrawTiltMaxDeg, ReachTableMaxTiltAt(DrawAimAzLocal)));
 	if (bCruise)
 	{
 		// 液線針按住左鍵＝針以 v_max 上限追趕「手的意圖點」（速率所有權歸機器、
@@ -3046,6 +3052,8 @@ void ANiceInkCharacter::OnRep_Lean()
 		bDrawEyeAnchorValid = false;
 		bReachWallValid = false; // 游標撞牆：牆點不跨鎖（新鎖=新域）
 		ReachWallFailSecs = 0.0f;
+		bReachTableReady = false; // 構造牆邊界表同理（眼錨定後重烘）
+		ReachTableBakedCols = 0;
 		// 首鎖視野修（07-27 user 抓「第一次右鍵超近超小視野」）：owner 本地 aim 在
 		// 入鎖時從鎖點幾何播種——server 的 aim 種子寫在 DrawAimAzDeg（COND_SkipOwner
 		// ＝本人收不到），舊制本人沿用上一次的本地 aim（開局首鎖=初始值 az0/tilt45）
@@ -3138,6 +3146,8 @@ void ANiceInkCharacter::OnRep_Lean()
 		bDrawTargetValid = false;
 		bReachWallValid = false;
 		ReachWallFailSecs = 0.0f;
+		bReachTableReady = false;
+		ReachTableBakedCols = 0;
 		ResetBowPose();
 		StopPaintingLocal();
 	}
@@ -3400,6 +3410,138 @@ bool ANiceInkCharacter::WriteBowPoseConverged(const FReferenceSkeleton& Ref, con
 	return WriteErr <= 0.5f;
 }
 
+namespace
+{
+	// 剛臂 3-DOF 前向模型＋Newton 解算核心（07-28 抽出共用）：ApplyBowPose 活解算與
+	// 可達域邊界表烘焙必須同一來源——「恆等式要同源不要巧合」（07-27 墨=P 鐵則的
+	// 解算版）。欄位＝中性姿（未施增量的基準 CS）推導的剛體參考點；方法全 const、
+	// 無副作用（烘焙可任意採樣不污染活解算的暖啟動狀態）。
+	struct FLeanSolveCtx
+	{
+		FVector HipPivot = FVector::ZeroVector;
+		FVector AnklePivot = FVector::ZeroVector;
+		FVector Foot0[2] = { FVector::ZeroVector, FVector::ZeroVector };
+		FVector Toe0[2] = { FVector::ZeroVector, FVector::ZeroVector };
+		FVector Tip0 = FVector::ZeroVector;     // 校準虛擬筆尖（出針口+標稱針長）
+		FVector ExitCS = FVector::ZeroVector;   // 出針口
+		FVector TipDirCS = FVector::ZeroVector; // 單位針軸（離手向）
+		FVector ActorLoc = FVector::ZeroVector;
+		FVector BodyRelLoc = FVector::ZeroVector;
+		FRotator BodyRelRot = FRotator::ZeroRotator;
+		float NeedleNominalCm = 4.0f;
+
+		float GroundDzFor(const FQuat& QH, const FQuat& QA) const
+		{
+			float MinZ = TNumericLimits<float>::Max();
+			for (int32 F = 0; F < 2; ++F)
+			{
+				const FVector Foot1 = HipPivot + QH.RotateVector(Foot0[F] - HipPivot);
+				FVector Toe1 = HipPivot + QH.RotateVector(Toe0[F] - HipPivot);
+				Toe1 = Foot1 + QH.Inverse().RotateVector(Toe1 - Foot1); // 腳反轉＝趾姿不變
+				const FVector Foot2 = AnklePivot + QA.RotateVector(Foot1 - AnklePivot);
+				FVector Toe2 = AnklePivot + QA.RotateVector(Toe1 - AnklePivot);
+				Toe2 = Foot2 + QA.Inverse().RotateVector(Toe2 - Foot2);
+				MinZ = FMath::Min(MinZ,
+					FMath::Min(static_cast<float>(Foot2.Z), static_cast<float>(Toe2.Z)));
+			}
+			return DrawToePadCm - MinZ;
+		}
+		FVector PointCsFor(const FVector& P0, float H, float A) const
+		{
+			const FQuat QH(FVector::XAxisVector, FMath::DegreesToRadians(H));
+			const FQuat QA(FVector::XAxisVector, FMath::DegreesToRadians(A));
+			FVector Pt = HipPivot + QH.RotateVector(P0 - HipPivot);
+			Pt = AnklePivot + QA.RotateVector(Pt - AnklePivot);
+			Pt.Z += GroundDzFor(QH, QA);
+			return Pt;
+		}
+		FVector WorldFor(const FVector& P0, float Psi, float H, float A) const
+		{
+			const FTransform CompW = FTransform(BodyRelRot, BodyRelLoc) *
+				FTransform(FRotator(0.0f, Psi, 0.0f), ActorLoc);
+			return CompW.TransformPosition(PointCsFor(P0, H, A));
+		}
+		// Newton（數值 Jacobian＋Cramer）——與抽出前逐字同構
+		float Solve(const FVector& P, const FVector& SolveTipCS, float PsiIn, float HIn, float AIn,
+			float& PsiOut, float& HOut, float& AOut) const
+		{
+			auto Det3 = [](const FVector& X, const FVector& Y, const FVector& Z)
+			{ return static_cast<float>(FVector::DotProduct(X, FVector::CrossProduct(Y, Z))); };
+			float Psi = PsiIn, H = HIn, A = AIn;
+			for (int32 It = 0; It < 6; ++It)
+			{
+				const FVector T0 = WorldFor(SolveTipCS, Psi, H, A);
+				const FVector R = P - T0;
+				if (R.Size() < 0.25f)
+				{
+					break;
+				}
+				constexpr float D = 0.75f;
+				const FVector J0 = (WorldFor(SolveTipCS, Psi + D, H, A) - T0) / D;
+				const FVector J1 = (WorldFor(SolveTipCS, Psi, H + D, A) - T0) / D;
+				const FVector J2 = (WorldFor(SolveTipCS, Psi, H, A + D) - T0) / D;
+				const float Den = Det3(J0, J1, J2);
+				if (FMath::Abs(Den) < KINDA_SMALL_NUMBER)
+				{
+					break;
+				}
+				Psi += FMath::Clamp(Det3(R, J1, J2) / Den, -25.0f, 25.0f);
+				H = FMath::Clamp(H + FMath::Clamp(Det3(J0, R, J2) / Den, -25.0f, 25.0f),
+					-DrawHipDeltaClampDeg, DrawHipDeltaClampDeg);
+				A = FMath::Clamp(A + FMath::Clamp(Det3(J0, J1, R) / Den, -25.0f, 25.0f),
+					-DrawAnkleDeltaClampDeg, DrawAnkleDeltaClampDeg);
+			}
+			PsiOut = Psi;
+			HOut = H;
+			AOut = A;
+			return (P - WorldFor(SolveTipCS, Psi, H, A)).Size();
+		}
+		// 靜態可行性（烘焙用）：暖啟動→乾淨重啟→伸針族，任一族解到即可；
+		// 無連續性/限速（那些是活姿勢的抗抖層，不屬於「解不解得到」）
+		bool Feasible(const FVector& P, float AzHint, float& IoPsi, float& IoHip, float& IoAnkle) const
+		{
+			float Psi, H, A;
+			float Res = Solve(P, Tip0, IoPsi, IoHip, IoAnkle, Psi, H, A);
+			if (Res > DrawTipSolveTolCm)
+			{
+				float Psi2, H2, A2;
+				const float Res2 = Solve(P, Tip0, AzHint, 0.0f, 0.0f, Psi2, H2, A2);
+				if (Res2 < Res)
+				{
+					Res = Res2;
+					Psi = Psi2;
+					H = H2;
+					A = A2;
+				}
+			}
+			if (Res <= DrawTipSolveTolCm)
+			{
+				IoPsi = Psi;
+				IoHip = H;
+				IoAnkle = A;
+				return true;
+			}
+			float PsiE = Psi, HE = H, AE = A, ResE = Res;
+			for (int32 Outer = 0; Outer < 2; ++Outer)
+			{
+				const float LenE = FMath::Clamp(
+					static_cast<float>((P - WorldFor(ExitCS, PsiE, HE, AE)).Size()),
+					NeedleNominalCm, 300.0f);
+				const FVector SolveTip = ExitCS + TipDirCS * LenE;
+				ResE = Solve(P, SolveTip, PsiE, HE, AE, PsiE, HE, AE);
+			}
+			if (ResE <= DrawTipSolveTolCm)
+			{
+				IoPsi = PsiE;
+				IoHip = HE;
+				IoAnkle = AE;
+				return true;
+			}
+			return false;
+		}
+	};
+}
+
 void ANiceInkCharacter::ApplyBowPose()
 {
 	// 直接畫制作畫姿（2026-07-18 user 定案）：基準＝使用者手擺的站立前傾
@@ -3421,7 +3563,9 @@ void ANiceInkCharacter::ApplyBowPose()
 	const bool bAimMoved =
 		FMath::Abs(FMath::FindDeltaAngleDegrees(Az, LastAppliedDrawAz)) >= DirtyThresholdDeg ||
 		FMath::Abs(Tilt - LastAppliedDrawTilt) >= DirtyThresholdDeg;
-	if (!bLeanPoseDirty && !bAimMoved)
+	// 邊界表未烘完前不早退（烘焙塊住在解算段內、需要 Ctx；aim 靜止的重跑無害）
+	const bool bBakePending = IsLocallyControlled() && bDrawEyeAnchorValid && !bReachTableReady;
+	if (!bLeanPoseDirty && !bAimMoved && !bBakePending)
 	{
 		return;
 	}
@@ -3501,54 +3645,38 @@ void ANiceInkCharacter::ApplyBowPose()
 	float AnkleDeg = DrawSolveAnkleDeg;
 	if (bSolverReady)
 	{
-		const FVector Tip0 = CS[GripBoneIdx].GetLocation() +
+		// 解算核心＝共用 Ctx（07-28 抽出：活解算與可達域烘焙同源，見 FLeanSolveCtx；
+		// 前向模型與下方套用步驟逐步同構——Hips 剛轉→腳反轉→踝搖→腳反轉→落地）
+		FLeanSolveCtx Ctx;
+		Ctx.HipPivot = HipPivot;
+		Ctx.AnklePivot = AnklePivot;
+		Ctx.Foot0[0] = CS[LFootIdx].GetLocation();
+		Ctx.Foot0[1] = CS[RFootIdx].GetLocation();
+		Ctx.Toe0[0] = LToeIdx != INDEX_NONE ? CS[LToeIdx].GetLocation() : Ctx.Foot0[0];
+		Ctx.Toe0[1] = RToeIdx != INDEX_NONE ? CS[RToeIdx].GetLocation() : Ctx.Foot0[1];
+		Ctx.Tip0 = CS[GripBoneIdx].GetLocation() +
 			CS[GripBoneIdx].GetRotation().RotateVector(PenTipLocalCm);
-		const FVector Foot0[2] = { CS[LFootIdx].GetLocation(), CS[RFootIdx].GetLocation() };
-		const FVector Toe0[2] = {
-			LToeIdx != INDEX_NONE ? CS[LToeIdx].GetLocation() : Foot0[0],
-			RToeIdx != INDEX_NONE ? CS[RToeIdx].GetLocation() : Foot0[1] };
-
-		// 前向模型：與下方套用步驟逐步同構（Hips 剛轉→腳反轉→踝搖→腳反轉→落地）；
-		// PointCsFor 可追蹤任意剛體點（筆尖=解算目標、頭=解析眼錨點）
-		auto GroundDzFor = [&](const FQuat& QH, const FQuat& QA) -> float
-		{
-			float MinZ = TNumericLimits<float>::Max();
-			for (int32 F = 0; F < 2; ++F)
-			{
-				const FVector Foot1 = HipPivot + QH.RotateVector(Foot0[F] - HipPivot);
-				FVector Toe1 = HipPivot + QH.RotateVector(Toe0[F] - HipPivot);
-				Toe1 = Foot1 + QH.Inverse().RotateVector(Toe1 - Foot1); // 腳反轉＝趾姿不變
-				const FVector Foot2 = AnklePivot + QA.RotateVector(Foot1 - AnklePivot);
-				FVector Toe2 = AnklePivot + QA.RotateVector(Toe1 - AnklePivot);
-				Toe2 = Foot2 + QA.Inverse().RotateVector(Toe2 - Foot2);
-				MinZ = FMath::Min(MinZ,
-					FMath::Min(static_cast<float>(Foot2.Z), static_cast<float>(Toe2.Z)));
-			}
-			return DrawToePadCm - MinZ;
-		};
+		// 解算目標點＝虛擬筆尖（出針口+標稱針長）；伸針解（2026-07-21）會沿針軸外推
+		Ctx.TipDirCS = (Ctx.Tip0 - CS[GripBoneIdx].GetLocation()) / FMath::Max(PenTipAheadCm, 1.0f);
+		Ctx.ExitCS = Ctx.Tip0 - Ctx.TipDirCS * PenNeedleNominalCm;
+		Ctx.ActorLoc = GetActorLocation();
+		Ctx.BodyRelLoc = BodyStandRelLoc;
+		Ctx.BodyRelRot = BodyStandRelRot;
+		Ctx.NeedleNominalCm = PenNeedleNominalCm;
+		const FVector Tip0 = Ctx.Tip0;
+		const FVector ExitCS = Ctx.ExitCS;
+		const FVector TipDirCS = Ctx.TipDirCS;
+		FVector SolveTipCS = Tip0;
 		auto PointCsFor = [&](const FVector& P0, float H, float A) -> FVector
 		{
-			const FQuat QH(FVector::XAxisVector, FMath::DegreesToRadians(H));
-			const FQuat QA(FVector::XAxisVector, FMath::DegreesToRadians(A));
-			FVector Pt = HipPivot + QH.RotateVector(P0 - HipPivot);
-			Pt = AnklePivot + QA.RotateVector(Pt - AnklePivot);
-			Pt.Z += GroundDzFor(QH, QA);
-			return Pt;
+			return Ctx.PointCsFor(P0, H, A);
 		};
-		// 解算目標點＝虛擬筆尖（出針口+標稱針長）；伸針解（2026-07-21）會沿針軸外推
-		const FVector GripLocCS = CS[GripBoneIdx].GetLocation();
-		const FVector TipDirCS = (Tip0 - GripLocCS) / FMath::Max(PenTipAheadCm, 1.0f); // 單位針軸（離手向）
-		const FVector ExitCS = Tip0 - TipDirCS * PenNeedleNominalCm;                   // 出針口
-		FVector SolveTipCS = Tip0;
-		auto TipCsFor = [&](float H, float A) -> FVector { return PointCsFor(SolveTipCS, H, A); };
 		const FVector Head0 = (HeadBoneIdx != INDEX_NONE)
 			? CS[HeadBoneIdx].GetLocation() : FVector::ZeroVector;
-		const FVector ActorLoc = GetActorLocation();
+		const FVector ActorLoc = Ctx.ActorLoc;
 		auto TipWorldFor = [&](float Psi, float H, float A) -> FVector
 		{
-			const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
-				FTransform(FRotator(0.0f, Psi, 0.0f), ActorLoc);
-			return CompW.TransformPosition(TipCsFor(H, A));
+			return Ctx.WorldFor(SolveTipCS, Psi, H, A);
 		};
 
 		// P 取得：aim 動了才重新 trace；aim 靜止下的重跑（寫入收斂等）沿用快取 P。
@@ -3583,8 +3711,6 @@ void ANiceInkCharacter::ApplyBowPose()
 		{
 			DrawTargetMissSecs = 0.0f;
 			const FVector P = DrawTargetWorld;
-			auto Det3 = [](const FVector& X, const FVector& Y, const FVector& Z)
-			{ return static_cast<float>(FVector::DotProduct(X, FVector::CrossProduct(Y, Z))); };
 			// 連續性紀錄（07-26 抖動根治）：「身體彎到」與「伸針補深度」兩族解都合法時
 			// 選離上一 tick 姿勢最近的——族間互換曾以 hip 30° 級瞬跳每秒發生（探針實錘）
 			const float PrevPsi = DrawSolveYawDeg;
@@ -3596,38 +3722,12 @@ void ANiceInkCharacter::ApplyBowPose()
 				return FMath::Abs(FMath::FindDeltaAngleDegrees(Ps, PrevPsi)) +
 					FMath::Abs(Hh - PrevHip) + FMath::Abs(Aa - PrevAnkle);
 			};
-			// Newton（數值 Jacobian＋Cramer）：暖啟動=上次解；失敗再從乾淨初值重解一次
-			//（proxy 首幀的壞暖啟動會把 Newton 掐死在鉗位角落——07-20 探針實錘）
+			// Newton 本體在 Ctx.Solve（共用核心）；暖啟動=上次解；失敗再從乾淨初值重解
+			//（proxy 首幀的壞暖啟動會把 Newton 掐死在鉗位角落——07-20 探針實錘）。
+			// SolveTipCS 由伸針迴圈改寫＝此包裝的唯一活變數。
 			auto Solve = [&](float PsiIn, float HIn, float AIn, float& PsiOut, float& HOut, float& AOut) -> float
 			{
-				float Psi = PsiIn, H = HIn, A = AIn;
-				for (int32 It = 0; It < 6; ++It)
-				{
-					const FVector T0 = TipWorldFor(Psi, H, A);
-					const FVector R = P - T0;
-					if (R.Size() < 0.25f)
-					{
-						break;
-					}
-					constexpr float D = 0.75f;
-					const FVector J0 = (TipWorldFor(Psi + D, H, A) - T0) / D;
-					const FVector J1 = (TipWorldFor(Psi, H + D, A) - T0) / D;
-					const FVector J2 = (TipWorldFor(Psi, H, A + D) - T0) / D;
-					const float Den = Det3(J0, J1, J2);
-					if (FMath::Abs(Den) < KINDA_SMALL_NUMBER)
-					{
-						break;
-					}
-					Psi += FMath::Clamp(Det3(R, J1, J2) / Den, -25.0f, 25.0f);
-					H = FMath::Clamp(H + FMath::Clamp(Det3(J0, R, J2) / Den, -25.0f, 25.0f),
-						-DrawHipDeltaClampDeg, DrawHipDeltaClampDeg);
-					A = FMath::Clamp(A + FMath::Clamp(Det3(J0, J1, R) / Den, -25.0f, 25.0f),
-						-DrawAnkleDeltaClampDeg, DrawAnkleDeltaClampDeg);
-				}
-				PsiOut = Psi;
-				HOut = H;
-				AOut = A;
-				return (P - TipWorldFor(Psi, H, A)).Size();
+				return Ctx.Solve(P, SolveTipCS, PsiIn, HIn, AIn, PsiOut, HOut, AOut);
 			};
 			float Psi, HOut, AOut;
 			float Res = Solve(DrawSolveYawDeg, HipDeg, AnkleDeg, Psi, HOut, AOut);
@@ -3656,9 +3756,7 @@ void ANiceInkCharacter::ApplyBowPose()
 			{
 				auto ExitWorldFor = [&](float PsiE, float HE, float AE) -> FVector
 				{
-					const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
-						FTransform(FRotator(0.0f, PsiE, 0.0f), ActorLoc);
-					return CompW.TransformPosition(PointCsFor(ExitCS, HE, AE));
+					return Ctx.WorldFor(ExitCS, PsiE, HE, AE);
 				};
 				// 上 tick 在伸針族＝從上 tick 姿勢起解（族內連續——從身體解起步會被
 				// 剛跳完 30° 的身體解污染）；否則照舊從身體解起
@@ -3837,6 +3935,46 @@ void ANiceInkCharacter::ApplyBowPose()
 		}
 		DrawSolveHipDeg = HipDeg;
 		DrawSolveAnkleDeg = AnkleDeg;
+
+		// 可達域邊界表·漸進烘焙（07-28 構造牆）：眼錨定成立後每 tick 烘 4 柱
+		//（24 柱×15° 全圓、每柱 tilt 由淺至深 3° 掃描）→「方位→最深可畫俯角」表；
+		// 輸入層鉗位在 PollDrawAim（甦醒 SleepAimMaxTiltDeg 同模式）＝牆構造上零抖動。
+		// 未命中受害者的方向（房間/地板）與無可畫 tilt 的柱＝DrawTiltMaxDeg（不設牆
+		// ——看向房間的自由不動）；柱間線性內插＝牆向域外平滑淡出。掃描用柱內暖啟動
+		//（=玩家滑入邊界的鏡像、只在可行時前進）；表格粒度/內插誤差/域內孤島由
+		// 回捲安全網兜底。眼錨定與受害者姿勢皆鎖內常數＝表整鎖有效（翻身會強退鎖）。
+		if (IsLocallyControlled() && bDrawEyeAnchorValid && !bReachTableReady)
+		{
+			if (ReachTiltMaxByAz.Num() != ReachTableAzBins)
+			{
+				ReachTiltMaxByAz.Init(DrawTiltMaxDeg, ReachTableAzBins);
+			}
+			const float AzStep = 360.0f / ReachTableAzBins;
+			for (int32 Baked = 0; Baked < 4 && ReachTableBakedCols < ReachTableAzBins; ++Baked)
+			{
+				const int32 K = ReachTableBakedCols++;
+				const float AzK = K * AzStep;
+				float HiTilt = -1000.0f;
+				float WPsi = AzK, WHip = 0.0f, WAnk = 0.0f;
+				for (float T = DrawTiltMinDeg; T <= DrawTiltMaxDeg + 0.01f; T += 3.0f)
+				{
+					FVector Impact;
+					if (!TraceAimToTarget(FRotator(-T, AzK, 0.0f).Vector(), Impact))
+					{
+						continue;
+					}
+					if (Ctx.Feasible(Impact, AzK, WPsi, WHip, WAnk))
+					{
+						HiTilt = T; // 掃描遞增 ⇒ 最後一個可行樣本＝最深
+					}
+				}
+				ReachTiltMaxByAz[K] = (HiTilt > -999.0f) ? HiTilt : DrawTiltMaxDeg;
+			}
+			if (ReachTableBakedCols >= ReachTableAzBins)
+			{
+				bReachTableReady = true;
+			}
+		}
 	}
 	else
 	{
@@ -3959,6 +4097,25 @@ void ANiceInkCharacter::ApplyBowPose()
 	{
 		bLeanPoseDirty = true; // 本 tick 沒收斂＝下 tick 續寫（髒檢查不得凍結半收斂姿勢）
 	}
+}
+
+float ANiceInkCharacter::ReachTableMaxTiltAt(float AzDeg) const
+{
+	// 構造牆查表（07-28）：柱間線性內插；未烘好=全域上限（無牆——安全網照兜）
+	if (!bReachTableReady || ReachTiltMaxByAz.Num() != ReachTableAzBins)
+	{
+		return DrawTiltMaxDeg;
+	}
+	const float Step = 360.0f / ReachTableAzBins;
+	float A = FMath::Fmod(AzDeg, 360.0f);
+	if (A < 0.0f)
+	{
+		A += 360.0f;
+	}
+	const float F = A / Step;
+	const int32 K0 = FMath::Min(static_cast<int32>(F), ReachTableAzBins - 1);
+	const int32 K1 = (K0 + 1) % ReachTableAzBins;
+	return FMath::Lerp(ReachTiltMaxByAz[K0], ReachTiltMaxByAz[K1], F - static_cast<float>(K0));
 }
 
 bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV)
