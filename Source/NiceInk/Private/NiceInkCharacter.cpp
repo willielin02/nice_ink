@@ -4041,9 +4041,11 @@ void ANiceInkCharacter::ApplyBowPose()
 				}
 				if (ReachBakePhase >= 2 && !bReachMaskReady)
 				{
-					// 去斑（3×3 多數決 ×2）：邊際帶的解算殘差在容差上下擲硬幣＝
-					// 鹽胡椒斑；多數決把零星斑併入周圍＝乾淨連續邊界。遮罩=標記與
-					// 收筆的唯一權威，這條邊就是玩家看到且感受到的可畫邊界。
+					// 去斑（只殺孤立點 ×2；07-29 二版）：初版 3×3 多數決把「細長的真
+					// 標記帶」（皺摺帶寬僅 1~2 格）整條當雜訊抹除＝user 抓「完全沒看到
+					// 標記」。改成：8 鄰中同值 ≤1 個＝真孤立雜點才翻面——鹽胡椒消失、
+					// 細帶保留（帶上每格沿帶方向至少有 2 個同值鄰）。遮罩=標記與收筆的
+					// 唯一權威，濾波動它=同時動視覺與行為，寧保守勿吃真相。
 					for (int32 Pass = 0; Pass < 2; ++Pass)
 					{
 						const TArray<uint8> Src = ReachMaskData;
@@ -4051,15 +4053,23 @@ void ANiceInkCharacter::ApplyBowPose()
 						{
 							for (int32 X = 1; X < Fine - 1; ++X)
 							{
-								int32 NumVeil = 0;
+								const uint8 Self = Src[Y * Fine + X];
+								int32 NumSame = 0;
 								for (int32 Dy = -1; Dy <= 1; ++Dy)
 								{
 									for (int32 Dx = -1; Dx <= 1; ++Dx)
 									{
-										NumVeil += Src[(Y + Dy) * Fine + (X + Dx)] >= 128 ? 1 : 0;
+										if (Dy == 0 && Dx == 0)
+										{
+											continue;
+										}
+										NumSame += Src[(Y + Dy) * Fine + (X + Dx)] == Self ? 1 : 0;
 									}
 								}
-								ReachMaskData[Y * Fine + X] = NumVeil >= 5 ? 255 : 0;
+								if (NumSame <= 1)
+								{
+									ReachMaskData[Y * Fine + X] = Self >= 128 ? 0 : 255;
+								}
 							}
 						}
 					}
