@@ -1136,3 +1136,30 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
       orbit/feign/maze 於顯示制中間建置全綠（其後改動僅 HUD/summary 欄位）。
 - [ ] user viewport：邊界線/暗紗讀感（線=紅、紗=黑 α0.30 全部可調）、收筆-復筆
       手感、表烘焙 ~0.1s 內邊界短暫不顯示是否可感。
+
+### 07-29 續：veil 改制＝皮膚 UV 遮罩殼（user 三問定罪螢幕紗：蓋到地板／紗內可畫／
+真不可畫沒紗）
+
+螢幕空間紗退役（蓋非皮膚＋與收筆閘兩套來源互相說謊）→標記烘在皮膚 UV0 上：
+
+- [x] M_ReachVeil（ue_make_reachveil_material.py 程式化生成）：Unlit 半透明黑、
+      Opacity=ReachMask.R×VeilStrength(0.38)、WPO 法線外推 2.5mm；不動 M_InkBodyChar
+      （定案 #37 承重材質零風險）。
+- [x] veil 殼＝作畫者 client 本地元件（同網格疊在受害者 Body 上、不複製）；
+      遮罩貼圖 256²=UV0 圖集空間 transient 上傳。
+- [x] 烘焙＝粗到細（64² 粗掃→只細化 0↔255 真邊界格）＋每 tick 5ms 預算
+      （全解析度直掃=5fps 實錘）；粗版 ~0.3s 先上屏、細化 ~1s 收斂。
+- [x] 四隻蟲（全部儀器實錘、逐隻定罪）：①UV 島邊污染細化清單（島外與可畫同值
+      →三態 0/255/128）②烘焙可行性 6 步 Newton 冷啟動走不到解（活解算跨 tick 暖
+      啟動=迭代無限；bake 一次性→16 步）③**匯入網格 cross 法線朝內**＝背面剔除
+      殺光正面（dotFace=-0.91 於可畫鎖點；修=鎖點自校準符號——繞向不猜鐵則）
+      ④活解算重啟每 tick 從同一起點 6 步=不累積→升 16 步與遮罩對齊（順手擴大
+      實際可達域）。
+- [x] 儀器鏈：VEILMASK 鎖點對照（mask/往返/法線/可行性 vs live reach 逐項分解）＋
+      reachmask_dump.pgm 傾印＋veilshot 雙角度（正對＋深俯角讓邊界入鏡）。
+- [x] 驗證：鎖點 mask=0 與 liveReach=1 一致＋veilshot 正對視野全亮（無假紗）＋
+      深俯角出現暗紗與 out-of-reach 提示同步＋directdraw 72/0＋orbit 24/0＋
+      feign 26/0＋maze 15/0。
+- [ ] user viewport：紗只出現在皮膚上、界內永不誤暗、紗邊與收筆位置的吻合度；
+      VeilStrength 0.38/顏色可調。記帳：烘焙 16 步 vs 活暖鏈在極刁鑽點仍可能有
+      細縫（構造上兩者已同 solver 同預算、縫寬應在筆寬級）。

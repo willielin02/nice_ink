@@ -115,9 +115,6 @@ public:
 	// 搆不到已持續秒數（有目標但筆搆不著才累積；看向房間不算）——HUD 提示閘
 	float GetDrawUnreachableSeconds() const { return DrawUnreachSecs; }
 
-	// 可畫域邊界查詢（HUD 顯示用；07-28 顯示制）：該方位的最深可畫俯角。
-	// false=表未烘好或該方位無邊界（未命中身體/整段可畫）＝不畫標記
-	bool GetReachBoundaryTilt(float AzDeg, float& OutTiltMax) const;
 
 	// 作畫者 ghost 材質（直接畫制：畫畫時除自己與沉睡者外，其餘人半透明＋可穿過）
 	UPROPERTY(Transient)
@@ -986,15 +983,27 @@ private:
 	// One Euro 濾波處理：靜止強濾抖、快掃近零滯後；姿勢=濾波 aim 的直接解）
 	bool bDrawTipReachable = false;    // 本 tick 筆尖可達（落墨閘）
 	float DrawTipResidualCm = -1.0f;   // 解算殘差（診斷/robo）
-	// 可達域邊界表（07-28；顯示制 user 定案「標記出來、永不干擾游標」——回捲牆與
-	// 輸入鉗位全退役）：入鎖眼錨定後烘「方位→最深可畫俯角」表（與活解算同一
-	// FLeanSolveCtx＝同源）。消費者=①HUD 邊界線+界外暗紗（DrawReachVeil）
-	// ②筆的收筆閘（UpdatePenVisual：界外=沒按左鍵的樣子）；游標本身永不被動。
-	static constexpr int32 ReachTableAzBins = 24; // 15°/柱，全圓
-	TArray<float> ReachTiltMaxByAz;               // 每柱最深可解 tilt；無牆柱=全域 tilt 上限
-	int32 ReachTableBakedCols = 0;                // 漸進烘焙游標（每 tick 4 柱、~6 tick 烘完）
-	bool bReachTableReady = false;
-	float ReachTableMaxTiltAt(float AzDeg) const; // 柱間線性內插；未烘好=全域上限（無牆）
+	// 可畫域皮膚遮罩（07-29 三改制＝user 抓螢幕紗三病：蓋到地板/紗內可畫/真不可畫
+	// 沒紗——標記必須畫在皮膚上且與收筆同源）：入鎖眼錨定後對受害者 UV0 網格逐點
+	// 問同一個 FLeanSolveCtx（可見性＋可解性）→烘遮罩貼圖→本地 veil 殼（同網格
+	// +法線外推 2.5mm+M_ReachVeil 半透明黑）疊在受害者身上。殼只存在於作畫者自己
+	// 的 client（不複製）；游標本身永不被動（收筆閘=UpdatePenVisual）。
+	static constexpr int32 ReachMaskRes = 256;    // 圖集 UV0 空間；~2.6cm/texel＋雙線性
+	static constexpr int32 ReachMaskCoarse = 64;  // 粗掃網格（4×4 texel/格）
+	TArray<uint8> ReachMaskData;
+	TArray<uint8> ReachCoarseVal;
+	TArray<int32> ReachRefineCells;               // 粗掃後值不一致的邊界格＝細化清單
+	int32 ReachBakePhase = 0;                     // 0=粗掃 1=邊界細化 2=完成
+	int32 ReachBakeIdx = 0;
+	float ReachBakeFaceSign = 1.0f;               // 法線朝向自校準（鎖點=已知面向眼錨；
+	                                              // 繞向不猜——匯入網格法線實測朝內）
+	bool bReachMaskReady = false;
+	UPROPERTY(Transient) TObjectPtr<UTexture2D> ReachMaskTex;
+	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ReachVeilShell;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> ReachVeilMID;
+	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ReachVeilMaterial; // M_ReachVeil lazy load
+	void UpdateReachVeilShell();  // 遮罩烘完＝上傳貼圖+掛殼
+	void ClearReachVeilShell();   // 出鎖/重鎖＝收殼+重置烘焙
 	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
 	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
 	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。

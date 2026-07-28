@@ -130,10 +130,16 @@ class Probe:
             log(f"enter lean -> {host.call_method('DebugRoboEnterLean', (victim, p, n))}")
             self.advance("settle")
         elif s == "settle":
-            if self.elapsed() < 3.0:
-                return  # 眼錨定+表烘完（~0.1s）+姿勢沉降
+            if self.elapsed() < 2.0:
+                return  # 眼錨定+姿勢沉降
             host = find_char(self.server(), self.host_pid)
-            log("RAW " + str(host.call_method("DebugLeanSummary", ())))
+            raw = str(host.call_method("DebugLeanSummary", ()))
+            if "maskOn=1" not in raw:
+                if self.elapsed() > 30.0:
+                    log("FAIL mask never finished: " + raw)
+                    self.finish()
+                return  # 等遮罩烘完（粗掃+邊界細化）
+            log("RAW " + raw)
             focus_pie()
             self.advance("shot")
         elif s == "shot":
@@ -142,6 +148,23 @@ class Probe:
             # HighResShot 1＝視窗原生尺寸（1280x720 的縱橫比≠視窗＝HUD 投影被裁）
             unreal.SystemLibrary.execute_console_command(
                 self.server(), "HighResShot 1 filename=veilshot_belly")
+            self.advance("aim_down")
+        elif s == "aim_down":
+            if self.elapsed() < 1.0:
+                return
+            # 朝大腿方向壓到深俯角＝把可畫域邊界（暗紗起點）拉進畫面存證
+            host = find_char(self.server(), self.host_pid)
+            d = str(host.call_method("DebugLeanSummary", ()))
+            import re as _re
+            m = _re.search(r"az=(-?[\d.]+)", d)
+            az = float(m.group(1)) if m else 0.0
+            host.call_method("DebugRoboDrawAim", (az, 75.0))
+            self.advance("shot_down")
+        elif s == "shot_down":
+            if self.elapsed() < 1.2:
+                return
+            unreal.SystemLibrary.execute_console_command(
+                self.server(), "HighResShot 1 filename=veilshot_downtilt")
             self.advance("done")
         elif s == "done":
             if self.elapsed() < 2.0:
