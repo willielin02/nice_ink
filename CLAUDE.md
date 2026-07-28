@@ -185,7 +185,15 @@
   （lean-lock 埋頭＝弦長 1.6cm＋彎 30° 在管面解算器設計域外→喉摺 111°/後頸凸；弦長
   4~12cm 交叉回管面＝沉睡 46cm 零改動）＋隱藏判定改縫寬（環心距誤殺＝後頸破洞）；
   探針=robo_neckdraw_probe.py；directdraw 72/0＋orbit/feign/maze 迴歸綠；
-  **未了（user 已點名）：作畫者全身抖動（位置閃爍）＋筆尖與出墨不對齊（延長不及時）。**
+  **＋07-26~28 六輪修（BUILT-自驗未提交待 viewport）**：抖動根治（owner 端就跳=解算層；
+  髖跳 23→2.4cm）＋稿筆骨軸 19cm（user 逐字定案）＋首鎖 aim 播種＋稿筆墨=P（凹凸修）；
+  儀器=robo_remotejitter_probe.py/robo_reachmap_probe.py；directdraw 72/0＋全迴歸綠。
+  **其後的眉心相機工程（相機還原→VOR→姿勢主導→P-游標→穩定化）四輪交付四輪被
+  user 打回＝全批退回動工前（07-28 終局裁決）**：實驗全史+分析資產在分支
+  `wip/brow-camera-experiments`（c6abc56）——重啟前必讀（視差搖機理/迭代震盪/
+  robo 橋接鐵則，全文=記憶 project_drawpose_jitter_fix.md）。**現行相機=07-20
+  眼錨定（入鎖凍結）＝user 知情選擇；與 SPEC #44 矛盾未解、勘誤與否待 user。**
+  已知未了：大腿等陡俯區搆不到（reach 域 +6° 懸崖、診斷在 reachmap 探針）。
 
 ## 收尾紀律
 

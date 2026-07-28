@@ -412,8 +412,17 @@ public:
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink|Lean")
 	float DrawAimTiltDeg = 45.0f;
 
+	// 作畫目標點 P＝擁有端真相（07-26 抖動根治）：他端不再自己 trace P——本地 trace
+	// 用「追趕中的 aim＋他端解出的眼位」重推，貼剪影邊緣間歇 miss＝整身甩姿閃爍、
+	// 針長鞭打、筆尖與墨兩套真相。改制＝P 隨 aim 上報，他端追趕本複製值＝與墨同源。
+	UPROPERTY(Replicated)
+	FVector_NetQuantize DrawTargetRepW;
+
+	UPROPERTY(Replicated)
+	bool bDrawTargetRepValid = false;
+
 	UFUNCTION(Server, Unreliable)
-	void ServerUpdateDrawAim(float AzDeg, float TiltDeg);
+	void ServerUpdateDrawAim(float AzDeg, float TiltDeg, FVector_NetQuantize TargetW, bool bTargetValid);
 
 	// 無聲甦醒（定案 #8）：走出迷宮出口後睜眼。零系統提示——
 	// 其他玩家能觀察到的破綻＝睜眼貼圖＋頭部轉動（睡姿替身驅動，2026-07-15）。
@@ -849,6 +858,15 @@ private:
 	float RemoteDrawAzDeg = 0.0f;
 	float RemoteDrawTiltDeg = 45.0f;
 	bool bRemoteDrawSnap = true;
+	// 他端 P 追趕值（07-26：DrawTargetRepW 的顯示平滑——與 aim 同節奏）
+	FVector RemoteDrawTargetW = FVector::ZeroVector;
+	// 上報節流的 P 有效旗標邊緣（aim 靜止但 P 有效性翻轉也要送）
+	bool bLastSentTargetValid = false;
+	// trace miss 寬限（07-26 抖動根治）：貼剪影邊緣的間歇 miss 曾直接 yaw=Az＝
+	// 整身甩 20° 再甩回；寬限內姿勢凍結、持續 miss 才額定速率轉向 aim
+	float DrawTargetMissSecs = 0.0f;
+	// 應用層姿勢限速的熱身旗標（入鎖首解硬切、之後 120°/s）
+	bool bDrawPoseWarm = false;
 
 	// One Euro 濾波（Casiez 2012；筆即游標 07-20 定案）：本人 aim 的速度自適應低通。
 	// 姿勢/筆/墨全吃濾波值（DrawAim*Filt）、相機吃生值——濾一次、下游一致。

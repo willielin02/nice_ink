@@ -181,10 +181,14 @@ class Probe:
             if self.shot_i == 0:
                 cam = unreal.Vector(hloc.x + back.x * 130.0, hloc.y + back.y * 130.0, hloc.z + 95.0)
                 tag = "nape"
-            else:
+            elif self.shot_i == 1:
                 cam = unreal.Vector(hloc.x - back.x * 110.0 - back.y * 60.0,
                                     hloc.y - back.y * 110.0 + back.x * 60.0, hloc.z - 15.0)
                 tag = "throat"
+            else:
+                # 側面機位（垂直於背向）：張開/互穿過渡帶的摺痕在這裡最可見
+                cam = unreal.Vector(hloc.x - back.y * 120.0, hloc.y + back.x * 120.0, hloc.z + 35.0)
+                tag = "side"
             host = self.host_char()
             pc = unreal.GameplayStatics.get_player_controller(self.server(), 0)
             host.set_actor_location(cam, False, True)
@@ -195,7 +199,7 @@ class Probe:
             unreal.SystemLibrary.execute_console_command(
                 self.server(), f"HighResShot 1280x720 filename=neckdraw_{name}_{tag}")
             self.shot_i += 1
-            if self.shot_i >= 2:
+            if self.shot_i >= 3:
                 self.advance("next")
         elif s == "next":
             if self.elapsed() < 2.0:
