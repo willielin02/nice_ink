@@ -1109,3 +1109,30 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
   註解全毀→git checkout 還原＋回歸 Edit/bash append 流程。ini 完好已驗。
 - [ ] user viewport：牆手感（壓著推=游標穩穩停在邊界、零顫）；範圍仍嫌小再開
       鉗位加寬刀。
+
+### 07-28~29 顯示制終案（user 定案逐字：「不需要做彈回效果（真的很惱人，且會讓人
+畫到不想畫的地方），就把不能畫的地方標記出來，在那些地方收筆（也就是沒有按下左鍵
+的狀態），之後再伸回來（如果對方還按著左鍵的話），永遠不要去干擾玩家畫筆的移動」）
+
+構造牆的鉗位版仍在表/活解算邊界縫隙跳針（user 抓）→第三次改制＝顯示制：
+
+- [x] 回捲牆＋輸入鉗位**全退役**（游標任何時刻不被系統動一根手指）。
+- [x] 不可畫區＝**收筆**：稿筆回懸筆樣、刺青機收針樁（UpdatePenVisual 兩處
+      bTrig&&bDrawTipReachable）；墨鏈本來就是電平觸發（每 tick bWantsPaint+reach）
+      ＝穿過死區筆劃自動分段、回域內左鍵仍按著自動復筆——復筆零新機制。
+- [x] **HUD 邊界標記（DrawReachVeil）**：入鎖預烘表（24 柱同源 FLeanSolveCtx）投影
+      成螢幕邊界線（Red token）＋界外半透明暗紗（黑 α0.30）；az 每 2° 取樣視野帶、
+      與收筆閘同一張表同一內插；無牆方位不畫（看房間/看臉乾淨）。
+- [x] 兩隻 HUD 蟲（veilshot 探針實錘）：①投影必須用 **Canvas->Project**——
+      PC->ProjectWorldLocationToScreen 吃互動視窗尺寸，HighResShot 畫布另一套
+      ＝截圖全裁（互動視窗其實沒事——差點誤判成沒實作）；②半透明必須走
+      FCanvasTriangleItem＋顯式 SE_BLEND_Translucent——K2_DrawTriangle 把 α0.3
+      畫成全黑實心。
+- [x] 新儀器：robo_veilshot.py（host 鎖肚頂→表烘完→HighResShot 1=視窗原生尺寸；
+      1280x720 固定尺寸的縱橫比≠視窗=投影驗證假象）；reachmap probe 加 RAW 行；
+      DebugLeanSummary 加 tblCols/tblHi 常駐欄位。
+- [x] 驗證：reachmap（游標全自由 eff=命令值、死區誠實 reach=0、無黏死）＋
+      directdraw 72/0（最終建置）＋veilshot 截圖（邊界線+半透明暗紗正確入畫）。
+      orbit/feign/maze 於顯示制中間建置全綠（其後改動僅 HUD/summary 欄位）。
+- [ ] user viewport：邊界線/暗紗讀感（線=紅、紗=黑 α0.30 全部可調）、收筆-復筆
+      手感、表烘焙 ~0.1s 內邊界短暫不顯示是否可感。

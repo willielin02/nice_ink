@@ -99,6 +99,10 @@ protected:
 	// 當前色高亮；選項不可視=「不知道有十色/拿什麼色/按哪鍵」三重盲）
 	void DrawPaletteStrip(const class ANiceInkCharacter* MyChar);
 
+	// 可畫域邊界標記（07-28 顯示制 user 定案）：入鎖預烘表投影成螢幕邊界線＋
+	// 界外暗紗——「哪裡可以畫、哪裡不行」直接看見；游標永不被干擾、界外=收筆
+	void DrawReachVeil(const class ANiceInkCharacter* MyChar);
+
 	// 沉睡端全套：視覺全遮蔽黑屏＋醉夢圓形迷宮＋姿勢面板（SPEC 定案 #3、#30/#31）
 	void DrawVictimSleepUI(class ANiceInkCharacter* MyChar, const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS);
 

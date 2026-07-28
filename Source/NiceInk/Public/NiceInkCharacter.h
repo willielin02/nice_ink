@@ -115,6 +115,10 @@ public:
 	// 搆不到已持續秒數（有目標但筆搆不著才累積；看向房間不算）——HUD 提示閘
 	float GetDrawUnreachableSeconds() const { return DrawUnreachSecs; }
 
+	// 可畫域邊界查詢（HUD 顯示用；07-28 顯示制）：該方位的最深可畫俯角。
+	// false=表未烘好或該方位無邊界（未命中身體/整段可畫）＝不畫標記
+	bool GetReachBoundaryTilt(float AzDeg, float& OutTiltMax) const;
+
 	// 作畫者 ghost 材質（直接畫制：畫畫時除自己與沉睡者外，其餘人半透明＋可穿過）
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInterface> GhostMaterial;
@@ -982,19 +986,10 @@ private:
 	// One Euro 濾波處理：靜止強濾抖、快掃近零滯後；姿勢=濾波 aim 的直接解）
 	bool bDrawTipReachable = false;    // 本 tick 筆尖可達（落墨閘）
 	float DrawTipResidualCm = -1.0f;   // 解算殘差（診斷/robo）
-	// 游標撞牆（2026-07-28 user 裁決「指得到=畫得到」；07-28 七/八輪規格重植）：
-	// trace 命中但解不到＝aim 回捲到最後可達值——「畫不到」對玩家不存在，域邊界
-	// =游標推不過去的牆。ReachWall*=最後一次解算成功的 aim；FailSecs=自癒計時
-	//（回捲點本身持續解不到＝釋放，寧可自由+舊提示、不可困死）。
-	//（構造牆上線後降級為安全網：表格粒度/內插誤差/域內孤島的兜底。）
-	float ReachWallAz = 0.0f;
-	float ReachWallTilt = 45.0f;
-	bool bReachWallValid = false;
-	float ReachWallFailSecs = 0.0f;
-	// 游標撞牆·構造版（07-28 業界制）：入鎖眼錨定後烘「方位→最深可畫俯角」邊界表，
-	// 輸入層直接鉗位（甦醒臉指向 SleepAimMaxTiltDeg 同模式：約束=事先算好的明確邊界
-	// 在輸入層鉗，不是越界後偵測回彈）——牆=構造保證零抖動。烘焙與活解算同一
-	// FLeanSolveCtx＝同源（恆等式要同源不要巧合）。
+	// 可達域邊界表（07-28；顯示制 user 定案「標記出來、永不干擾游標」——回捲牆與
+	// 輸入鉗位全退役）：入鎖眼錨定後烘「方位→最深可畫俯角」表（與活解算同一
+	// FLeanSolveCtx＝同源）。消費者=①HUD 邊界線+界外暗紗（DrawReachVeil）
+	// ②筆的收筆閘（UpdatePenVisual：界外=沒按左鍵的樣子）；游標本身永不被動。
 	static constexpr int32 ReachTableAzBins = 24; // 15°/柱，全圓
 	TArray<float> ReachTiltMaxByAz;               // 每柱最深可解 tilt；無牆柱=全域 tilt 上限
 	int32 ReachTableBakedCols = 0;                // 漸進烘焙游標（每 tick 4 柱、~6 tick 烘完）

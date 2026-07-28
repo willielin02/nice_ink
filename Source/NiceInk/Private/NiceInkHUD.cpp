@@ -356,10 +356,11 @@ void ANiceInkHUD::DrawHUD()
 	}
 	else if (MyChar && MyChar->bLeanLocked)
 	{
-		// 搆不到持續 >1s＝邊界開口說話（無聲失敗鐵則）：筆懸空是物理訊號，
+		DrawReachVeil(MyChar); // 界外暗紗最底層（文字/色票/準星全疊其上）
+		// 搆不到持續 >1s＝邊界開口說話（無聲失敗鐵則）：筆收起是物理訊號，
 		// 這行話補上「該怎麼辦」
 		DrawBottomHint(MyChar->GetDrawUnreachableSeconds() > 1.0f
-			? TEXT("out of reach — RMB stand up and lean in closer")
+			? TEXT("out of reach — the dark zone needs a closer lean (RMB stand up)")
 			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up"),
 			MyChar->GetDrawUnreachableSeconds() > 1.0f ? NiHudColor::Amber : NiHudColor::PaperDim);
 		DrawPaletteStrip(MyChar); // 色票列＝「1-9,0 color」提示的可視化本體
@@ -693,6 +694,85 @@ void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
 void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)
 {
 	DrawTok(Text, Canvas->ClipX * 0.5f, Canvas->ClipY - 46.0f * UiScale, ETextTier::Small, Color, EHAlign::Center, false);
+}
+
+void ANiceInkHUD::DrawReachVeil(const ANiceInkCharacter* MyChar)
+{
+	// 可畫域邊界標記（07-28 顯示制 user 定案「把不能畫的地方標記出來，永遠不要
+	// 干擾玩家畫筆的移動」）：入鎖預烘的可達表（方位→最深可畫俯角）投影到螢幕
+	// ——邊界線＋界外暗紗。界外行為＝收筆（角色端閘、墨鏈電平觸發自動復筆），
+	// 游標完全自由。投影恆等式：作畫相機＝眼錨定點＋aim 朝向 ⇒「方向」即像素
+	//（沿方向任取一點投影同像素）；表未烘好（入鎖 ~0.1s 內）＝暫不畫。
+	APlayerController* PC = GetOwningPlayerController();
+	if (!MyChar || !PC || !PC->PlayerCameraManager || !Canvas)
+	{
+		return;
+	}
+	const FVector CamLoc = PC->PlayerCameraManager->GetCameraLocation();
+	const float CamAz = PC->PlayerCameraManager->GetCameraRotation().Yaw;
+
+	// 視野帶取樣（FOV36 半角 18°＋邊緣餘裕）：2°/點、與收筆閘同一張表同一內插
+	constexpr float HalfSpanDeg = 30.0f;
+	constexpr float StepDeg = 2.0f;
+	const int32 N = static_cast<int32>(2.0f * HalfSpanDeg / StepDeg) + 1;
+	TArray<FVector2D> Pts;
+	TArray<bool> Ok;
+	Pts.Reserve(N);
+	Ok.Reserve(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const float Az = CamAz - HalfSpanDeg + i * StepDeg;
+		float TiltMax = 0.0f;
+		FVector2D Sp = FVector2D::ZeroVector;
+		bool bOk = MyChar->GetReachBoundaryTilt(Az, TiltMax);
+		if (bOk)
+		{
+			const FVector Dir = FRotator(-TiltMax, Az, 0.0f).Vector();
+			// Canvas->Project＝與當幀渲染視圖同座標系（PC 的 ProjectWorldLocationToScreen
+			// 用互動視窗尺寸——HighResShot 畫布另一套尺寸＝截圖裡整條錯位被裁）
+			const FVector Proj = Canvas->Project(CamLoc + Dir * 150.0f);
+			bOk = Proj.Z > 0.0f;
+			Sp = FVector2D(Proj.X, Proj.Y);
+		}
+		Pts.Add(Sp);
+		Ok.Add(bOk);
+	}
+
+	const float H = Canvas->ClipY;
+	// 界外暗紗：邊界線→螢幕底的三角形帶（硬邊＝美術語言 #24；低 alpha 不遮判讀）。
+	// 必須走 FCanvasTriangleItem＋顯式 SE_BLEND_Translucent——K2_DrawTriangle 的
+	// 預設混合把 alpha 0.3 畫成全黑實心（veilshot 實錘）。
+	const FLinearColor Veil(0.0f, 0.0f, 0.0f, 0.30f);
+	for (int32 i = 0; i + 1 < N; ++i)
+	{
+		if (!Ok[i] || !Ok[i + 1])
+		{
+			continue;
+		}
+		const FVector2D A = Pts[i];
+		const FVector2D B = Pts[i + 1];
+		if (A.Y >= H && B.Y >= H)
+		{
+			continue; // 邊界沉在畫面下緣外＝此段界外區不在畫面裡
+		}
+		FCanvasTriangleItem T1(A, B, FVector2D(B.X, H), GWhiteTexture);
+		T1.SetColor(Veil);
+		T1.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(T1);
+		FCanvasTriangleItem T2(A, FVector2D(B.X, H), FVector2D(A.X, H), GWhiteTexture);
+		T2.SetColor(Veil);
+		T2.BlendMode = SE_BLEND_Translucent;
+		Canvas->DrawItem(T2);
+	}
+	// 邊界線（可畫/不可畫的分界本體）
+	const FLinearColor LineCol = NiHudColor::Red.CopyWithNewOpacity(0.8f);
+	for (int32 i = 0; i + 1 < N; ++i)
+	{
+		if (Ok[i] && Ok[i + 1])
+		{
+			DrawLine(Pts[i].X, Pts[i].Y, Pts[i + 1].X, Pts[i + 1].Y, LineCol, 2.0f * UiScale);
+		}
+	}
 }
 
 void ANiceInkHUD::DrawPaletteStrip(const ANiceInkCharacter* MyChar)

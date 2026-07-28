@@ -134,7 +134,9 @@ class Probe:
         elif s == "baseline":
             if self.elapsed() < 2.0:
                 return
-            d = parse(str(self.m2().call_method("DebugLeanSummary", ())))
+            raw = str(self.m2().call_method("DebugLeanSummary", ()))
+            log("RAW " + raw)  # 原始 summary（tblCols/tblHi 等新欄位靠這行可見）
+            d = parse(raw)
             self.base_az = d["az"]
             self.base_tilt = d["tilt"]
             log(f"base az={self.base_az:.1f} tilt={self.base_tilt:.1f} reach={d['reach']}")

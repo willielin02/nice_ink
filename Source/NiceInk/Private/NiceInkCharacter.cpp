@@ -1314,9 +1314,7 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	{
 		bHasPendingDebugDrawAim = false;
 		DrawAimAzLocal = FMath::UnwindDegrees(PendingDebugDrawAim.X);
-		// 構造牆（07-28）：robo 命令同過邊界表——「指得到=畫得到」對測試也成立
-		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg,
-			FMath::Min(DrawTiltMaxDeg, ReachTableMaxTiltAt(DrawAimAzLocal)));
+		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg, DrawTiltMaxDeg);
 		TattooNeedleAz = DrawAimAzLocal;
 		TattooNeedleTilt = DrawAimTiltLocal;
 	}
@@ -1327,12 +1325,10 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	// 增益=FOV 縮放後的鎖定靈敏度（開鏡定律：不縮放=游標三倍速）
 	const float Sens = DrawAimSensitivity();
 	DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * Sens);
-	// 構造牆（07-28）：tilt 上限=邊界表（方位內插）——身體搆不到的方向游標推不過去，
-	// 沿牆斜推=az 照走、tilt 貼著 tilt_max(az) 滑（甦醒臉指向同模式、零抖動）。
-	// az 恆自由（看向房間/他的臉不設牆）；每 tick 無條件鉗=表烘完瞬間也把停在
-	// 域外的游標收回牆內。
+	// （07-28 顯示制：游標只受全域 tilt 域鉗——可達域邊界不鉗游標、只做 HUD 標記
+	// 與收筆；「永遠不要去干擾玩家畫筆的移動」＝user 逐字定案）
 	DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * Sens,
-		DrawTiltMinDeg, FMath::Min(DrawTiltMaxDeg, ReachTableMaxTiltAt(DrawAimAzLocal)));
+		DrawTiltMinDeg, DrawTiltMaxDeg);
 	if (bCruise)
 	{
 		// 液線針按住左鍵＝針以 v_max 上限追趕「手的意圖點」（速率所有權歸機器、
@@ -3050,9 +3046,7 @@ void ANiceInkCharacter::OnRep_Lean()
 		bDrawTipReachable = false;
 		bDrawTargetValid = false;
 		bDrawEyeAnchorValid = false;
-		bReachWallValid = false; // 游標撞牆：牆點不跨鎖（新鎖=新域）
-		ReachWallFailSecs = 0.0f;
-		bReachTableReady = false; // 構造牆邊界表同理（眼錨定後重烘）
+		bReachTableReady = false; // 可達域邊界表不跨鎖（眼錨定後重烘）
 		ReachTableBakedCols = 0;
 		// 首鎖視野修（07-27 user 抓「第一次右鍵超近超小視野」）：owner 本地 aim 在
 		// 入鎖時從鎖點幾何播種——server 的 aim 種子寫在 DrawAimAzDeg（COND_SkipOwner
@@ -3144,8 +3138,6 @@ void ANiceInkCharacter::OnRep_Lean()
 		}
 		bDrawEyeAnchorValid = false;
 		bDrawTargetValid = false;
-		bReachWallValid = false;
-		ReachWallFailSecs = 0.0f;
 		bReachTableReady = false;
 		ReachTableBakedCols = 0;
 		ResetBowPose();
@@ -3177,7 +3169,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TEXT("solveYaw=%.1f hipDeg=%.1f ankleDeg=%.1f tipErr=%.2f reach=%d unreach=%.2f ")
 		TEXT("needle=%.2f trig=%d nSolve=%.1f grip=%.1f ")
 		TEXT("cruise=%d stick=%.2f dotN=%d dotGapCm=%.2f vmaxCm=%.2f guideN=%d ")
-		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d"),
+		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d ")
+		TEXT("tblCols=%d tblHi=%.1f"),
 		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
 		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
 		GhostedChars.Num(),
@@ -3198,7 +3191,9 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		static_cast<int32>(SelectedNeedle), // 0=Liner 1=Shader 2=Stencil（舊斷言語義不變）
 		MistAimSpeedDegS,
 		static_cast<int32>(ComputeMistFlowByte()),
-		bStencilFollowActive ? 1 : 0);
+		bStencilFollowActive ? 1 : 0,
+		ReachTableBakedCols,
+		ReachTableMaxTiltAt(EffectiveDrawAz()));
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const
@@ -3812,61 +3807,9 @@ void ANiceInkCharacter::ApplyBowPose()
 			DrawTipResidualCm = Res;
 			bDrawTipReachable = Res <= DrawTipSolveTolCm;
 
-			// 游標撞牆（07-28 user 裁決「先做指得到=畫得到」；七/八輪規格重植）：
-			// 解到＝記牆點；解不到＝aim 回捲到最後可達值——游標推不進解算域外，
-			// 「莫名畫不到」對玩家不存在。收斂閘：濾波 aim≈生 aim 才鉗（robo 瞬移
-			// aim 掃過中途不可達帶會被誤殺=遠點永遠到不了，07-28 directdraw 實錘）。
-			// 巡航不鉗（皮繩契約自有 miss 處理；沿稿只活在巡航內）。回捲分級：先只
-			// 回捲 tilt（域邊界≈tilt_max(az)——yaw 整身無鉗、az 幾乎恆可解＝沿牆
-			// 滑動不被釘死）；0.15s 仍解不到再整組回捲；0.6s 仍解不到＝自癒釋放
-			//（actor 轉動後域移動的回捲死鎖——寧可自由+舊提示、不可困死）。
-			// 撞牆 tick 姿勢凍結在上一解（不套用失敗解的步進）＝壓著牆推時無邊界抖振。
-			if (IsLocallyControlled() && !bTattooChaseActive && bDrawEyeAnchorValid)
-			{
-				if (bDrawTipReachable)
-				{
-					ReachWallAz = Az;   // 解算用的濾波 aim＝已證可達
-					ReachWallTilt = Tilt;
-					bReachWallValid = true;
-					ReachWallFailSecs = 0.0f;
-				}
-				else if (bReachWallValid)
-				{
-					const bool bAimSettled =
-						FMath::Abs(FMath::FindDeltaAngleDegrees(DrawAimAzLocal, Az)) < 1.5f &&
-						FMath::Abs(DrawAimTiltLocal - Tilt) < 1.5f;
-					if (!bAimSettled)
-					{
-						ReachWallFailSecs = 0.0f; // 只計「停在此點仍解不到」（transit 不預充）
-					}
-					else
-					{
-						ReachWallFailSecs += StepDt;
-						if (ReachWallFailSecs > 0.6f)
-						{
-							bReachWallValid = false; // 自癒：牆點失效，交還自由 aim＋舊提示
-						}
-						else if (ReachWallFailSecs > 0.05f)
-						{
-							// 去抖 0.05s（A/B 實錘）：單 tick 的 Newton 噎住＝可達點的暫態，
-							// 立即回捲會微改 aim 軌跡→暖啟動路徑分岔→冗餘解流形落點漂移
-							//（directdraw far 針軸掠臂 3 FAIL 的真兇）；真域邊界的失敗是持續的。
-							DrawAimTiltLocal = ReachWallTilt;
-							AimEuroTilt.Snap(ReachWallTilt);
-							DrawAimTiltFilt = ReachWallTilt;
-							if (ReachWallFailSecs > 0.15f)
-							{
-								DrawAimAzLocal = ReachWallAz;
-								AimEuroAz.Snap(ReachWallAz);
-								DrawAimAzFilt = ReachWallAz;
-							}
-							HipDeg = PrevHip;
-							AnkleDeg = PrevAnkle;
-							DrawSolveYawDeg = PrevPsi;
-						}
-					}
-				}
-			}
+			// （07-28 顯示制 user 定案：回捲牆/輸入鉗位全退役——「永遠不要去干擾玩家
+			// 畫筆的移動」。域外＝收筆（墨閘+筆視覺），邊界由 HUD 標記；經歷記錄：
+			// 回捲版壓牆必顫（事後偵測型約束）、鉗位版仍在表/活解算邊界縫隙跳針。）
 
 			// 眼錨定＝解析算「入座目標姿勢的眉心」（07-20 三修：舊版等首寫收斂才抓
 			// ＝抓到平滑層剛起步的半直立姿＝錨點恆在站直眉心高（~135cm）——
@@ -4118,6 +4061,21 @@ float ANiceInkCharacter::ReachTableMaxTiltAt(float AzDeg) const
 	return FMath::Lerp(ReachTiltMaxByAz[K0], ReachTiltMaxByAz[K1], F - static_cast<float>(K0));
 }
 
+bool ANiceInkCharacter::GetReachBoundaryTilt(float AzDeg, float& OutTiltMax) const
+{
+	if (!bReachTableReady)
+	{
+		return false;
+	}
+	const float T = ReachTableMaxTiltAt(AzDeg);
+	if (T >= DrawTiltMaxDeg - 0.5f)
+	{
+		return false; // 該方位無邊界（未命中身體或整段可畫）＝不畫標記
+	}
+	OutTiltMax = T;
+	return true;
+}
+
 bool ANiceInkCharacter::GetEvidenceUVForHit(FName BoneName, const FVector& ImpactPoint, FVector2D& OutUV)
 {
 	if (!Body)
@@ -4219,7 +4177,11 @@ void ANiceInkCharacter::UpdatePenVisual()
 			const FQuat PenQBone = FRotationMatrix::MakeFromZX(-BoneTipDir, HandQ.GetAxisX()).ToQuat();
 			float TipDist = MarkerHoverTipCm;
 			bool bTouching = false;
-			const bool bTrig = IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld;
+			// 收筆閘（07-28 顯示制 user 定案）：游標在可達域外＝筆回「沒按左鍵」的
+			// 懸筆樣——收筆；游標回域內且左鍵仍按著＝自動壓回（墨鏈電平觸發、
+			// 筆劃自動分段續畫）。游標移動本身永不被干擾。
+			const bool bTrig = (IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld) &&
+				bDrawTipReachable;
 			ANiceInkCharacter* Target = LeanTarget.Get();
 			if (bTrig && Target && Target->Body && GetWorld())
 			{
@@ -4319,7 +4281,9 @@ void ANiceInkCharacter::UpdatePenVisual()
 			float NeedleLen = PenNeedleStubCm;
 			float GripLen = PenGripBaseLenCm;
 			FVector ExitVisW = ExitBaseW;
-			const bool bTrig = IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld;
+			// 收筆閘（07-28 顯示制）：域外＝針收樁（同稿筆——收筆的機械版）
+			const bool bTrig = (IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld) &&
+				bDrawTipReachable;
 			ANiceInkCharacter* Target = LeanTarget.Get();
 			if (bTrig && Target && Target->Body && GetWorld())
 			{
