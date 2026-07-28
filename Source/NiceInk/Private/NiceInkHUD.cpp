@@ -961,7 +961,17 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			// 恆定（07-22 定案）不破。（一修曾把筆錨到針的投影＝筆離開中心，被
 			// user 打回「筆要維持在螢幕中間」——正解是畫面歸針，不是筆追針。）
 			const FVector2D Aim(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
-			const bool bReach = MyChar->IsDrawTipReachable();
+			// 落墨小點/✕ 讀的是墨閘同一個裁決（07-29 單一裁判）——皮膚紗在稜線
+			// 掠射角會被透視壓成看不見的細縫（腳掌實錘），筆尖級提示任何角度都準
+			const bool bReach = MyChar->IsCursorDrawable();
+			if (!bReach && MyChar->HasDrawTarget())
+			{
+				// 游標點不可畫＝筆尖紅 ✕（硬切、美術語言 #24）
+				const float A = 7.0f * UiScale;
+				const FLinearColor XCol = NiHudColor::Red.CopyWithNewOpacity(0.9f);
+				DrawLine(Aim.X - A, Aim.Y - A, Aim.X + A, Aim.Y + A, XCol, 2.5f * UiScale);
+				DrawLine(Aim.X - A, Aim.Y + A, Aim.X + A, Aim.Y - A, XCol, 2.5f * UiScale);
+			}
 			// 三工具制（07-25 打稿制）：打稿筆=龍膽紫小方點（3D 麥克筆本人可見、無 2D
 			// viewmodel）；液線針=選色小方點；霧針=筆刷範圍圈（自由揮掃要知道落在哪圈）
 			const bool bShaderNeedle = MyChar->SelectedNeedle == EInkNeedle::Shader;

@@ -115,6 +115,12 @@ public:
 	// 搆不到已持續秒數（有目標但筆搆不著才累積；看向房間不算）——HUD 提示閘
 	float GetDrawUnreachableSeconds() const { return DrawUnreachSecs; }
 
+	// 本 tick 游標點可畫嗎（＝墨閘/收筆用的同一個裁決）——HUD 筆尖 ✕ 提示用。
+	// 皮膚紗在稜線掠射角被透視壓成看不見的細縫（07-29 user 抓「沒遮蓋卻畫不上」）
+	// ＝區域標記的先天盲區；筆尖級提示直接讀裁決、任何角度都準。
+	bool IsCursorDrawable() const { return bCursorDrawable; }
+	bool HasDrawTarget() const { return bDrawTargetValid; }
+
 
 	// 作畫者 ghost 材質（直接畫制：畫畫時除自己與沉睡者外，其餘人半透明＋可穿過）
 	UPROPERTY(Transient)
@@ -995,8 +1001,6 @@ private:
 	TArray<int32> ReachRefineCells;               // 粗掃後值不一致的邊界格＝細化清單
 	int32 ReachBakePhase = 0;                     // 0=粗掃 1=邊界細化 2=完成
 	int32 ReachBakeIdx = 0;
-	float ReachBakeFaceSign = 1.0f;               // 法線朝向自校準（鎖點=已知面向眼錨；
-	                                              // 繞向不猜——匯入網格法線實測朝內）
 	bool bReachMaskReady = false;
 	UPROPERTY(Transient) TObjectPtr<UTexture2D> ReachMaskTex;
 	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ReachVeilShell;

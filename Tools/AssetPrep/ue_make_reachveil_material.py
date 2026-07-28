@@ -13,6 +13,9 @@ mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
     NAME, PATH, unreal.Material, unreal.MaterialFactoryNew())
 mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
 mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
+# 單面（07-29 終裁）：雙面曾為「繞向翻轉區紗被剔除」開過——但全身半透明殼像素
+# 量 ×2＝巡航速度契約邊緣超標（stash A/B 定罪 GPU 拖幀）。翻轉區紗不可見的資訊
+# 損失由筆尖 ✕（讀墨閘同一裁決）承擔；遮罩本身用可見性 trace＝判定不受繞向影響。
 
 MEL = unreal.MaterialEditingLibrary
 

@@ -3913,7 +3913,9 @@ void ANiceInkCharacter::ApplyBowPose()
 		// 預覽）→只細化值不一致的邊界格到 256²（~1s 內收斂）；每 tick 5ms 預算
 		//（全解析度直掃曾把幀率拖到 5fps＝veilshot 實錘）。眼錨/受害者姿勢皆鎖內
 		// 常數＝遮罩整鎖有效（翻身會強退鎖重烘）。
-		if (IsLocallyControlled() && bDrawEyeAnchorValid && !bReachMaskReady)
+		// 巡航中完全停烘（07-29：烘焙負載落在巡航速度量測窗＝契約邊緣超標實錘；
+		// 巡航=精度時刻，讓路是原則不是優化）；出巡航續烘
+		if (IsLocallyControlled() && bDrawEyeAnchorValid && !bReachMaskReady && !bTattooChaseActive)
 		{
 			ANiceInkCharacter* MaskVictim = LeanTarget.Get();
 			UInkBodyComponent* VB = MaskVictim ? ToRawPtr(MaskVictim->Body) : nullptr;
@@ -3928,26 +3930,20 @@ void ANiceInkCharacter::ApplyBowPose()
 					ReachCoarseVal.Init(0, Coarse * Coarse);
 					ReachBakePhase = 0;
 					ReachBakeIdx = 0;
-					// 法線朝向自校準：鎖點=已知面向眼錨的皮膚點，它的點積符號=「面向」
-					// 的正字號（sumo 匯入網格三角繞向讓 cross 法線朝內——VEILMASK 實錘
-					// dotFace=-0.91 於可畫鎖點；符號用實測不猜=陷阱年鑑鐵則）
-					ReachBakeFaceSign = 1.0f;
-					{
-						FVector2D LockUV;
-						FVector LockP, LockN;
-						if (VB->ResolveBodyUV(FVector(LeanPoint), LockUV, 30.0f) &&
-							VB->ResolveUVToWorldWithNormal(LockUV, LockP, LockN))
-						{
-							const float D = FVector::DotProduct(LockN,
-								(DrawEyeAnchorWorld - LockP).GetSafeNormal());
-							if (D < 0.0f)
-							{
-								ReachBakeFaceSign = -1.0f;
-							}
-						}
-					}
 				}
 				const FVector Anchor = DrawEyeAnchorWorld;
+				// 眼錨可見性 trace（07-29 腳掌實錘＝繞向翻轉區讓法線判定不可信——
+				// 掃描重拓樸網格的三角繞向非全身一致，鎖點單點校準救不了翻轉區）：
+				// 「從錨點看不看得到」是幾何真相、與繞向無關——看不到＝游標永遠指不到
+				// ＝不可畫（免解算）；粗到細制下 trace 量可負擔
+				FCollisionQueryParams VisQP(SCENE_QUERY_STAT(NiceInkReachMask), /*bInTraceComplex=*/true);
+				for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+				{
+					if (*It != MaskVictim)
+					{
+						VisQP.AddIgnoredActor(*It);
+					}
+				}
 				// 三態：0=可畫、255=不可畫、128=島外（僅粗掃分類用；上屏一律映 0——
 				// 島外 texel 不對應皮膚，但**不能**與「可畫」同值：否則每條 UV 島邊都被
 				// 誤判成可行性邊界＝細化清單被幾百個島邊格灌爆（首版實錘）
@@ -3958,9 +3954,14 @@ void ANiceInkCharacter::ApplyBowPose()
 					{
 						return 128;
 					}
-					if (ReachBakeFaceSign * FVector::DotProduct(Nw, Anchor - Pw) <= 0.0f)
+					const FVector VisDir = (Pw - Anchor).GetSafeNormal();
+					FHitResult VisHit;
+					if (!GetWorld()->LineTraceSingleByChannel(VisHit, Anchor,
+							Pw + VisDir * 3.0f, ECC_Visibility, VisQP) ||
+						VisHit.GetActor() != MaskVictim ||
+						FVector::Dist(VisHit.ImpactPoint, Pw) > 2.5f)
 					{
-						return 255; // 背面（相機=眼錨看不到；免解算；符號=鎖點自校準）
+						return 255; // 錨點看不到（背面/被自身遮擋）＝指不到＝不可畫
 					}
 					// 暖啟動＝當前活解（鎖點鄰域的已收斂姿勢——可達域在姿勢空間連通，
 					// 從中心出發最穩；掃描鏈式暖啟動在 UV 跳島下是毒＝07-29 實錘）
@@ -3971,7 +3972,10 @@ void ANiceInkCharacter::ApplyBowPose()
 					}
 					return 255;
 				};
-				const double TickBudgetEnd = FPlatformTime::Seconds() + 0.005;
+				// 按著筆＝烘焙讓路（1ms）：滿預算 5ms 的烘焙負載會拖長巡航量測窗的
+				// 幀（速度契約邊緣超標 robo 實錘）；畫的時候不趕工、停筆繼續烘
+				const bool bPaintingNow = bPenTriggerLocal || bDebugPaintHeld;
+				const double TickBudgetEnd = FPlatformTime::Seconds() + (bPaintingNow ? 0.001 : 0.005);
 				while (FPlatformTime::Seconds() < TickBudgetEnd && ReachBakePhase < 2)
 				{
 					if (ReachBakePhase == 0)
