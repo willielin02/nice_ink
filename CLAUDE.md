@@ -117,8 +117,10 @@
 
 ## 技術地圖
 
-- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/**直接畫制**（2026-07-20 起：
-  眼錨定 FP 相機 FOV36、螢幕中心=針尖、剛臂 3-DOF 解筆尖觸膚、2D viewmodel 筆、ghost 穿透、
+- `Source/NiceInk/`：`NiceInkCharacter`（輸入輪詢/貼臉鎖定/**直接畫制**（2026-07-20 起；
+  **07-28 姿勢主導制反轉**：滑鼠→姿勢（入鎖一次 Newton 校準+量測增益的純映射、巡航/沿稿
+  載體凍結）→相機（活眉心+aim 朝向=SPEC #44、FOV36）→P（臉射線命中=輸出）→墨/針深/UV
+  全吃 P（07-20 眼錨定=越權已拆，勘誤在帳本）、螢幕中心=針尖、2D viewmodel 筆、ghost 穿透、
   **鎖定靈敏度 FOV 縮放**（07-24 開鏡定律 ×0.33＋DrawSensitivity 旋鈕——不縮放=游標三倍速））/
   **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**三工具制**（07-25 打稿制：
   滾輪三檔 **Stencil 麥克筆（預設）**→Liner→Shader；Stencil=結晶紫 #703593 稿線
@@ -174,7 +176,7 @@
   長跪作畫姿/雙臂 IK/平面畫布全退役）**＋**操作優化與轉印打稿制（07-24~25：割線
   「難操作」診斷鏈=靈敏度三倍速（FOV 縮放修）→拉桿→皮繩追趕（畫面歸針）→真病根
   =手勢矛盾（恆速針殺手勢肌肉記憶）→**轉印打稿制**（現實刺青工作流：紫麥克筆
-  打稿→機器沿稿上墨；user 定案預設紫筆+滾輪三檔）；robo_directdraw_test.py=**72
+  打稿→機器沿稿上墨；user 定案預設紫筆+滾輪三檔）；robo_directdraw_test.py=**69
   檢查**常駐套件（含真人手速探針＋流量恆定＋紅墨像素＋稿線/沿稿契約），迴歸組
   =orbit/feign/maze；**編輯器背景節流=假 FAIL 元凶**（user 用機時編輯器失焦被壓到
   3~6fps——harness 已自動關 bThrottleCPUWhenNotForeground，見陷阱年鑑）**。
@@ -184,8 +186,15 @@
   GameState/PlayerState 複製頻率＋aim 上報 30Hz/追趕 K20；NeckStretch **壓縮域直紋面**
   （lean-lock 埋頭＝弦長 1.6cm＋彎 30° 在管面解算器設計域外→喉摺 111°/後頸凸；弦長
   4~12cm 交叉回管面＝沉睡 46cm 零改動）＋隱藏判定改縫寬（環心距誤殺＝後頸破洞）；
-  探針=robo_neckdraw_probe.py；directdraw 72/0＋orbit/feign/maze 迴歸綠；
-  **未了（user 已點名）：作畫者全身抖動（位置閃爍）＋筆尖與出墨不對齊（延長不及時）。**
+  探針=robo_neckdraw_probe.py；
+  **＋07-26~28 作畫操作九輪（BUILT-自驗、3fa1f30 之後全部未提交待 viewport）**：
+  抖動根治（owner 端就跳=解算層；髖跳 23→2.4cm）→稿筆骨軸 19cm（user 逐字定案）
+  →首鎖 aim 播種→墨=P→**溯源審計（07-20 眼錨定相機=無授權違反 SPEC #44、user 震怒；
+  VOR 眼球模擬亦被打回）→姿勢主導制＝架構反轉終態**（滑鼠→姿勢（一次校準+量測增益
+  純映射、巡航/沿稿載體凍結）→相機（活眉心+aim=嚴格 #44）→P=輸出→墨/針深/UV 全吃 P；
+  沿稿零出墨三層真兇鏈=舊臂軸殘肢逐節反咬——反轉後沿資料流問「這節輸入還信誰」）；
+  帳本=DIRECT_DRAW_PLAN.md 末節、全史=記憶 project_drawpose_jitter_fix.md；
+  directdraw 69/0＋remotejitter＋orbit 24/0＋feign 26/0＋maze 15/0 全綠。
 
 ## 收尾紀律
 

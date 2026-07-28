@@ -412,8 +412,17 @@ public:
 	UPROPERTY(BlueprintReadWrite, Replicated, Category = "Nice Ink|Lean")
 	float DrawAimTiltDeg = 45.0f;
 
+	// 作畫目標點 P＝擁有端真相（07-26 抖動根治）：他端不再自己 trace P——本地 trace
+	// 用「追趕中的 aim＋他端解出的眼位」重推，貼剪影邊緣間歇 miss＝整身甩姿閃爍、
+	// 針長鞭打、筆尖與墨兩套真相。改制＝P 隨 aim 上報，他端追趕本複製值＝與墨同源。
+	UPROPERTY(Replicated)
+	FVector_NetQuantize DrawTargetRepW;
+
+	UPROPERTY(Replicated)
+	bool bDrawTargetRepValid = false;
+
 	UFUNCTION(Server, Unreliable)
-	void ServerUpdateDrawAim(float AzDeg, float TiltDeg);
+	void ServerUpdateDrawAim(float AzDeg, float TiltDeg, FVector_NetQuantize TargetW, bool bTargetValid);
 
 	// 無聲甦醒（定案 #8）：走出迷宮出口後睜眼。零系統提示——
 	// 其他玩家能觀察到的破綻＝睜眼貼圖＋頭部轉動（睡姿替身驅動，2026-07-15）。
@@ -700,9 +709,19 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboFeignSleep(bool bFeign);
 
+	// robo：以「射線原點」反算指向 world 點的 aim（07-28 活眉心相機後相機≠射線
+	// 原點——測試用相機位置反算＝沿錨點射線打偏，遠點叢實錘；與實作恆同源）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboAimAt(FVector TargetW);
+
 	// robo：直設作畫臉指向（本地作畫者下一 tick 消化；滑鼠不可注入）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboDrawAim(float AzDeg, float TiltDeg);
+
+	// robo：合成滑鼠增量（P-狀態游標制契約載體——疊進下一 tick 的 GetInputMouseDelta、
+	// 走與真人完全同一條游標管線；角度命令=角度制、增量命令=游標制）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboMouse(float DX, float DY);
 
 	// robo：模擬按住左鍵下筆（與真鍵 OR、由 PollLockedDraw 同一條輪詢消化——
 	// 直設狀態會被輸入輪詢反殺，裝睡老教訓）
@@ -849,6 +868,54 @@ private:
 	float RemoteDrawAzDeg = 0.0f;
 	float RemoteDrawTiltDeg = 45.0f;
 	bool bRemoteDrawSnap = true;
+	// 他端 P 追趕值（07-26：DrawTargetRepW 的顯示平滑——與 aim 同節奏）
+	FVector RemoteDrawTargetW = FVector::ZeroVector;
+	// 上報節流的 P 有效旗標邊緣（aim 靜止但 P 有效性翻轉也要送）
+	bool bLastSentTargetValid = false;
+	// 姿勢主導制（07-28 user 定案「因果反轉」）：滑鼠直接驅動姿勢、P=臉射線命中點
+	//（輸出非目標）——與甦醒臉指向制（SPEC #42）同構。入座時 Newton 解算器只跑一次
+	// 當校準器：基準姿勢 (Psi0,Hip0,Ankle0)＋tilt→髖/踝局部增益（現場量測非手調）。
+	// 眼錨/域相等鉗位/VOR/限速全隨舊因果退役。
+	bool bDrawMapCalibrated = false;
+	float DrawMapAz0 = 0.0f;
+	float DrawMapTilt0 = 45.0f;
+	float DrawMapPsi0 = 0.0f;
+	float DrawMapHip0 = 0.0f;
+	float DrawMapAnkle0 = 0.0f;
+	float DrawMapHipGain = 0.8f;
+	float DrawMapAnkleGain = -0.35f;
+	// 巡航/沿稿凍結→解凍的再錨定旗標（解凍 tick 把映射錨點設到當前姿勢＝零跳；
+	// 07-28 user 抓「頭莫名突然壓低」=解凍瞬間髖踝一步跳到走遠的 aim）
+	bool bDrawMapWasFrozen = false;
+	// --- P-狀態游標制（07-28 user 定案「滑鼠直接控制皮膚上的點」）---
+	// 游標=皮膚上的世界點=滑鼠唯一驅動的狀態；aim 角度降級為導出量（凝視=眉心→游標）
+	// ——身體動力學（yaw 限速/髖槓桿/凍結切換）從此推不動筆＝忽快忽慢/停手過頭
+	// 結構性消滅。載體映射吃「控制角」=(游標−入鎖凍結錨)：錨固定＝映射無自我參照
+	//（直接吃凝視角＝眉心在迴路裡、迭代增益 |r/d|>1＝身體震盪）。
+	FVector DrawCursorW = FVector::ZeroVector;
+	bool bDrawCursorValid = false;
+	FVector DrawCtrlAnchorW = FVector::ZeroVector;
+	bool bDrawCtrlAnchorValid = false;
+	float DrawCursorRefDistCm = 60.0f; // 靈敏度換算基準眼距（cm/格=角度靈敏度×此距）
+	// 頭=被穩定的平台（07-28 二修「莫名突然抖動」）：真人眉心相機穩是因為脖子是
+	// 主動穩定器——身體怎麼挪、頭都緩著走。載體三軸全限速＝相機位置的導數有界
+	//（構造性保證：位置=限速輸入的解析函數、方向=正對游標——畫面速度有界）。
+	// 載體慢沒有代價：墨/筆速/畫面中心都不再依賴身體（P-狀態制）。
+	float DrawCarrierYawRateDegS = 30.0f;
+	float DrawCarrierBendRateDegS = 15.0f;
+	bool bDrawCarrierSettling = false; // 載體未到位＝姿勢 tick 不得因 aim 靜止而凍結
+	// 身體 yaw=載體、rate-limit 120°/s（快掃=頭/視線的事、身體慢跟——真人不會用
+	// 1000°/s 旋轉軀幹；也防「射線原點跟著身體甩」把快掃弧長灌爆）
+	float DrawBodyYawShown = 0.0f;
+	// robo/入鎖視覺伺服：aim 逐 tick 朝「射線原點→目標點」收斂（姿勢主導制下原點
+	// 跟著姿勢動＝一次性角度反算必偏；伺服=人眼收斂行為的機器版）
+	bool bDebugAimServo = false;
+	FVector DebugAimServoTarget = FVector::ZeroVector;
+	float DebugAimServoSecs = 0.0f;
+	// 射線原點＝解析眉心（前向模型純函數；活骨骼讀回帶 ≤0.5cm 寫入收斂殘差——
+	// path-integral 契約（v_max/針距）會把噪聲積成假里程）
+	FVector DrawRayOriginW = FVector::ZeroVector;
+	bool bDrawRayOriginValid = false;
 
 	// One Euro 濾波（Casiez 2012；筆即游標 07-20 定案）：本人 aim 的速度自適應低通。
 	// 姿勢/筆/墨全吃濾波值（DrawAim*Filt）、相機吃生值——濾一次、下游一致。
@@ -877,6 +944,8 @@ private:
 
 	bool bHasPendingDebugDrawAim = false;   // DebugRoboDrawAim 待消化（本地 tick）
 	FVector2D PendingDebugDrawAim = FVector2D::ZeroVector;
+	bool bHasPendingDebugMouse = false;     // DebugRoboMouse 合成滑鼠增量待消化
+	FVector2D PendingDebugMouse = FVector2D::ZeroVector;
 	bool bDebugPaintHeld = false;           // robo「模擬按住左鍵」輸入源
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---
@@ -964,17 +1033,10 @@ private:
 	// One Euro 濾波處理：靜止強濾抖、快掃近零滯後；姿勢=濾波 aim 的直接解）
 	bool bDrawTipReachable = false;    // 本 tick 筆尖可達（落墨閘）
 	float DrawTipResidualCm = -1.0f;   // 解算殘差（診斷/robo）
-	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
-	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
-	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。
+	// 落墨點 P＝臉射線命中點（07-28 姿勢主導制：**輸出非目標**——姿勢只吃 aim、
+	// P 在下游＝「眼→P→姿勢→眼」回饋環構造上不存在，射線原點可以安全讀活眉心）
 	FVector DrawTargetWorld = FVector::ZeroVector;
 	bool bDrawTargetValid = false;
-	// 眼錨定（07-20 五輪結構解）：入畫收斂後把眉心凍成世界定點——相機與 trace 共用
-	// 此定點 ⇒ 準星=P 構造精確、「眼→P→姿勢→眼」回饋環結構性不存在（掃筆滑走
-	// robo 實錘）、FP 畫面不隨姿勢收斂晃動。臉仍 look-at P（第三者讀感），
-	// 「相機恆眉心」語義收斂為「相機＝入畫定格時的眉心」。
-	FVector DrawEyeAnchorWorld = FVector::ZeroVector;
-	bool bDrawEyeAnchorValid = false;
 
 	// 姿勢髒檢查（aim 沒動不重寫骨——poseable 全身重寫非免費）
 	float LastAppliedDrawAz = 1e9f;

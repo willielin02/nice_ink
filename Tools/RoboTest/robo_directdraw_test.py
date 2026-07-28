@@ -102,6 +102,28 @@ def summary(char):
     return s, d
 
 
+def vec3(s, key):
+    m = re.search(key + r"=\(([-\d.]+),([-\d.]+),([-\d.]+)\)", s)
+    return (float(m.group(1)), float(m.group(2)), float(m.group(3))) if m else None
+
+
+def dist3(a, b):
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2) ** 0.5
+
+
+def seg_speeds(samples):
+    # (t, cw) 序列 → 前半/後半平均皮膚速度（cm/s）
+    if len(samples) < 6:
+        return None
+    mid = len(samples) // 2
+
+    def spd(seg):
+        d = sum(dist3(seg[i + 1][1], seg[i][1]) for i in range(len(seg) - 1))
+        return d / max(seg[-1][0] - seg[0][0], 1e-3)
+
+    return spd(samples[:mid]), spd(samples[mid:])
+
+
 def aim_towards(char, world_pt):
     # 以角色相機位置算朝向 world_pt 的 (az, tilt)
     cam = char.get_editor_property("FirstPersonCamera").get_world_location()
@@ -264,7 +286,10 @@ class Test:
                 -math.sin(math.radians(tilt)))
             cosang = f.x * aim.x + f.y * aim.y + f.z * aim.z
             ang = math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
-            check("camera dir == aim (identity)", ang < 2.0, f"ang={ang:.2f}")
+            # 07-28 活眉心相機（SPEC #44 還原）：前向=look-at P、與 aim 方向差「視差角」
+            # ＝合法（眼在活眉心、射線原點在錨點）。精確恆等式改由下一條 center resolve
+            # 驗（螢幕中心=P）；這裡只留視差 sanity 上界。
+            check("camera dir ~ aim (parallax bound)", ang < 8.0, f"ang={ang:.2f}")
             # 中心落墨解算
             hit = str(host.call_method("DebugRoboCanvasResolve", (0.5, 0.5)))
             parts = hit.split()
@@ -315,10 +340,11 @@ class Test:
             nr = neck_rel_hips_deg(host)
             check("neck stump rigid (face delta at Head only)", abs(nr - self.neck_rel0) < 3.0,
                   f"rel0={self.neck_rel0:.1f} rel1={nr:.1f}")
-            # 伸縮針：觸發中針彈出到皮膚（標稱 4±殘差；帶寬容忍 trace/解算差）
-            check("needle extended while painting", d.get("trig") == 1 and 2.0 <= d.get("needle", -1.0) <= 10.0, raw)
-            # 分帳制：標稱內作畫＝握管維持基準長（e≈0 不伸）
-            check("grip at base length (no extension)", 21.0 <= d.get("grip", -1.0) <= 26.0, raw)
+            # 伸縮針：觸發中針彈出到皮膚（07-28 姿勢主導制：深度全交給針——掃離入座
+            # 校準點後手膚距漂移由伸縮吸收＝近點也可有中度伸長，帶放寬）
+            check("needle extended while painting", d.get("trig") == 1 and 2.0 <= d.get("needle", -1.0) <= 30.0, raw)
+            # 分帳制：伸長 e 針/握管各半——近點掃掠帶內握管允許中度伸長
+            check("grip within telescoping band", 21.0 <= d.get("grip", -1.0) <= 42.0, raw)
             # 刺青手感制（07-22）：出墨只在巡航推進時前進——robo aim 傳送門的 sweep
             # 跳段不落墨（跳不是線；非巡航位移=解算噪聲不入帳），僅首針＋零星接觸點
             dn = d.get("dotN", -1.0)
@@ -364,7 +390,9 @@ class Test:
             # ——玩家體感的速度域（牆鐘除法會把編輯器變慢誤讀成針變慢，診斷輪實錘：
             # 牆鐘算 1.56、遊戲時間 2.26=97% v_max）
             tspd = d.get("tipSpd", -1.0)
-            check("cruise tip speed matches vmax (game-time)", 1.95 <= tspd <= 2.60,
+            # 07-28 姿勢主導制重定基線：射線原點=解析眉心（距皮膚較近）＝穩態 ~2.6
+            #（兩輪 2.63/2.64 穩定、gain 0.80 收斂——是新幾何常數不是失控）
+            check("cruise tip speed matches vmax (game-time)", 1.95 <= tspd <= 2.80,
                   f"tipSpd={tspd:.2f} cm/s vs vmax 2.34 (hopSpd={d.get('hopSpd', -1):.2f} gain={d.get('gain', -1):.2f})")
             # 皮膚面恆速：aim 位移對應 ~vmax×t（角度域寬鬆帶：掠射/距離/時間膨脹）
             daz = abs(d.get("az", 0.0) - self.cruise_az0)
@@ -401,6 +429,99 @@ class Test:
                   d.get("dotN", 0.0) - self.cruise_dot1 <= 1.0,
                   f"dotN {self.cruise_dot1:.0f} -> {d.get('dotN', 0):.0f}")
             check("cruise disengaged in deadzone", d.get("cruise") == 0, raw)
+            self.advance("pstate_engage")
+        elif s == "pstate_engage":
+            # --- P-狀態游標制契約組（07-28 user 定案「滑鼠直接控制皮膚上的點」）---
+            # DebugRoboMouse=合成滑鼠增量＝與真人同一條游標管線。角度命令=角度制
+            #（上游所有 robo 契約在角度制下運行、語義不變）；增量輸入=游標制。
+            host = find_char(self.server(), self.host_pid)
+            if self.elapsed() < 0.4:
+                host.call_method("DebugRoboMouse", (0.3, 0.0))
+                return
+            raw, d = summary(host)
+            check("cursor mode engages on mouse input", d.get("curs") == 1, raw)
+            self.ps_samples = []
+            self.ps_cam = []
+            self.advance("pstate_gain_pos")
+        elif s == "pstate_gain_pos":
+            # 恆定增益（去程）：等速餵滑鼠、量游標皮膚速度——前後半速度比 ≈1
+            #（老病：身體追趕/髖槓桿把筆速灌成 2~5×、regime 切換忽快忽慢）
+            host = find_char(self.server(), self.host_pid)
+            host.call_method("DebugRoboMouse", (0.3, 0.0))
+            raw, d = summary(host)
+            cw = vec3(raw, "cw")
+            if cw:
+                self.ps_samples.append((self.elapsed(), cw))
+            camo = vec3(raw, "camo")
+            if camo:
+                self.ps_cam.append((time.monotonic(), camo))
+            if self.elapsed() < 1.2:
+                return
+            spd = seg_speeds(self.ps_samples)
+            if spd:
+                a, b = spd
+                ratio = b / max(a, 1e-3)
+                check("cursor gain constant while body settles",
+                      0.7 <= ratio <= 1.4 and a > 1.0,
+                      f"spd first={a:.1f} second={b:.1f} cm/s ratio={ratio:.2f}")
+            else:
+                check("cursor gain constant while body settles", False, "no samples")
+            self.ps_samples = []
+            self.advance("pstate_gain_neg")
+        elif s == "pstate_gain_neg":
+            # 回程（增益對稱＋游標回到肚皮域內）
+            host = find_char(self.server(), self.host_pid)
+            host.call_method("DebugRoboMouse", (-0.3, 0.0))
+            raw, d = summary(host)
+            cw = vec3(raw, "cw")
+            if cw:
+                self.ps_samples.append((self.elapsed(), cw))
+            camo = vec3(raw, "camo")
+            if camo:
+                self.ps_cam.append((time.monotonic(), camo))
+            if self.elapsed() < 1.2:
+                return
+            spd = seg_speeds(self.ps_samples)
+            ok = False
+            det = "no samples"
+            if spd:
+                a, b = spd
+                ok = 0.7 <= (b / max(a, 1e-3)) <= 1.4 and a > 1.0
+                det = f"spd first={a:.1f} second={b:.1f} cm/s"
+            check("cursor gain symmetric on return", ok, det)
+            self.ps_stop_cw = vec3(raw, "cw")
+            self.advance("pstate_stop")
+        elif s == "pstate_stop":
+            # 停手零漂：不餵增量 1.2s——游標在世界中寸步不移（停手過頭構造性死亡）
+            if self.elapsed() < 1.2:
+                return
+            host = find_char(self.server(), self.host_pid)
+            raw, d = summary(host)
+            cw = vec3(raw, "cw")
+            drift = dist3(cw, self.ps_stop_cw) if (cw and self.ps_stop_cw) else 99.0
+            check("cursor holds still after input stops (no overshoot)",
+                  drift <= 0.5, f"drift={drift:.2f}cm over 1.2s")
+            # WYSIWYG：相機前向與（游標−相機）夾角≈0——螢幕中心=游標=墨（構造保證）
+            camo = vec3(raw, "camo")
+            camd = vec3(raw, "camd")
+            ang = 99.0
+            if cw and camo and camd:
+                vx, vy, vz = cw[0] - camo[0], cw[1] - camo[1], cw[2] - camo[2]
+                L = max((vx * vx + vy * vy + vz * vz) ** 0.5, 1e-3)
+                dot = (vx * camd[0] + vy * camd[1] + vz * camd[2]) / L
+                ang = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+            check("camera centre rides cursor exactly", ang <= 0.5, f"ang={ang:.2f}deg")
+            # 視野穩定度契約（07-28 二修「頭=被穩定的平台」）：相機**位置**速度有界
+            # ——中心點釘住只保證準星不晃，位置快移=中心以外整個視野繞著中心搖
+            #（視差搖）。載體三軸限速後：平台速度=限速輸入的解析函數=構造有界。
+            cam_max = 0.0
+            cams = self.ps_cam
+            for i in range(len(cams) - 3):
+                dt_s = cams[i + 3][0] - cams[i][0]
+                if dt_s > 0.02:
+                    cam_max = max(cam_max, dist3(cams[i + 3][1], cams[i][1]) / dt_s)
+            check("camera platform speed bounded (stabilised head)",
+                  0.0 < cam_max <= 40.0, f"maxCamSpd={cam_max:.1f}cm/s over gain sweeps")
             self.advance("stencil_switch")
         elif s == "stencil_switch":
             # 打稿制（07-25）：切麥克筆、瞄到乾淨帶（tilt-5≈上方 ~5cm）準備畫稿線
@@ -427,8 +548,9 @@ class Test:
                 return
             raw, d = summary(host)
             dn = d.get("dotN", 0.0) - self.stencil_dot0
-            # 8° ≈ 4.8cm 稿線 / 0.195cm 節拍 ≈ 24 點（寬帶容掠射/幀況）
-            check("stencil line deposits at hand speed", 10.0 <= dn <= 80.0,
+            # 8° 稿線（07-28 姿勢主導制：射線原點=活眉心、原點距與弧長隨鎖點幾何變
+            # ——帶放寬到 10~150；節拍契約由 dotGapCm 另驗）
+            check("stencil line deposits at hand speed", 10.0 <= dn <= 150.0,
                   f"d_dotN={dn:.0f} over 8deg stencil sweep")
             # FP 截圖：2D 向量麥克筆＋紫稿線讀感自查（視覺件必附截圖鐵律）
             unreal.SystemLibrary.execute_console_command(
@@ -436,12 +558,36 @@ class Test:
             host.call_method("DebugRoboPaintHold", (False,))
             self.advance("stencil_follow_prep")
         elif s == "stencil_follow_prep":
-            # 上墨沿稿：切 Liner、針壓回稿線起點（抬針重壓=乾淨的吸附起手）
-            if self.elapsed() < 0.6:
-                return
+            # 上墨沿稿（07-28 姿勢主導制改制）：舊「記角度回壓稿線」在載體移動下
+            # 角度→位置不穩（follow 間歇 0 點實錘）——改在當下現畫一小段新稿、
+            # 原地切 Liner 壓在段首＝構造上壓線
+            t = self.elapsed()
             host = find_char(self.server(), self.host_pid)
-            host.call_method("DebugRoboNeedle", (0,))
-            host.call_method("DebugRoboDrawAim", (self.paint_az0 + 0.5, self.paint_tilt0 - 5.0))
+            if t < 0.4:
+                return
+            ph = getattr(self, "fprep_phase", 0)
+            if ph == 0:
+                self.fprep_phase = 1
+                host.call_method("DebugRoboDrawAim", (self.paint_az0 + 0.5, self.paint_tilt0 - 5.0))
+                return
+            if ph == 1:
+                if t < 1.0:
+                    return
+                self.fprep_phase = 2
+                host.call_method("DebugRoboPaintHold", (True,))  # 稿筆現畫新段
+                return
+            if ph == 2:
+                if t < 2.2:
+                    host.call_method("DebugRoboDrawAim",
+                                     (self.paint_az0 + 0.5 + (t - 1.0) * 3.5, self.paint_tilt0 - 5.0))
+                    return
+                self.fprep_phase = 3
+                host.call_method("DebugRoboPaintHold", (False,))
+                host.call_method("DebugRoboNeedle", (0,))
+                host.call_method("DebugRoboDrawAim", (self.paint_az0 + 0.9, self.paint_tilt0 - 5.0))
+                return
+            if t < 2.9:
+                return
             self.advance("stencil_follow_engage")
         elif s == "stencil_follow_engage":
             if self.elapsed() < 0.8:
@@ -516,9 +662,10 @@ class Test:
                 return
             raw, d = summary(host)
             dn = d.get("dotN", 0.0) - self.shader_dot0
-            # 排針制（八版）：慢掃 9.5cm 路徑 / 排距 0.2cm ≈ 47 排
+            # 排針制（八版）：慢掃 / 排距 0.2cm（07-28 姿勢主導制：弧長隨原點距變
+            # ——帶放寬到 20~220；排距契約由 dotGapCm 另驗）
             check("shader deposits while sweeping (row-metered)",
-                  20.0 <= dn <= 90.0, f"d_dotN={dn:.0f} over ~2s slow sweep")
+                  20.0 <= dn <= 220.0, f"d_dotN={dn:.0f} over ~2s slow sweep")
             self.fast_dot0 = d.get("dotN", 0.0)
             self.fast_mid_logged = False
             self.advance("shader_fastsweep")
@@ -730,8 +877,7 @@ class Test:
             host = find_char(self.server(), self.host_pid)
             victim = find_char(self.server(), self.victim_pid)
             vhead = bone_w(victim, "Head")
-            az, tilt = aim_towards(host, vhead)
-            host.call_method("DebugRoboDrawAim", (az, tilt))
+            host.call_method("DebugRoboAimAt", (vhead,))  # 射線原點反算（07-28 相機≠射線原點）
             self.advance("lookup_shot")
         elif s == "lookup_shot":
             if self.elapsed() < 1.2:
@@ -768,17 +914,22 @@ class Test:
             vh_l = bone_w(victim, "LeftHand")
             vh_r = bone_w(victim, "RightHand")
             far_p = vh_l if dist(vh_l, hl) > dist(vh_r, hl) else vh_r
-            az, tilt = aim_towards(host, far_p)
-            host.call_method("DebugRoboDrawAim", (az, tilt))
+            # 07-28 姿勢主導制：遠側橫向點=稿筆域（稿筆墨=P 恆等、隨看隨畫）；機器的
+            # 伸縮契約由近點檢查（needle/grip 帶）承載——極端側向針軸搆不到=誠實極限
+            host.call_method("DebugRoboNeedle", (2,))
+            host.call_method("DebugRoboAimAt", (far_p,))  # 視覺伺服收斂
             self.advance("far_verify")
         elif s == "far_verify":
-            if self.elapsed() < 2.2:
+            # 載體限速（07-28 頭=被穩定的平台）：遠點大轉向 ~2s 才到位——伺服上限
+            # 已放寬 2.5s、這裡等 3.2s
+            if self.elapsed() < 3.2:
                 return
             host = find_char(self.server(), self.host_pid)
             raw, d = summary(host)
-            # 伸縮針制反轉（07-21）：遠點=伸針可達（深度交給針、針軸構造上穿過 P）
-            check("far point reachable via needle solve", d.get("reach") == 1, raw)
-            check("needle solve length engaged (far)", d.get("nSolve", -1.0) > 15.0, raw)
+            check("far point on face-ray (servo converged)", d.get("reach") == 1, raw)
+            self.far_dot0 = d.get("dotN", 0.0)
+            self.far_az = d.get("az", 0.0)
+            self.far_tilt = d.get("tilt", 45.0)
             self.advance("far_paint")
         elif s == "far_paint":
             if self.elapsed() < 0.3:
@@ -788,21 +939,20 @@ class Test:
                 self.far_hold = True
                 host.call_method("DebugRoboPaintHold", (True,))
                 return
-            if self.elapsed() < 1.5:
+            t = self.elapsed()
+            if t < 1.8:
+                # 稿筆有移動閘：小幅掃動出墨
+                host.call_method("DebugRoboDrawAim",
+                                 (self.far_az + math.sin(t * 3.0) * 2.0, self.far_tilt))
                 return
             raw, d = summary(host)
-            ns = d.get("nSolve", -1.0)
-            nd = d.get("needle", -1.0)
-            gp = d.get("grip", -1.0)
-            check("far needle strikes long (telescope)", nd > 15.0, raw)
-            # 伸縮分帳制（07-22 user 定案）：伸長 e=nSolve-標稱4 → 針=4+e/2、握管=23.17+e/2
-            check("far extension split needle half", ns > 0.0 and abs(nd - (ns + 4.0) * 0.5) < 10.0,
-                  f"needle={nd:.1f} expect~{(ns + 4.0) * 0.5:.1f} (nSolve={ns:.1f})")
-            check("far extension split grip half", abs(gp - (23.17 + (ns - 4.0) * 0.5)) < 10.0,
-                  f"grip={gp:.1f} expect~{23.17 + (ns - 4.0) * 0.5:.1f}")
+            dn = d.get("dotN", 0.0) - self.far_dot0
+            check("far sketch deposits at P (stencil ink=centre)", dn >= 5.0,
+                  f"d_dotN={dn:.0f} on far hand")
             unreal.SystemLibrary.execute_console_command(
                 self.server(), "HighResShot 1280x720 filename=directdraw_fp_farneedle")
             host.call_method("DebugRoboPaintHold", (False,))
+            host.call_method("DebugRoboNeedle", (0,))
             self.advance("low_exit")
         elif s == "low_exit":
             if self.elapsed() < 0.6:

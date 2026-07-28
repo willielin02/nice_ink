@@ -388,6 +388,8 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	// 作畫臉指向：本人端用本地值零延遲（pattern 同 SleepAim），複製只服務他端擺姿
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawAimAzDeg, COND_SkipOwner);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawAimTiltDeg, COND_SkipOwner);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawTargetRepW, COND_SkipOwner);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, bDrawTargetRepValid, COND_SkipOwner);
 	DOREPLIFETIME(ANiceInkCharacter, bBodyFaceDown);
 }
 
@@ -442,12 +444,14 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 			{
 				RemoteDrawAzDeg = DrawAimAzDeg;
 				RemoteDrawTiltDeg = DrawAimTiltDeg;
+				RemoteDrawTargetW = DrawTargetRepW;
 				bRemoteDrawSnap = false;
 			}
 			else
 			{
 				RemoteDrawAzDeg += FMath::FindDeltaAngleDegrees(RemoteDrawAzDeg, DrawAimAzDeg) * K;
 				RemoteDrawTiltDeg += (DrawAimTiltDeg - RemoteDrawTiltDeg) * K;
+				RemoteDrawTargetW = FMath::Lerp(RemoteDrawTargetW, FVector(DrawTargetRepW), K);
 			}
 		}
 		ApplyBowPose();
@@ -1306,23 +1310,108 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 {
 	// 作畫中滑鼠＝臉指向（az=世界 yaw、tilt 正=向下）；robo 直設 aim 由此消化
 	//（針 aim 同步 snap＝傳送門不產生追趕位移——backdoor sweep 不落墨契約的載體）
+	// 視覺伺服（07-28 姿勢主導制）：aim 逐 tick 朝「射線原點→目標點」收斂——原點
+	// 跟著姿勢動＝一次性反算必偏（robo 遠點/入鎖首幀實錘）；收斂到 3cm 內或 1s 到期
+	// 即撤。DebugRoboDrawAim/PaintStick＝明確角度命令，覆蓋伺服。
+	// 角度命令（robo/伺服/搖桿）＝退回角度制：命令角語義是「射線指哪」——在移動
+	// 原點下把命令角重播種成游標＝身體每動一下同一命令角落到不同點（P 抖動把
+	// 路徑灌大 10×、stencil 8° 掃出 506 點，robo 實錘）。游標制只屬於增量輸入
+	//（真滑鼠/DebugRoboMouse）——增量的語義本來就是「推游標」。
+	if (bDebugAimServo && !bDebugPaintStickActive)
+	{
+		DebugAimServoSecs += DeltaSeconds;
+		const FRotator R = (DebugAimServoTarget - GetAimRayOrigin()).Rotation();
+		DrawAimAzLocal = FMath::UnwindDegrees(R.Yaw);
+		DrawAimTiltLocal = FMath::Clamp(-R.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
+		TattooNeedleAz = DrawAimAzLocal;
+		TattooNeedleTilt = DrawAimTiltLocal;
+		bDrawCursorValid = false;
+		// 2.5s 上限（07-28 二修 1.0→2.5：載體限速後遠點大轉向要 ~2s 才到位——伺服
+		// 提早收斂照樣提早退出，上限只兜底發散）
+		if (DebugAimServoSecs > 2.5f ||
+			(bDrawTargetValid && FVector::Dist(DrawTargetWorld, DebugAimServoTarget) < 3.0f))
+		{
+			bDebugAimServo = false;
+		}
+	}
 	if (bHasPendingDebugDrawAim)
 	{
 		bHasPendingDebugDrawAim = false;
+		bDebugAimServo = false;
 		DrawAimAzLocal = FMath::UnwindDegrees(PendingDebugDrawAim.X);
 		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg, DrawTiltMaxDeg);
 		TattooNeedleAz = DrawAimAzLocal;
 		TattooNeedleTilt = DrawAimTiltLocal;
+		bDrawCursorValid = false;
 	}
 	float MouseX = 0.0f;
 	float MouseY = 0.0f;
 	PC->GetInputMouseDelta(MouseX, MouseY);
-	// 皮繩制（07-24）：滑鼠永遠=指哪（模式切換退役——按住左鍵游標照常自由，針負責追）；
-	// 增益=FOV 縮放後的鎖定靈敏度（開鏡定律：不縮放=游標三倍速）
+	if (bHasPendingDebugMouse)
+	{
+		// robo 合成滑鼠（P-狀態制契約載體）：增量疊進本 tick 滑鼠——走與真人
+		// 完全同一條游標管線
+		MouseX += PendingDebugMouse.X;
+		MouseY += PendingDebugMouse.Y;
+		PendingDebugMouse = FVector2D::ZeroVector;
+		bHasPendingDebugMouse = false;
+	}
+	// P-狀態游標制（07-28 user 定案「滑鼠直接控制皮膚上的點」）：滑鼠以恆定增益
+	//（cm/格=舊角度靈敏度×基準眼距 60cm——手感延續、FOV 開鏡縮放照吃）直接推
+	// 皮膚游標。身體/眉心的動力學推不動游標＝筆速忽快忽慢/停手過頭結構性消滅。
+	// 游標推到剪影外＝釘在邊上（畫布域牆；巡航「拉不動」同構）；縱向以控制角
+	// tilt 域鉗（=可畫域=姿勢域，「指的到=身體允許」照舊由構造成立）。
 	const float Sens = DrawAimSensitivity();
-	DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * Sens);
-	DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * Sens,
-		DrawTiltMinDeg, DrawTiltMaxDeg);
+	if (bDrawCursorValid && !bDebugAimServo && (MouseX != 0.0f || MouseY != 0.0f))
+	{
+		const FVector Origin = GetAimRayOrigin();
+		const FRotator GazeR = (DrawCursorW - Origin).Rotation();
+		const float CmPerUnit = Sens * (PI / 180.0f) * DrawCursorRefDistCm;
+		const FVector Cand = DrawCursorW +
+			FRotationMatrix(GazeR).GetUnitAxis(EAxis::Y) * (MouseX * CmPerUnit) +
+			FRotationMatrix(GazeR).GetUnitAxis(EAxis::Z) * (MouseY * CmPerUnit);
+		const float StepCm = FMath::Sqrt(
+			FMath::Square(MouseX * CmPerUnit) + FMath::Square(MouseY * CmPerUnit));
+		FVector HitP;
+		if (TraceAimToTarget((Cand - Origin).GetSafeNormal(), HitP))
+		{
+			const float CtrlTilt = bDrawCtrlAnchorValid
+				? static_cast<float>(-(HitP - DrawCtrlAnchorW).Rotation().Pitch)
+				: DrawAimTiltLocal;
+			// 步長鉗（07-28 二修「莫名突然抖動」真兇之一）：非凸表面上重投影射線
+			// 跨過皺摺/肢體交界＝一小步滑鼠、游標瞬跳幾 cm＝載體姿勢跟跳＝畫面猛晃。
+			// 一步滑鼠只准走一步的距離（×2.5+0.75cm=曲面/掠射餘裕）——跨縫＝釘在
+			// 縫邊（與剪影釘邊同構：要跨過去=繼續推，游標貼著縫慢慢爬）。
+			if (CtrlTilt >= DrawTiltMinDeg && CtrlTilt <= DrawTiltMaxDeg &&
+				FVector::Dist(HitP, DrawCursorW) <= StepCm * 2.5f + 0.75f)
+			{
+				DrawCursorW = HitP;
+			}
+		}
+	}
+	else if (!bDrawCursorValid && (MouseX != 0.0f || MouseY != 0.0f))
+	{
+		// 游標未播種（入鎖初期/角度命令後）：滑鼠一動＝角度積分一步＋沿 aim 試播種
+		// ——命中即游標接管（robo 純角度 session 滑鼠恆零＝永遠角度制、契約全保）
+		DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * Sens);
+		DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * Sens,
+			DrawTiltMinDeg, DrawTiltMaxDeg);
+		FVector SeedP;
+		if (TraceAimToTarget(FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), SeedP))
+		{
+			DrawCursorW = SeedP;
+			bDrawCursorValid = true;
+		}
+	}
+	// aim=導出量（凝視角=眉心→游標，逐 tick 重算）：頭/相機/巡航意圖的共同語言。
+	// 身體移動→眉心移動→凝視角自動反轉補償＝P 恆定（P-狀態制的核心恆等式）。
+	// 伺服中不覆蓋（伺服擁有角度）。
+	if (bDrawCursorValid && !bDebugAimServo)
+	{
+		const FRotator G = (DrawCursorW - GetAimRayOrigin()).Rotation();
+		DrawAimAzLocal = FMath::UnwindDegrees(G.Yaw);
+		DrawAimTiltLocal = static_cast<float>(-G.Pitch);
+	}
 	if (bCruise)
 	{
 		// 液線針按住左鍵＝針以 v_max 上限追趕「手的意圖點」（速率所有權歸機器、
@@ -1349,6 +1438,7 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 			DrawAimAzLocal = FMath::UnwindDegrees(TattooNeedleAz + Dn.X * AheadDeg);
 			DrawAimTiltLocal = FMath::Clamp(TattooNeedleTilt + Dn.Y * AheadDeg,
 				DrawTiltMinDeg, DrawTiltMaxDeg);
+			bDrawCursorValid = false; // 角度命令＝角度制（巡航中 P 本就屬於針）
 		}
 		UpdateTattooCruise(DeltaSeconds);
 	}
@@ -1357,9 +1447,23 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 		if (bTattooChaseActive)
 		{
 			// 放開左鍵：手 aim 收斂到針位——畫面屬於針，放開瞬間相機交還給手時
-			// 不得跳半條皮繩（意圖點是隱形的，收斂零感）
+			// 不得跳半條皮繩（意圖點是隱形的，收斂零感）。若游標制在場（真滑鼠），
+			// 游標收斂到針的皮膚點＝解凍零跳；trace miss＝退回角度制。
 			DrawAimAzLocal = TattooNeedleAz;
 			DrawAimTiltLocal = TattooNeedleTilt;
+			if (bDrawCursorValid)
+			{
+				FVector NeedleP;
+				if (TraceAimToTarget(
+						FRotator(-TattooNeedleTilt, TattooNeedleAz, 0.0f).Vector(), NeedleP))
+				{
+					DrawCursorW = NeedleP;
+				}
+				else
+				{
+					bDrawCursorValid = false;
+				}
+			}
 		}
 		bTattooChaseActive = false;
 		bTattooCruising = false;
@@ -1368,11 +1472,28 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 		bStencilFollowTried = false;
 	}
 
-	// One Euro：姿勢/筆/墨的驅動源＝濾波 aim（相機用生值——視角零延遲）。
-	// 皮繩追趕中濾波源=針 aim（追趕本身已是平滑器；放開左鍵源切回手 aim、
-	// ≤皮繩長的差距由濾波 ~100ms 滑過=不硬跳）
-	const float SrcAz = bTattooChaseActive ? TattooNeedleAz : DrawAimAzLocal;
-	const float SrcTilt = bTattooChaseActive ? TattooNeedleTilt : DrawAimTiltLocal;
+	// One Euro：姿勢（載體映射）的驅動源＝濾波後的**控制角**（P-狀態制：控制角
+	// =游標−凍結錨＝只有游標動它才動——身體動力學進不了迴路＝映射嚴格穩定；
+	// 直接餵凝視角=眉心在迴路裡、|r/d|>1 迭代震盪）。相機/墨用游標生值——零延遲。
+	// 皮繩追趕中濾波源=針 aim（追趕本身已是平滑器；放開時游標已收斂到針=不硬跳）
+	float SrcAz;
+	float SrcTilt;
+	if (bTattooChaseActive)
+	{
+		SrcAz = TattooNeedleAz;
+		SrcTilt = TattooNeedleTilt;
+	}
+	else if (bDrawCursorValid && bDrawCtrlAnchorValid)
+	{
+		const FRotator C = (DrawCursorW - DrawCtrlAnchorW).Rotation();
+		SrcAz = FMath::UnwindDegrees(C.Yaw);
+		SrcTilt = FMath::Clamp(static_cast<float>(-C.Pitch), DrawTiltMinDeg, DrawTiltMaxDeg);
+	}
+	else
+	{
+		SrcAz = DrawAimAzLocal;
+		SrcTilt = DrawAimTiltLocal;
+	}
 	DrawAimAzFilt = AimEuroAz.Step(SrcAz, DeltaSeconds, DrawAimFilterMinCutoffHz, DrawAimFilterBeta);
 	DrawAimTiltFilt = FMath::Clamp(
 		AimEuroTilt.Step(SrcTilt, DeltaSeconds, DrawAimFilterMinCutoffHz, DrawAimFilterBeta),
@@ -1383,19 +1504,24 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	DrawAimSendAccum += DeltaSeconds;
 	if (DrawAimSendAccum >= 0.0333f &&
 		(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentDrawAz, SrcAz)) > 0.5f ||
-			FMath::Abs(LastSentDrawTilt - SrcTilt) > 0.5f))
+			FMath::Abs(LastSentDrawTilt - SrcTilt) > 0.5f ||
+			bLastSentTargetValid != bDrawTargetValid))
 	{
 		DrawAimSendAccum = 0.0f;
 		LastSentDrawAz = SrcAz;
 		LastSentDrawTilt = SrcTilt;
+		bLastSentTargetValid = bDrawTargetValid;
 		if (HasAuthority())
 		{
 			DrawAimAzDeg = SrcAz;
 			DrawAimTiltDeg = SrcTilt;
+			DrawTargetRepW = DrawTargetWorld;
+			bDrawTargetRepValid = bDrawTargetValid;
 		}
 		else
 		{
-			ServerUpdateDrawAim(SrcAz, SrcTilt);
+			// P 隨 aim 同包上報（07-26）：他端的筆尖/姿勢與墨同源（見 DrawTargetRepW）
+			ServerUpdateDrawAim(SrcAz, SrcTilt, DrawTargetWorld, bDrawTargetValid);
 		}
 	}
 }
@@ -1423,7 +1549,8 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 	if (bStencilFollowActive)
 	{
 		// 沿稿模式：手 aim 收攏到針（意圖點不驅動；動滑鼠取消在 PollDrawAim 層）、
-		// 相機/畫面照常屬於針；稿走完/失效＝停針原地扎（放開再壓＝從斷點續走）
+		// 相機/畫面照常屬於針；稿走完/失效＝停針原地扎（放開再壓＝從斷點續走）。
+		// 游標同步跟針的皮膚點（P-狀態制：解凍/放開時游標=針尖、零跳）
 		DrawAimAzLocal = TattooNeedleAz;
 		DrawAimTiltLocal = TattooNeedleTilt;
 		TattooChaseErrCm = 0.0f;
@@ -1432,6 +1559,11 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 			!UpdateStencilFollow(DeltaSeconds, PNow))
 		{
 			bStencilFollowActive = false;
+		}
+		else
+		{
+			DrawCursorW = PNow;
+			bDrawCursorValid = true;
 		}
 		return;
 	}
@@ -1507,8 +1639,10 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 					const float Ratio = TattooGainCmdAccum / FMath::Max(TattooGainActAccum, 0.05f);
 					// 下限 0.7：閉環必須雙向可修——1.0 下限=只補不煞，折損消失的環境
 					// 會恆定超速 15% 而增益鎖死在底（robo 兩輪實錘 tipSpd 2.72/gain=1.00）
+					// 下限 0.7→0.45（07-28 姿勢主導制：射線原點改活眉心＝角度→公分
+					// 換算整體變大，環境折損域外移——閉環權威要蓋得住新環境）
 					TattooSpeedGain = FMath::Clamp(
-						FMath::Lerp(TattooSpeedGain, TattooSpeedGain * Ratio, 0.4f), 0.7f, 1.7f);
+						FMath::Lerp(TattooSpeedGain, TattooSpeedGain * Ratio, 0.4f), 0.45f, 1.7f);
 					TattooGainCmdAccum = 0.0f;
 					TattooGainActAccum = 0.0f;
 				}
@@ -1831,7 +1965,7 @@ int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
 	return OutPoints.Num();
 }
 
-void ANiceInkCharacter::ServerUpdateDrawAim_Implementation(float AzDeg, float TiltDeg)
+void ANiceInkCharacter::ServerUpdateDrawAim_Implementation(float AzDeg, float TiltDeg, FVector_NetQuantize TargetW, bool bTargetValid)
 {
 	if (!bLeanLocked)
 	{
@@ -1839,6 +1973,8 @@ void ANiceInkCharacter::ServerUpdateDrawAim_Implementation(float AzDeg, float Ti
 	}
 	DrawAimAzDeg = FMath::UnwindDegrees(AzDeg);
 	DrawAimTiltDeg = FMath::Clamp(TiltDeg, DrawTiltMinDeg, DrawTiltMaxDeg);
+	DrawTargetRepW = TargetW;
+	bDrawTargetRepValid = bTargetValid;
 }
 
 float ANiceInkCharacter::EffectiveDrawAz() const
@@ -1857,6 +1993,21 @@ void ANiceInkCharacter::DebugRoboDrawAim(float AzDeg, float TiltDeg)
 {
 	bHasPendingDebugDrawAim = true;
 	PendingDebugDrawAim = FVector2D(AzDeg, TiltDeg);
+}
+
+void ANiceInkCharacter::DebugRoboMouse(float DX, float DY)
+{
+	bHasPendingDebugMouse = true;
+	PendingDebugMouse += FVector2D(DX, DY); // 疊加：同 tick 多次呼叫不吞增量
+}
+
+void ANiceInkCharacter::DebugRoboAimAt(FVector TargetW)
+{
+	// 07-28 姿勢主導制：改掛「視覺伺服」——射線原點跟著姿勢動，一次性反算必偏；
+	// 伺服在 PollDrawAim 逐 tick 收斂（人眼收斂行為的機器版）
+	bDebugAimServo = true;
+	DebugAimServoTarget = TargetW;
+	DebugAimServoSecs = 0.0f;
 }
 
 void ANiceInkCharacter::DebugRoboPaintHold(bool bHold)
@@ -1893,12 +2044,14 @@ void ANiceInkCharacter::DebugRoboPaintStick(float X, float Y)
 
 FVector ANiceInkCharacter::GetAimRayOrigin() const
 {
-	// 眼錨定（07-20）：入畫收斂後＝世界定點（與 UpdateLeanCamera 共用⇒準星=P 精確）。
-	// 錨定前（入鎖首幀）＝ActorLoc+60——與 server 算 aim 初值的眼睛同一公式，
-	// 首幀 P≈LeanPoint。絕不讀活骨骼：骨骼被解算驅動＝自我參照回饋（滑走實錘）。
-	if (bDrawEyeAnchorValid)
+	// 射線原點＝解析眉心（07-28 姿勢主導制）：P 在下游（姿勢只吃 aim）＝原點跟姿勢
+	// 走是安全的——「眼→P→姿勢→眼」回饋環構造上不存在，眼錨定整套退役。
+	// 用前向模型解析值而非活骨骼讀回（≤0.5cm 寫入收斂殘差會被 path-integral 契約
+	//（v_max/針距）積成假里程）；與相機同源＝準星射線=中心射線=WYSIWYG。
+	// 未備（入鎖首幀/校準）＝ActorLoc+60——與 server 算 aim 初值同式、首幀 P≈LeanPoint。
+	if (bLeanLocked && bDrawRayOriginValid)
 	{
-		return DrawEyeAnchorWorld;
+		return DrawRayOriginW;
 	}
 	return GetActorLocation() + FVector(0.0f, 0.0f, 60.0f);
 }
@@ -2137,15 +2290,25 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 閘每隔幾幀閃關一次——瞬時值當閘=排帶斷格真兇（robo 每 tick 餵 aim 測不到；
 	// 「手在動」是 0.1s 尺度的事實，不是單幀的事實）
 	{
+		// P-狀態制：量在控制角上（游標−凍結錨）——只有游標動它才動；量凝視角=
+		// 身體移動的補償轉動會偽造「手在動」（閘雖被距離計量兜底，帳要乾淨）
+		float MeasAz = DrawAimAzLocal;
+		float MeasTilt = DrawAimTiltLocal;
+		if (bDrawCursorValid && bDrawCtrlAnchorValid)
+		{
+			const FRotator C = (DrawCursorW - DrawCtrlAnchorW).Rotation();
+			MeasAz = static_cast<float>(C.Yaw);
+			MeasTilt = static_cast<float>(-C.Pitch);
+		}
 		const float InstSpeed = (bMistPrevAimValid && DeltaSeconds > KINDA_SMALL_NUMBER)
-			? (FMath::Abs(FMath::FindDeltaAngleDegrees(DrawAimAzLocal, MistPrevAimAz)) +
-				FMath::Abs(DrawAimTiltLocal - MistPrevAimTilt)) / DeltaSeconds
+			? (FMath::Abs(FMath::FindDeltaAngleDegrees(MeasAz, MistPrevAimAz)) +
+				FMath::Abs(MeasTilt - MistPrevAimTilt)) / DeltaSeconds
 			: 0.0f;
 		const float K = FMath::Clamp(DeltaSeconds / 0.08f, 0.0f, 1.0f);
 		MistAimSpeedDegS = FMath::Lerp(MistAimSpeedDegS, InstSpeed, K);
+		MistPrevAimAz = MeasAz;
+		MistPrevAimTilt = MeasTilt;
 	}
-	MistPrevAimAz = DrawAimAzLocal;
-	MistPrevAimTilt = DrawAimTiltLocal;
 	bMistPrevAimValid = true;
 
 	// 搆不到計時（HUD 提示閘）：有目標但筆搆不著才累積；看向房間（無 P）不算
@@ -2199,6 +2362,14 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	}
 	auto TipToSurfaceUV = [&](const FVector& TipP, const FVector2D* Prev, FVector2D& OutUV) -> bool
 	{
+		// 姿勢主導制（07-28）：筆尖=P=aim trace 的表面命中點——直接解 UV（容差 1.5mm
+		// ＝打在褌上不落墨的遮擋語義原樣保留：P 落在褌面=離皮膚網格超容差=拒墨）。
+		// 沿筆軸壓入 trace 降為退路（P 失效的凍結回退尖點）——凍結臂的沿稿極端下
+		// 筆軸貼皮膚切線、掠射 trace 摸不到面＝首針永遠空扎（robo 探針實錘 uvfail）。
+		if (Target->Body->ResolveBodyUV(TipP, OutUV, /*MaxDistance=*/0.15f, Prev))
+		{
+			return true;
+		}
 		FHitResult Hit;
 		const FVector A = TipP + PenShaftDirWorld * 2.5f;
 		const FVector B = TipP - PenShaftDirWorld * 3.0f;
@@ -3023,13 +3194,42 @@ void ANiceInkCharacter::OnRep_Lean()
 		TattooLastDotGapCm = -1.0f;
 		TattooDotsEmitted = 0;
 		bDebugPaintStickActive = false;
-		// 剛臂解算暖啟動：yaw 從 aim 起步、增量歸零（Backup4 中性）；P/眼錨快取作廢
+		// 姿勢主導制（07-28）：入鎖重新校準（基準姿勢+增益由入座解算現場量測）
 		DrawSolveYawDeg = GetActorRotation().Yaw;
 		DrawSolveHipDeg = 0.0f;
 		DrawSolveAnkleDeg = 0.0f;
+		DrawNeedleSolveLenCm = -1.0f;
 		bDrawTipReachable = false;
 		bDrawTargetValid = false;
-		bDrawEyeAnchorValid = false;
+		bDrawMapCalibrated = false;
+		bDrawRayOriginValid = false;
+		bDrawCursorValid = false;
+		bDrawCtrlAnchorValid = false;
+		// 首鎖視野修（07-27 user 抓「第一次右鍵超近超小視野」）：owner 本地 aim 在
+		// 入鎖時從鎖點幾何播種——server 的 aim 種子寫在 DrawAimAzDeg（COND_SkipOwner
+		// ＝本人收不到），舊制本人沿用上一次的本地 aim（開局首鎖=初始值 az0/tilt45）
+		// →首幀 P 沿無關方向 trace 命中意外近點→眼錨定格在皮膚上。與 server 種子
+		// 同公式（眼=ActorLoc+60，同 GetAimRayOrigin 錨定前退路）；濾波/針 aim 同步
+		// snap（入鎖硬切，不從舊方向慢掃過來）。
+		if (IsLocallyControlled())
+		{
+			const FRotator SeedR = (FVector(LeanPoint) -
+				(GetActorLocation() + FVector(0.0f, 0.0f, 60.0f))).Rotation();
+			const float SeedTilt = FMath::Clamp(-SeedR.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
+			DrawAimAzLocal = SeedR.Yaw;
+			DrawAimTiltLocal = SeedTilt;
+			AimEuroAz.Snap(SeedR.Yaw);
+			AimEuroTilt.Snap(SeedTilt);
+			DrawAimAzFilt = SeedR.Yaw;
+			DrawAimTiltFilt = SeedTilt;
+			TattooNeedleAz = SeedR.Yaw;
+			TattooNeedleTilt = SeedTilt;
+			// 入鎖視覺伺服（07-28 姿勢主導制）：種子只近似（原點 ActorLoc+60 vs 活眉心
+			// 視差）——伺服讓準星在入鎖後 <1s 收斂到你按右鍵點的那個點
+			bDebugAimServo = true;
+			DebugAimServoTarget = FVector(LeanPoint);
+			DebugAimServoSecs = 0.0f;
+		}
 		// 本人視角藏自己的身體（筆除外）：眼錨定後真頭會越過錨點相機＝看到自己
 		// 後腦勺/肩膀擋畫布；旁人不受影響（OwnerNoSee 只藏 owner）
 		if (IsLocallyControlled())
@@ -3098,8 +3298,10 @@ void ANiceInkCharacter::OnRep_Lean()
 				}
 			}
 		}
-		bDrawEyeAnchorValid = false;
+		bDrawMapCalibrated = false;
 		bDrawTargetValid = false;
+		bDrawCursorValid = false;
+		bDrawCtrlAnchorValid = false;
 		ResetBowPose();
 		StopPaintingLocal();
 	}
@@ -3113,12 +3315,13 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 	const FVector HipsW = (BowBody && BowBody->GetSkinnedAsset())
 		? BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace).GetLocation()
 		: FVector::ZeroVector;
-	// 筆尖對齊誤差：PenTipWorld 到「相機中心射線」的垂距（對齊是構造保證，這裡是量測）
+	// 筆尖對齊誤差：PenTipWorld 到「相機中心射線」的垂距（對齊是構造保證，這裡是量測）。
+	// 07-28 活眉心相機後中心方向=look-at（≠aim 方向，差視差角）——量測改讀相機真實前向
 	float PenRayErr = -1.0f;
 	if (bPenStateValid && FirstPersonCamera)
 	{
 		const FVector O = FirstPersonCamera->GetComponentLocation();
-		const FVector D = FRotator(-EffectiveDrawTilt(), EffectiveDrawAz(), 0.0f).Vector();
+		const FVector D = FirstPersonCamera->GetForwardVector();
 		const FVector Rel = PenTipWorld - O;
 		PenRayErr = FVector::CrossProduct(Rel, D).Size();
 	}
@@ -3129,7 +3332,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TEXT("solveYaw=%.1f hipDeg=%.1f ankleDeg=%.1f tipErr=%.2f reach=%d unreach=%.2f ")
 		TEXT("needle=%.2f trig=%d nSolve=%.1f grip=%.1f ")
 		TEXT("cruise=%d stick=%.2f dotN=%d dotGapCm=%.2f vmaxCm=%.2f guideN=%d ")
-		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d"),
+		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d ")
+		TEXT("curs=%d cw=(%.2f,%.2f,%.2f) pw=(%.2f,%.2f,%.2f) camo=(%.2f,%.2f,%.2f) camd=(%.3f,%.3f,%.3f)"),
 		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
 		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
 		GhostedChars.Num(),
@@ -3150,7 +3354,16 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		static_cast<int32>(SelectedNeedle), // 0=Liner 1=Shader 2=Stencil（舊斷言語義不變）
 		MistAimSpeedDegS,
 		static_cast<int32>(ComputeMistFlowByte()),
-		bStencilFollowActive ? 1 : 0);
+		bStencilFollowActive ? 1 : 0,
+		bDrawCursorValid ? 1 : 0,
+		DrawCursorW.X, DrawCursorW.Y, DrawCursorW.Z,
+		DrawTargetWorld.X, DrawTargetWorld.Y, DrawTargetWorld.Z,
+		FirstPersonCamera ? FirstPersonCamera->GetComponentLocation().X : 0.0,
+		FirstPersonCamera ? FirstPersonCamera->GetComponentLocation().Y : 0.0,
+		FirstPersonCamera ? FirstPersonCamera->GetComponentLocation().Z : 0.0,
+		FirstPersonCamera ? FirstPersonCamera->GetForwardVector().X : 0.0,
+		FirstPersonCamera ? FirstPersonCamera->GetForwardVector().Y : 0.0,
+		FirstPersonCamera ? FirstPersonCamera->GetForwardVector().Z : 0.0);
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const
@@ -3383,8 +3596,10 @@ void ANiceInkCharacter::ApplyBowPose()
 	const bool bAimMoved =
 		FMath::Abs(FMath::FindDeltaAngleDegrees(Az, LastAppliedDrawAz)) >= DirtyThresholdDeg ||
 		FMath::Abs(Tilt - LastAppliedDrawTilt) >= DirtyThresholdDeg;
-	if (!bLeanPoseDirty && !bAimMoved)
+	if (!bLeanPoseDirty && !bAimMoved && !bDrawCarrierSettling)
 	{
+		// bDrawCarrierSettling=上一 tick 的載體到位狀態：限速慢跟欠的帳要在 aim
+		// 靜止後繼續補完——舊 gate 會把身體凍在半途（追趕中斷=永久歪姿）
 		return;
 	}
 	LastAppliedDrawAz = Az;
@@ -3497,10 +3712,7 @@ void ANiceInkCharacter::ApplyBowPose()
 			Pt.Z += GroundDzFor(QH, QA);
 			return Pt;
 		};
-		// 解算目標點＝虛擬筆尖（出針口+標稱針長）；伸針解（2026-07-21）會沿針軸外推
-		const FVector GripLocCS = CS[GripBoneIdx].GetLocation();
-		const FVector TipDirCS = (Tip0 - GripLocCS) / FMath::Max(PenTipAheadCm, 1.0f); // 單位針軸（離手向）
-		const FVector ExitCS = Tip0 - TipDirCS * PenNeedleNominalCm;                   // 出針口
+		// 校準器的追蹤點＝虛擬筆尖（伸針解已退役、恆為標稱尖）
 		FVector SolveTipCS = Tip0;
 		auto TipCsFor = [&](float H, float A) -> FVector { return PointCsFor(SolveTipCS, H, A); };
 		const FVector Head0 = (HeadBoneIdx != INDEX_NONE)
@@ -3513,181 +3725,180 @@ void ANiceInkCharacter::ApplyBowPose()
 			return CompW.TransformPosition(TipCsFor(H, A));
 		};
 
-		// P 取得：aim 動了才重新 trace；aim 靜止下的重跑（寫入收斂等）沿用快取 P。
-		// 眼睛長在會被解算搬動的頭上——每 tick 重 trace＝「眼→P→姿勢→眼」自我參照
-		// 回饋迴圈，aim 不動 P 也會漂移到鉗位角落（07-20 探針：三幀漂 10cm）。
-		if (bAimMoved || !bDrawTargetValid)
+		// --- 姿勢主導制（07-28 user 定案「因果反轉」）：滑鼠直接驅動姿勢，P=臉射線
+		// 命中點＝**輸出非目標**（與甦醒臉指向制 SPEC #42 同構）。舊「解算搆 P」因果
+		//（P 在上游）＝「P→姿勢→眼→P」回饋環之根——眼錨定/域相等鉗位/VOR/應用限速
+		// 全是其補丁，隨本制整批退役。Newton 解算器降級為入座校準器（只跑一次）：
+		// 基準姿勢＋tilt→髖/踝局部增益皆現場量測、非手調常數。P 移到姿勢寫入之後
+		// 從活眉心 trace（見函式尾）——P 在下游＝射線原點讀活骨骼安全。---
+		bool bFreshCalib = false;
+		if (!bDrawMapCalibrated)
 		{
-			FVector Traced;
-			if (TraceAimToTarget(FRotator(-Tilt, Az, 0.0f).Vector(), Traced))
-			{
-				DrawTargetWorld = Traced;
-				bDrawTargetValid = true;
-			}
-			else
-			{
-				bDrawTargetValid = false;
-			}
-		}
-
-		if (bDrawTargetValid)
-		{
-			const FVector P = DrawTargetWorld;
+			bDrawMapCalibrated = true;
+			bFreshCalib = true;
+			bDrawMapWasFrozen = false;
+			DrawMapAz0 = Az;
+			DrawMapTilt0 = Tilt;
+			DrawMapPsi0 = Az;
+			DrawMapHip0 = 0.0f;
+			DrawMapAnkle0 = 0.0f;
+			DrawMapHipGain = 0.8f;    // 校準失敗的中性退路
+			DrawMapAnkleGain = -0.35f;
 			auto Det3 = [](const FVector& X, const FVector& Y, const FVector& Z)
 			{ return static_cast<float>(FVector::DotProduct(X, FVector::CrossProduct(Y, Z))); };
-			// Newton（數值 Jacobian＋Cramer）：暖啟動=上次解；失敗再從乾淨初值重解一次
-			//（proxy 首幀的壞暖啟動會把 Newton 掐死在鉗位角落——07-20 探針實錘）
-			auto Solve = [&](float PsiIn, float HIn, float AIn, float& PsiOut, float& HOut, float& AOut) -> float
+			auto SolveFor = [&](const FVector& Pt, float PsiIn, float HIn, float AIn,
+				float& PsiOut, float& HOutV, float& AOutV) -> float
 			{
-				float Psi = PsiIn, H = HIn, A = AIn;
+				float SPsi = PsiIn, H = HIn, A = AIn;
 				for (int32 It = 0; It < 6; ++It)
 				{
-					const FVector T0 = TipWorldFor(Psi, H, A);
-					const FVector R = P - T0;
+					const FVector T0 = TipWorldFor(SPsi, H, A);
+					const FVector R = Pt - T0;
 					if (R.Size() < 0.25f)
 					{
 						break;
 					}
 					constexpr float D = 0.75f;
-					const FVector J0 = (TipWorldFor(Psi + D, H, A) - T0) / D;
-					const FVector J1 = (TipWorldFor(Psi, H + D, A) - T0) / D;
-					const FVector J2 = (TipWorldFor(Psi, H, A + D) - T0) / D;
+					const FVector J0 = (TipWorldFor(SPsi + D, H, A) - T0) / D;
+					const FVector J1 = (TipWorldFor(SPsi, H + D, A) - T0) / D;
+					const FVector J2 = (TipWorldFor(SPsi, H, A + D) - T0) / D;
 					const float Den = Det3(J0, J1, J2);
 					if (FMath::Abs(Den) < KINDA_SMALL_NUMBER)
 					{
 						break;
 					}
-					Psi += FMath::Clamp(Det3(R, J1, J2) / Den, -25.0f, 25.0f);
+					SPsi += FMath::Clamp(Det3(R, J1, J2) / Den, -25.0f, 25.0f);
 					H = FMath::Clamp(H + FMath::Clamp(Det3(J0, R, J2) / Den, -25.0f, 25.0f),
 						-DrawHipDeltaClampDeg, DrawHipDeltaClampDeg);
 					A = FMath::Clamp(A + FMath::Clamp(Det3(J0, J1, R) / Den, -25.0f, 25.0f),
 						-DrawAnkleDeltaClampDeg, DrawAnkleDeltaClampDeg);
 				}
-				PsiOut = Psi;
-				HOut = H;
-				AOut = A;
-				return (P - TipWorldFor(Psi, H, A)).Size();
+				PsiOut = SPsi;
+				HOutV = H;
+				AOutV = A;
+				return (Pt - TipWorldFor(SPsi, H, A)).Size();
 			};
-			float Psi, HOut, AOut;
-			float Res = Solve(DrawSolveYawDeg, HipDeg, AnkleDeg, Psi, HOut, AOut);
-			if (Res > DrawTipSolveTolCm)
+			FVector P0;
+			if (TraceAimToTarget(FRotator(-Tilt, Az, 0.0f).Vector(), P0))
 			{
-				float Psi2, H2, A2;
-				const float Res2 = Solve(Az, 0.0f, 0.0f, Psi2, H2, A2);
-				if (Res2 < Res)
+				float Psi0, H0, A0;
+				if (SolveFor(P0, Az, 0.0f, 0.0f, Psi0, H0, A0) <= DrawTipSolveTolCm * 2.0f)
 				{
-					Res = Res2;
-					Psi = Psi2;
-					HOut = H2;
-					AOut = A2;
-				}
-			}
-
-			// 伸縮針解（2026-07-21 user 定案「指到哪畫哪」）：標稱針長＋身體鉗位仍搆
-			// 不到＝深度差交給針——虛擬筆尖沿針軸外推 L（=出針口→P 實距、外迭代 2 輪
-			// 與姿勢互相收斂），針軸構造上穿過 P（落墨中心對齊不是湊的）。橫向殘差仍受
-			// DrawTipSolveTolCm 裁決＝針只補深度、不歪著扎。身體先扛（前傾讀感保留），
-			// 針只補鉗位外的殘餘。
-			DrawNeedleSolveLenCm = -1.0f;
-			if (Res > DrawTipSolveTolCm)
-			{
-				auto ExitWorldFor = [&](float PsiE, float HE, float AE) -> FVector
-				{
-					const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
-						FTransform(FRotator(0.0f, PsiE, 0.0f), ActorLoc);
-					return CompW.TransformPosition(PointCsFor(ExitCS, HE, AE));
-				};
-				float PsiE = Psi, HE = HOut, AE = AOut;
-				float LenE = PenNeedleNominalCm, ResE = Res;
-				for (int32 Outer = 0; Outer < 2; ++Outer)
-				{
-					LenE = FMath::Clamp(
-						static_cast<float>((P - ExitWorldFor(PsiE, HE, AE)).Size()),
-						PenNeedleNominalCm, 300.0f);
-					SolveTipCS = ExitCS + TipDirCS * LenE;
-					ResE = Solve(PsiE, HE, AE, PsiE, HE, AE);
-				}
-				if (ResE < Res)
-				{
-					Res = ResE;
-					Psi = PsiE;
-					HOut = HE;
-					AOut = AE;
-					if (ResE <= DrawTipSolveTolCm)
+					DrawMapPsi0 = FMath::UnwindDegrees(Psi0);
+					DrawMapHip0 = H0;
+					DrawMapAnkle0 = A0;
+					// 增益探針：+6° tilt 的落點再解一次＝tilt→髖/踝的局部斜率
+					FVector P1;
+					constexpr float ProbeDeg = 6.0f;
+					if (TraceAimToTarget(FRotator(-(Tilt + ProbeDeg), Az, 0.0f).Vector(), P1))
 					{
-						DrawNeedleSolveLenCm = LenE;
+						float Psi1, H1, A1;
+						if (SolveFor(P1, Psi0, H0, A0, Psi1, H1, A1) <= DrawTipSolveTolCm * 3.0f)
+						{
+							DrawMapHipGain = FMath::Clamp((H1 - H0) / ProbeDeg, 0.0f, 3.0f);
+							DrawMapAnkleGain = FMath::Clamp((A1 - A0) / ProbeDeg, -2.0f, 2.0f);
+						}
 					}
 				}
-				SolveTipCS = Tip0;
 			}
-			HipDeg = HOut;
-			AnkleDeg = AOut;
-			DrawSolveYawDeg = FMath::UnwindDegrees(Psi);
-			DrawTipResidualCm = Res;
-			bDrawTipReachable = Res <= DrawTipSolveTolCm;
+		}
 
-			// 眼錨定＝解析算「入座目標姿勢的眉心」（07-20 三修：舊版等首寫收斂才抓
-			// ＝抓到平滑層剛起步的半直立姿＝錨點恆在站直眉心高（~135cm）——
-			// 「點低處鏡頭吊在上面、看不到下側」的真兇。前向模型直接給收斂後的頭位，
-			// 零等待、與目標深度一致；頭骨位置不受臉向 delta 影響（樞軸=頭底））
-			if (!bDrawEyeAnchorValid && HeadBoneIdx != INDEX_NONE)
-			{
-				const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
-					FTransform(FRotator(0.0f, DrawSolveYawDeg, 0.0f), ActorLoc);
-				const FVector HeadW = CompW.TransformPosition(PointCsFor(Head0, HipDeg, AnkleDeg));
-				const FRotator AnchorRot(-Tilt, Az, 0.0f);
-				DrawEyeAnchorWorld = HeadW + AnchorRot.Vector() * 13.0f +
-					FRotationMatrix(AnchorRot).GetUnitAxis(EAxis::Z) * 8.0f;
-				bDrawEyeAnchorValid = true;
-				bDrawTargetValid = false; // P 改由錨點重取（準星=P 自錨點起構造精確）
-				bLeanPoseDirty = true;
-				// aim 重瞄：眼睛從高處退路換到深摺錨點＝視差可達數十度，沿用舊方向會
-				// 從低眼射進地板＝P 永久丟失（07-20 robo 實錘：模特低位卡 hold pose）。
-				// 重算「從錨點看向 P」＝準星停在玩家點的同一個世界點、只有眼睛換位。
-				const FRotator ReAim = (P - DrawEyeAnchorWorld).Rotation();
-				const float NewAz = ReAim.Yaw;
-				const float NewTilt = FMath::Clamp(-ReAim.Pitch, DrawTiltMinDeg, DrawTiltMaxDeg);
-				if (IsLocallyControlled())
-				{
-					DrawAimAzLocal = NewAz;
-					DrawAimTiltLocal = NewTilt;
-					LastSentDrawAz = NewAz;
-					LastSentDrawTilt = NewTilt;
-					// 錨點視差重瞄＝瞬時跳變，濾波器必須跟著 snap（不然筆會慢動作
-					// 掃過整個視差角＝假演出）；針 aim 同步跳（視差不是追趕距離）
-					AimEuroAz.Snap(NewAz);
-					AimEuroTilt.Snap(NewTilt);
-					DrawAimAzFilt = NewAz;
-					DrawAimTiltFilt = NewTilt;
-					TattooNeedleAz = NewAz;
-					TattooNeedleTilt = NewTilt;
-				}
-				else
-				{
-					RemoteDrawAzDeg = NewAz;
-					RemoteDrawTiltDeg = NewTilt;
-				}
-				if (HasAuthority())
-				{
-					DrawAimAzDeg = NewAz;
-					DrawAimTiltDeg = NewTilt;
-				}
-			}
+		// 映射＝純函數（增量鉗位=姿勢域=可畫域——「指的到=身體允許」由構造成立，
+		// 無鉗位機器、無解算分支＝抖動/跳姿/卡死整類消滅）
+		DrawSolveYawDeg = FMath::UnwindDegrees(DrawMapPsi0 +
+			FMath::FindDeltaAngleDegrees(DrawMapAz0, Az));
+		const float YawDt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f;
+		bDrawCarrierSettling = false;
+		if (!bFreshCalib && (bTattooChaseActive || bStencilFollowActive))
+		{
+			// 巡航/沿稿：髖踝也定住（同 yaw——載體全靜、P=純角速度，v_max 量綱乾淨）
+			HipDeg = DrawSolveHipDeg;
+			AnkleDeg = DrawSolveAnkleDeg;
+			bDrawMapWasFrozen = true;
 		}
 		else
 		{
-			// 射線 miss（看向空處/房間）：身體 yaw 跟 aim（恆等式讀感）、傾角保持現狀
-			DrawSolveYawDeg = Az;
-			bDrawTipReachable = false;
-			DrawTipResidualCm = -1.0f;
+			if (bDrawMapWasFrozen)
+			{
+				// 解凍再錨定（07-28 user 抓「頭莫名突然壓低」）：凍結期間 aim 繼續走
+				//（巡航=滑鼠意圖點、沿稿=aim 收攏到針）——解凍 tick 映射若仍掛舊錨點
+				// ＝髖踝一步跳到當前 aim 的姿勢。錨點改設「當前 aim ↔ 當前凍結姿勢」
+				// ＝解凍零跳、之後增量照舊；P=trace 實算不吃錨點＝墨不受影響。
+				bDrawMapWasFrozen = false;
+				DrawMapTilt0 = Tilt;
+				DrawMapHip0 = DrawSolveHipDeg;
+				DrawMapAnkle0 = DrawSolveAnkleDeg;
+			}
+			// 頭=被穩定的平台（07-28 二修）：髖踝目標值照映射算、實際值**限速慢跟**
+			//（線性步進不用 FixedTurn——圓角域毒有界小角，directdraw 老實錘）。
+			// 快速筆劃直通軀幹=眉心 lurch 十幾 cm=畫面繞中心猛晃的真兇之一；
+			// 載體慢沒有代價（P-狀態制下墨/筆速/畫面中心全不依賴身體）。
+			// 死區 0.3°=不永久微爬（dirty gate 能真正闔上）。
+			const float HipTarget = FMath::Clamp(
+				DrawMapHip0 + DrawMapHipGain * (Tilt - DrawMapTilt0),
+				-DrawHipDeltaClampDeg, DrawHipDeltaClampDeg);
+			const float AnkleTarget = FMath::Clamp(
+				DrawMapAnkle0 + DrawMapAnkleGain * (Tilt - DrawMapTilt0),
+				-DrawAnkleDeltaClampDeg, DrawAnkleDeltaClampDeg);
+			const float BendStep = DrawCarrierBendRateDegS * YawDt;
+			auto SlewTo = [&](float Cur, float Target) -> float
+			{
+				const float D = Target - Cur;
+				if (FMath::Abs(D) <= 0.3f)
+				{
+					return Cur; // 死區：不追殘渣
+				}
+				bDrawCarrierSettling = true;
+				return Cur + FMath::Clamp(D, -BendStep, BendStep);
+			};
+			HipDeg = bFreshCalib ? HipTarget : SlewTo(DrawSolveHipDeg, HipTarget);
+			AnkleDeg = bFreshCalib ? AnkleTarget : SlewTo(DrawSolveAnkleDeg, AnkleTarget);
 		}
+		DrawNeedleSolveLenCm = -1.0f; // 伸針「解」退役——深度=顯示層 trace 的事
 		DrawSolveHipDeg = HipDeg;
 		DrawSolveAnkleDeg = AnkleDeg;
+		// 身體 yaw=載體、30°/s 限速（07-28 二修 120→30：120°/s × 眉心旋臂 65cm＝
+		// 相機平台橫移 136cm/s＝視差搖真兇之二；30°/s=看起來像刻意轉身、平台 ≤35cm/s。
+		// 慢跟欠的帳在筆劃結束後緩緩補完——游標是狀態、身體怎麼補都推不動墨）。入鎖硬切。
+		if (bFreshCalib)
+		{
+			DrawBodyYawShown = DrawSolveYawDeg;
+		}
+		else if (!bTattooChaseActive && !bStencilFollowActive)
+		{
+			const float YawDelta = FMath::FindDeltaAngleDegrees(DrawBodyYawShown, DrawSolveYawDeg);
+			if (FMath::Abs(YawDelta) > 0.3f)
+			{
+				bDrawCarrierSettling = true;
+				DrawBodyYawShown = FMath::UnwindDegrees(DrawBodyYawShown + FMath::Clamp(
+					YawDelta, -DrawCarrierYawRateDegS * YawDt, DrawCarrierYawRateDegS * YawDt));
+			}
+		}
+		// 巡航/沿稿＝機器慢工：身體定住不跟 yaw——射線原點不平移，P 速度=純角速度
+		//（載體搬運曾把 v_max 契約灌水 1.5×、沿稿點距撐破實線帶，robo 實錘）
+
+		// 射線原點＝解析眉心（前向模型純函數：與相機/trace 同源、零寫入收斂噪聲）
+		{
+			const FTransform CompW = FTransform(BodyStandRelRot, BodyStandRelLoc) *
+				FTransform(FRotator(0.0f, DrawBodyYawShown, 0.0f), ActorLoc);
+			const FVector HeadW = CompW.TransformPosition(PointCsFor(Head0, HipDeg, AnkleDeg));
+			const FRotator AimR(-Tilt, Az, 0.0f);
+			DrawRayOriginW = HeadW + AimR.Vector() * 13.0f +
+				FRotationMatrix(AimR).GetUnitAxis(EAxis::Z) * 8.0f;
+			bDrawRayOriginValid = true;
+		}
+		// 載體控制錨（P-狀態制）：入鎖凍結的眉心＝控制角的固定原點——錨不動⇒
+		// 控制角只隨游標動⇒姿勢映射無自我參照（嚴格穩定）。只餵映射、不碰相機/墨。
+		if (bFreshCalib)
+		{
+			DrawCtrlAnchorW = DrawRayOriginW;
+			bDrawCtrlAnchorValid = true;
+		}
 	}
 	else
 	{
 		DrawSolveYawDeg = Az;
-		bDrawTipReachable = false;
+		DrawBodyYawShown = Az;
 	}
 
 	// （07-20 筆即游標：固定係數追趕層退役——濾波已在 aim 輸入層做完（本人=1€、
@@ -3695,9 +3906,10 @@ void ANiceInkCharacter::ApplyBowPose()
 	const float ShownHip = DrawSolveHipDeg;
 	const float ShownAnkle = DrawSolveAnkleDeg;
 
-	// 整身 yaw（不彎任何關節）：lean 中所有端都套本地解值——simulated proxy 若吃
-	// 引擎壓縮複製（~1.4° 量化）＝旁人看到的身體階梯跳（07-20 抖動病因之一）
-	SetActorRotation(FRotator(0.0f, DrawSolveYawDeg, 0.0f));
+	// 整身 yaw（不彎任何關節）：lean 中所有端都套本地值——simulated proxy 若吃
+	// 引擎壓縮複製（~1.4° 量化）＝旁人看到的身體階梯跳（07-20 抖動病因之一）。
+	// 套 rate-limit 後的載體 yaw（DrawBodyYawShown）——頭補殘差（45° 域內）
+	SetActorRotation(FRotator(0.0f, DrawBodyYawShown, 0.0f));
 
 	// --- 套用增量（與前向模型逐步同構；樞軸=中性姿座標）---
 	if (HipsIdx != INDEX_NONE && FMath::Abs(ShownHip) > 0.05f)
@@ -3751,18 +3963,12 @@ void ANiceInkCharacter::ApplyBowPose()
 	if (NeckIdx != INDEX_NONE && HeadIdx != INDEX_NONE)
 	{
 		const FTransform CompT = BowBody->GetComponentTransform();
-		// 臉向：有 P＝look-at P（從真眉心看向落墨點——相機在錨點、臉在真頭，兩者於 P
-		// 匯聚＝「你看的點≡臉看的點≡旁人讀到的點」）；無 P＝平行 aim 自由看
+		// 臉向＝凝視（P-狀態制）：眉心→游標——身體動、頭反向補償＝臉恆看著墨點；
+		// 巡航/沿稿=畫面屬於針（凝視走針角度=Az/Tilt args）；游標未播種=角度制過渡
 		FRotator AimRot(-Tilt, Az, 0.0f);
-		if (bDrawTargetValid)
+		if (!bTattooChaseActive && bDrawCursorValid && bDrawRayOriginValid)
 		{
-			const FVector BrowEstW = CompT.TransformPosition(CS[HeadIdx].GetLocation()) +
-				AimRot.Vector() * 13.0f + FRotationMatrix(AimRot).GetUnitAxis(EAxis::Z) * 8.0f;
-			const FVector ToP = DrawTargetWorld - BrowEstW;
-			if (ToP.SizeSquared() > 25.0f)
-			{
-				AimRot = ToP.Rotation();
-			}
+			AimRot = (DrawCursorW - DrawRayOriginW).Rotation();
 		}
 		const FVector DesiredCS = CompT.InverseTransformVectorNoScale(AimRot.Vector());
 		const FVector CrownCS = CompT.InverseTransformVectorNoScale(
@@ -3804,6 +4010,63 @@ void ANiceInkCharacter::ApplyBowPose()
 	if (!WriteBowPoseConverged(Ref, CS, VerifyBones))
 	{
 		bLeanPoseDirty = true; // 本 tick 沒收斂＝下 tick 續寫（髒檢查不得凍結半收斂姿勢）
+	}
+
+	// --- P＝臉射線命中點（07-28 姿勢主導制：輸出非目標）：姿勢已寫入、骨骼已
+	// refresh——origin=活眉心＝與相機同一條中心射線＝WYSIWYG（準星點=墨，構造保證）。
+	// P 在下游＝讀活骨骼安全（回饋環不存在）。他端沿用擁有端上報 P（07-26 同源制）。---
+	if (IsLocallyControlled())
+	{
+		if (!bTattooChaseActive && bDrawCursorValid)
+		{
+			// P-狀態制：P＝游標本身（滑鼠唯一驅動的狀態）。再投影＝沿「眉心→游標」
+			// 重 trace 一次把游標黏回表面：表面靜止時命中點=游標自身（嚴格不動點、
+			// 零漂移）。步長鉗（07-28 二修）：原點移動可把更近的皺摺推進射線＝命中點
+			// 離游標好幾 cm——那是遮擋不是游標移動：墨閘擋、游標不瞬移（被剪影全遮
+			// 同理；游標保留待重現）。
+			FVector Reproj;
+			if (TraceAimToTarget((DrawCursorW - GetAimRayOrigin()).GetSafeNormal(), Reproj) &&
+				FVector::Dist(Reproj, DrawCursorW) <= 2.0f)
+			{
+				DrawCursorW = Reproj;
+				DrawTargetWorld = Reproj;
+				bDrawTargetValid = true;
+			}
+			else
+			{
+				bDrawTargetValid = false;
+			}
+		}
+		else
+		{
+			// 巡航/沿稿（畫面與墨屬於針）與入鎖角度制過渡：沿（濾波）aim 射線 trace
+			FVector Traced;
+			bDrawTargetValid = TraceAimToTarget(FRotator(-Tilt, Az, 0.0f).Vector(), Traced);
+			if (bDrawTargetValid)
+			{
+				DrawTargetWorld = Traced;
+			}
+		}
+		bDrawTipReachable = bDrawTargetValid; // 語義收斂：可畫=臉射線在皮膚上
+		DrawTipResidualCm = bDrawTargetValid ? 0.0f : -1.0f;
+	}
+	else
+	{
+		bDrawTargetValid = bDrawTargetRepValid;
+		if (bDrawTargetValid)
+		{
+			// 他端游標＝追趕複製 P（30Hz 階梯平滑；K 同 aim 追趕）——頭/筆的凝視
+			// 與墨同源（P-狀態制延伸到他端姿勢）
+			const float ChaseK = FMath::Clamp(
+				(GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f) * 20.0f, 0.0f, 1.0f);
+			DrawCursorW = bDrawCursorValid
+				? FMath::Lerp(DrawCursorW, FVector(RemoteDrawTargetW), ChaseK)
+				: FVector(RemoteDrawTargetW);
+			bDrawCursorValid = true;
+			DrawTargetWorld = DrawCursorW;
+		}
+		bDrawTipReachable = bDrawTargetValid;
+		DrawTipResidualCm = bDrawTargetValid ? 0.0f : -1.0f;
 	}
 }
 
@@ -3877,25 +4140,51 @@ void ANiceInkCharacter::UpdatePenVisual()
 	{
 		const FTransform HandT = BowBody->GetBoneTransformByName(PenGripBoneName, EBoneSpaces::WorldSpace);
 		const FQuat HandQ = HandT.GetRotation().GetNormalized();
-		const FQuat PenQ = HandQ * PenRotInHand;
-		const FVector ShaftOut = PenQ.GetAxisZ(); // 資產 +Z＝筆尖→筆尾（離皮膚向）
-		// 出針口基準＝校準常數的固定點；虛擬筆尖＝出針口沿針軸前推「本 tick 針長語義」：
-		// 標稱針長（身體解到）或伸針解針長（深度交給針）——兩者都由解算保證落在 P
+		FQuat PenQ = HandQ * PenRotInHand;
+		// 出針口基準＝校準常數的固定點（焊死在手、對準只繞它轉）
 		const FVector ExitBaseW = HandT.GetLocation() + HandQ.RotateVector(
 			PenTipLocalCm * ((PenTipAheadCm - PenNeedleNominalCm) / PenTipAheadCm));
-		const float TipAhead = (bDrawTipReachable && DrawNeedleSolveLenCm > 0.0f)
-			? DrawNeedleSolveLenCm : PenNeedleNominalCm;
+		// 顯示層對準（07-28 姿勢主導制）：機械針軸繞出針口轉向 P——「螢幕中心=針尖=墨」
+		// 由顯示層保證（伸針解已退役；讀姿勢與 P、不回饋=無環）。稿筆不對準（user 定案
+		// 骨軸直握優先）。
+		if (ActiveNeedle() != EInkNeedle::Stencil && bDrawTargetValid)
+		{
+			const FVector ToP = (DrawTargetWorld - ExitBaseW).GetSafeNormal();
+			const FVector NeedleDir = -PenQ.GetAxisZ();
+			// 全對準（07-28 二修 user 抓「第三人稱筆與筆跡完全脫鉤」）：舊 dot>0.05
+			// 守門在凍結臂的沿稿/巡航極端下（臂軸與 P 夾角 90°+）擋住對準——針指
+			// 臂軸、墨在 P＝兩套真相。改無條件轉向＝兩點構造（尾錨手、尖=P）＝
+			// 與稿筆同構；「針戳進肉才有墨」的第三者因果由構造保證。
+			if (!ToP.IsNearlyZero())
+			{
+				PenQ = FQuat::FindBetweenNormals(NeedleDir, ToP) * PenQ;
+			}
+		}
+		const FVector ShaftOut = PenQ.GetAxisZ(); // 資產 +Z＝筆尖→筆尾（離皮膚向）
+		// 07-28 姿勢主導制：伸針「解」退役——虛擬筆尖恆標稱、真實深度=顯示層 trace
+		const float TipAhead = PenNeedleNominalCm;
 		const FVector TipW = ExitBaseW - ShaftOut * TipAhead;
 		FVector TipEffective = TipW; // 稿筆落筆時改寫成 trace 真實命中點
 		constexpr float PenHalfLen = 7.5f;
 		if (bStencilTool)
 		{
-			// 麥克筆（07-25 追修 user 抓「抖動嚴重＋沒有確實伸長」）：
-			// ①落筆＝筆尖貼到皮膚「真實命中點」（沿筆軸 trace，與機器『墨與針同一真相』
-			//   同款——解算殘差不上畫面）；放開＝懸回標稱間隙（抬筆讀感）。
-			// ②筆身朝向走顯示層平滑（純化妝：pivot=筆尖不經平滑、墨零延遲——只殺
-			//   骨骼解算噪聲被 13cm 筆桿放大成的搖擺；懸筆時位置也平滑）。
-			FVector TipFinal = TipW;
+			// 骨軸制（07-27 user 定案「握持=手心充滿筆+另一側露一小段、筆直直向前
+			// 不歪、再粗一點」）：方向＝RightHandProp 骨 +Y——模型定義的持物軸
+			//（探針量測：作畫姿下指向皮膚 (0.38,-0.07,-0.92)≈朝下）。兩代舊方向源
+			// 全退役：「眉→手校準軸」是 07-20 幾何權宜、「尖→手連線」在筆尖釘偏軸
+			// 點時整支歪斜（07-27 user 抓）。roll 跟骨 X＝穩定（筆圓對稱、roll 無感）。
+			// 筆尖＝骨軸上的落點：落筆=沿骨軸 trace 命中；他端 miss=複製 P 沿軸投影
+			//（深度與墨同步、恆在軸上=不歪）；懸筆=標稱懸距。
+			// 筆尾＝骨原點再向拳背側露 MarkerProtrudeCm＝「另一側露出一小段」構造保證。
+			constexpr float MarkerNativeLenCm = 13.0f; // SM_Marker 原長、pivot=筆尖、+Z=筆尾
+			constexpr float MarkerProtrudeCm = 19.0f;  // 拳背側露頭（07-27 user 定值路徑
+			                                           // 8→16→22→19：22 吃到拇指（融筆），
+			                                           // 19=露頭明顯且離開拇指段）
+			constexpr float MarkerHoverTipCm = 12.0f;  // 懸筆（未觸發）筆尖離骨原點
+			const FVector BoneTipDir = HandQ.GetAxisY();
+			const FVector HandLoc = HandT.GetLocation();
+			const FQuat PenQBone = FRotationMatrix::MakeFromZX(-BoneTipDir, HandQ.GetAxisX()).ToQuat();
+			float TipDist = MarkerHoverTipCm;
 			bool bTouching = false;
 			const bool bTrig = IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld;
 			ANiceInkCharacter* Target = LeanTarget.Get();
@@ -3910,41 +4199,65 @@ void ANiceInkCharacter::UpdatePenVisual()
 					}
 				}
 				FHitResult Hit;
-				if (GetWorld()->LineTraceSingleByChannel(Hit, ExitBaseW + ShaftOut * 1.0f,
-						ExitBaseW - ShaftOut * 300.0f, ECC_Visibility, MarkQP) &&
+				if (GetWorld()->LineTraceSingleByChannel(Hit, HandLoc - BoneTipDir * 2.0f,
+						HandLoc + BoneTipDir * 300.0f, ECC_Visibility, MarkQP) &&
 					Hit.GetActor() == Target)
 				{
-					TipFinal = Hit.ImpactPoint;
+					TipDist = static_cast<float>(
+						FVector::DotProduct(Hit.ImpactPoint - HandLoc, BoneTipDir));
 					bTouching = true;
 				}
+				else if (!IsLocallyControlled() && bDrawTargetRepValid)
+				{
+					// 他端顯示 trace miss（姿勢視差/掠射）：深度取複製 P 沿骨軸投影
+					// ＝筆尖深度與墨同步、方向恆直（07-27）
+					TipDist = static_cast<float>(
+						FVector::DotProduct(FVector(RemoteDrawTargetW) - HandLoc, BoneTipDir));
+					bTouching = true;
+				}
+				TipDist = FMath::Clamp(TipDist, 6.0f, 300.0f);
 			}
 			const float Dt = GetWorld() ? GetWorld()->GetDeltaSeconds() : 0.016f;
 			const float A = FMath::Clamp(Dt * 12.0f, 0.0f, 1.0f);
+			const FVector TipFinal = HandLoc + BoneTipDir * TipDist;
 			if (!bMarkerPenSmoothValid)
 			{
-				MarkerPenSmoothedQ = PenQ;
+				MarkerPenSmoothedQ = PenQBone;
 				MarkerPenSmoothedTip = TipFinal;
 				bMarkerPenSmoothValid = true;
 			}
 			else
 			{
-				MarkerPenSmoothedQ = FQuat::Slerp(MarkerPenSmoothedQ, PenQ, A).GetNormalized();
+				MarkerPenSmoothedQ = FQuat::Slerp(MarkerPenSmoothedQ, PenQBone, A).GetNormalized();
 				MarkerPenSmoothedTip = bTouching
-					? TipFinal // 落筆＝釘死命中點（筆尖與墨同真相、零平滑零延遲）
+					? TipFinal // 落筆＝釘死骨軸落點（零平滑零延遲）
 					: FMath::Lerp(MarkerPenSmoothedTip, TipFinal, A);
 			}
 			const FVector TipShown = bTouching ? TipFinal : MarkerPenSmoothedTip;
-			// 伸長（07-25 二修 user 抓「第三人稱伸長沒做好」）：筆身沿筆軸拉伸跨接
-			// 「筆尖→手」——手離皮膚多遠筆就多長（機器伸縮分帳的麥克筆版；夠近=原長）。
-			// SM_Marker 原長 13cm、pivot=筆尖、+Z=筆尾 ⇒ scale.Z=跨距/原長
-			constexpr float MarkerNativeLenCm = 13.0f;
+			// 跨距＝筆尖→骨原點→再露頭一段（手心充滿筆）；scale.Z=跨距/原長
 			const float SpanCm = FMath::Clamp(
-				static_cast<float>(FVector::DotProduct(HandT.GetLocation() - TipShown, ShaftOut)) + 2.0f,
+				static_cast<float>(FVector::Dist(HandLoc, TipShown)) + MarkerProtrudeCm,
 				MarkerNativeLenCm, MarkerNativeLenCm * 8.0f);
 			MarkerPen->SetWorldLocationAndRotation(TipShown, MarkerPenSmoothedQ.Rotator());
-			// 徑向 2.2×（07-25 user 兩輪「太細」）：2.2cm 原徑→約 4.8cm 派對巨筆
-			MarkerPen->SetWorldScale3D(FVector(2.2f, 2.2f, SpanCm / MarkerNativeLenCm));
-			TipEffective = TipFinal; // 墨鏈吃真實命中點（共同段 PenTipWorld 指派）
+			// 徑向 3.0×（07-27 user 三輪「不夠粗」：2.2→3.0＝直徑約 6.6cm）
+			MarkerPen->SetWorldScale3D(FVector(3.0f, 3.0f, SpanCm / MarkerNativeLenCm));
+			// 墨鏈真相＝準星命中點 P（07-27 三修 user 抓「凹凸處筆觸亂掉、不落在
+			// 螢幕中央點上」）：舊制沿筆軸再 trace 一次——筆軸射線從出針口斜入，
+			// 凸起（乳頭/肚臍/皺摺）會先攔截或遮蔽＝墨落在準星以外的凸面（平滑面上
+			// 兩射線由解算保證 ≤0.25cm 同點、凹凸面分家）。畫面歸針恆等式的字面義：
+			// 螢幕中心點＝墨——P 本來就是「眼錨沿 aim 的首命中」＝準星所指，直接吃。
+			// P 無效（看向空處）＝維持 TipW，落墨由接觸閘自然擋。
+			if (IsLocallyControlled())
+			{
+				if (bDrawTargetValid)
+				{
+					TipEffective = DrawTargetWorld;
+				}
+			}
+			else if (bDrawTargetRepValid)
+			{
+				TipEffective = RemoteDrawTargetW;
+			}
 		}
 		else if (bPenIsMachineAsset)
 		{
@@ -3966,6 +4279,8 @@ void ANiceInkCharacter::UpdatePenVisual()
 		// 一半給握管」）：觸發＝沿針軸實測出針深度 D（瞬時、無動畫=「啪」的機械讀感）、
 		// 伸長 e=max(0, D-標稱) → 握管拉長 e/2（出針口前移 e/2）、針長=D-e/2；
 		// 放開＝握管回基準長、針收樁。各端同構解算＝同長度，無需複製；墨的真相＝針尖。---
+		const float PrevNeedleLenShown = PenNeedleLenCm; // 凍結回退要讀「歸零前」的值
+		const float PrevGripLenShown = PenGripLenCm;
 		PenNeedleLenCm = 0.0f;
 		PenGripLenCm = 0.0f;
 		if (NeedleMesh && bPenIsMachineAsset && !bStencilTool)
@@ -3986,16 +4301,46 @@ void ANiceInkCharacter::UpdatePenVisual()
 					}
 				}
 				FHitResult Hit;
+				float D = -1.0f;
+				FVector TipPoint = FVector::ZeroVector;
 				if (GetWorld()->LineTraceSingleByChannel(Hit, ExitBaseW + ShaftOut * 1.0f,
 						ExitBaseW - ShaftOut * 300.0f, ECC_Visibility, NeedleQP) &&
 					Hit.GetActor() == Target)
 				{
-					const float D = static_cast<float>(FVector::Dist(ExitBaseW, Hit.ImpactPoint));
+					D = static_cast<float>(FVector::Dist(ExitBaseW, Hit.ImpactPoint));
+					TipPoint = Hit.ImpactPoint;
+				}
+				else if (PrevNeedleLenShown > PenNeedleStubCm + 0.05f)
+				{
+					// 顯示層 trace 間歇 miss（掠射面/姿勢視差）：凍結上次針長——
+					// 不瞬縮回樁（07-28 姿勢主導制：nSolve 退役、上次顯示值即真相）
+					D = PrevNeedleLenShown + (PrevGripLenShown - PenGripBaseLenCm);
+					TipPoint = ExitBaseW - ShaftOut * D;
+				}
+				// 墨＝P（07-28 姿勢主導制：巡航構造下針的皮膚點就是 P＝與稿筆同構、
+				// 螢幕中心恆=墨）；臂/針視覺=best-effort 對準——凍結臂的沿稿極端下
+				// 裸射線曾打到地板＝墨落空中＋針深解不到（首 tick 即沿稿=凍結回退也
+				// 接不住→針恆 stub→出墨閘拒墨，robo 實錘 d_dotN=0）。P 有效＝針構造上
+				// 壓在皮膚上：針深/針尖一律由 P 給——墨與伸針因果都不抵押在臂的物理指向上。
+				if (bDrawTargetValid)
+				{
+					D = static_cast<float>(FVector::Dist(ExitBaseW, DrawTargetWorld));
+					TipPoint = DrawTargetWorld;
+				}
+				if (D > 0.0f)
+				{
 					const float Ext = FMath::Max(D - PenNeedleNominalCm, 0.0f);
 					GripLen = PenGripBaseLenCm + Ext * 0.5f;
 					ExitVisW = ExitBaseW - ShaftOut * (Ext * 0.5f);
 					NeedleLen = FMath::Max(D - Ext * 0.5f, 0.5f);
-					PenTipWorld = Hit.ImpactPoint; // 墨與針同一真相（落墨鏈/HUD 錨都吃這裡）
+				}
+				if (bDrawTargetValid)
+				{
+					PenTipWorld = DrawTargetWorld;
+				}
+				else if (D > 0.0f)
+				{
+					PenTipWorld = TipPoint;
 				}
 			}
 			if (GripMesh)
@@ -4418,32 +4763,27 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 		}
 	}
 
-	// 直接畫制（07-20 眼錨定）：相機＝入畫定格的眉心世界定點＋aim 朝向——與 trace
-	// 共用同一定點。臉（Neck）look-at P、筆尖追 P（濾波鏈），三者於 P 匯聚。
-	// 自由 aim 時相機用「生」手 aim（零延遲）；**皮繩追趕中相機=針 aim**（07-24
-	// 二修：畫面屬於針——螢幕中心恆=針尖=墨、2D 筆恆中心、手抖不進畫面；慢畫=
-	// 針貼手=畫面跟手、快甩=限速慢移=機器的重量）。進出追趕針手重合=相機零跳。
-	const float CamAz = bTattooChaseActive ? TattooNeedleAz : DrawAimAzLocal;
-	const float CamTilt = bTattooChaseActive ? TattooNeedleTilt : DrawAimTiltLocal;
-	const FRotator AimRot(-CamTilt, CamAz, 0.0f);
-	FVector EyePos;
-	if (bDrawEyeAnchorValid)
+	// 相機＝活眉心＋臉朝向，剛性（07-28 姿勢主導制＝SPEC #44 字面義「鏡頭長在頭骨上
+	// ＝姿勢是唯一真相」）：眼長在頭骨、朝向=aim=臉——無 look-at、無眼球模擬、無平滑
+	//（姿勢=濾波 aim 的純函數＝解算級抖動源已不存在；VOR 隨舊因果退役）。
+	// P＝同一條射線的命中點（函式外下游 trace）＝準星恆=墨、WYSIWYG 構造保證。
+	// 皮繩追趕中臉/姿勢跟濾波針 aim（EffectiveDrawAz 已切源）＝畫面照樣屬於針。
+	const float CamAz = EffectiveDrawAz();
+	const float CamTilt = EffectiveDrawTilt();
+	FRotator AimRot(-CamTilt, CamAz, 0.0f);
+	// 眼位＝解析眉心（與射線原點同一個值＝中心射線與 trace 嚴格同源）
+	const FVector EyePos = bDrawRayOriginValid
+		? DrawRayOriginW : GetActorLocation() + FVector(0.0f, 0.0f, 40.0f);
+	// P-狀態制：相機朝向＝凝視（眉心→游標）生值——螢幕中心恆=游標=墨、零濾波延遲；
+	// 身體動→眉心動→朝向自動補償＝畫面不因載體動力學漂移（停手過頭的相機側消滅）。
+	// 巡航/沿稿＝畫面屬於針（Effective=濾波針 aim 照舊）；游標未播種＝角度制過渡。
+	if (!bTattooChaseActive && bDrawCursorValid && bDrawRayOriginValid)
 	{
-		EyePos = DrawEyeAnchorWorld;
-	}
-	else if (BowBody && BowBody->GetSkinnedAsset())
-	{
-		const FVector HeadPos = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace).GetLocation();
-		const FVector FaceDir = AimRot.Vector();
-		const FVector Crown = FRotationMatrix(AimRot).GetUnitAxis(EAxis::Z); // 零 roll 頭頂
-		EyePos = HeadPos + FaceDir * 13.0f + Crown * 8.0f; // 眉心（錨定前的入畫首幀）
-	}
-	else
-	{
-		EyePos = GetActorLocation() + FVector(0.0f, 0.0f, 40.0f); // 無骨骼退路
+		AimRot = (DrawCursorW - EyePos).Rotation();
 	}
 	FirstPersonCamera->SetWorldLocationAndRotation(EyePos, AimRot);
 }
+
 
 // --- 畫墨 RPC ---
 

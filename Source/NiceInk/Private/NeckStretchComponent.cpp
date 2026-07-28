@@ -529,7 +529,14 @@ void UNeckStretchComponent::UpdateNeck()
 				{
 					N = -N;
 				}
-				Normals[Idx] = N;
+				// 壓縮域法線＝兩端縫區法線插值（07-26 側邊摺痕修）：張開/互穿過渡帶
+				// （側邊）的直紋列近退化＝DRow 逐列翻向→中央差分法線翻面＝著色摺痕
+				//（幾何折角實測 ≤2°、摺是「光」不是「形」）；端法線插值構造上連續、
+				// 兩端與殼面光影無縫。伸長域（Compress=1）維持幾何法線。
+				const FVector RuledN = FMath::Lerp(BN[k], HeadResNrm[k],
+					SmoothStep01(static_cast<float>(j) / E)).GetSafeNormal();
+				Normals[Idx] = RuledN.IsNearlyZero()
+					? N : FMath::Lerp(RuledN, N, Compress).GetSafeNormal();
 			}
 		}
 	}
