@@ -3044,6 +3044,8 @@ void ANiceInkCharacter::OnRep_Lean()
 		bDrawTipReachable = false;
 		bDrawTargetValid = false;
 		bDrawEyeAnchorValid = false;
+		bReachWallValid = false; // 游標撞牆：牆點不跨鎖（新鎖=新域）
+		ReachWallFailSecs = 0.0f;
 		// 首鎖視野修（07-27 user 抓「第一次右鍵超近超小視野」）：owner 本地 aim 在
 		// 入鎖時從鎖點幾何播種——server 的 aim 種子寫在 DrawAimAzDeg（COND_SkipOwner
 		// ＝本人收不到），舊制本人沿用上一次的本地 aim（開局首鎖=初始值 az0/tilt45）
@@ -3134,6 +3136,8 @@ void ANiceInkCharacter::OnRep_Lean()
 		}
 		bDrawEyeAnchorValid = false;
 		bDrawTargetValid = false;
+		bReachWallValid = false;
+		ReachWallFailSecs = 0.0f;
 		ResetBowPose();
 		StopPaintingLocal();
 	}
@@ -3709,6 +3713,62 @@ void ANiceInkCharacter::ApplyBowPose()
 			bDrawPoseWarm = true;
 			DrawTipResidualCm = Res;
 			bDrawTipReachable = Res <= DrawTipSolveTolCm;
+
+			// 游標撞牆（07-28 user 裁決「先做指得到=畫得到」；七/八輪規格重植）：
+			// 解到＝記牆點；解不到＝aim 回捲到最後可達值——游標推不進解算域外，
+			// 「莫名畫不到」對玩家不存在。收斂閘：濾波 aim≈生 aim 才鉗（robo 瞬移
+			// aim 掃過中途不可達帶會被誤殺=遠點永遠到不了，07-28 directdraw 實錘）。
+			// 巡航不鉗（皮繩契約自有 miss 處理；沿稿只活在巡航內）。回捲分級：先只
+			// 回捲 tilt（域邊界≈tilt_max(az)——yaw 整身無鉗、az 幾乎恆可解＝沿牆
+			// 滑動不被釘死）；0.15s 仍解不到再整組回捲；0.6s 仍解不到＝自癒釋放
+			//（actor 轉動後域移動的回捲死鎖——寧可自由+舊提示、不可困死）。
+			// 撞牆 tick 姿勢凍結在上一解（不套用失敗解的步進）＝壓著牆推時無邊界抖振。
+			if (IsLocallyControlled() && !bTattooChaseActive && bDrawEyeAnchorValid)
+			{
+				if (bDrawTipReachable)
+				{
+					ReachWallAz = Az;   // 解算用的濾波 aim＝已證可達
+					ReachWallTilt = Tilt;
+					bReachWallValid = true;
+					ReachWallFailSecs = 0.0f;
+				}
+				else if (bReachWallValid)
+				{
+					const bool bAimSettled =
+						FMath::Abs(FMath::FindDeltaAngleDegrees(DrawAimAzLocal, Az)) < 1.5f &&
+						FMath::Abs(DrawAimTiltLocal - Tilt) < 1.5f;
+					if (!bAimSettled)
+					{
+						ReachWallFailSecs = 0.0f; // 只計「停在此點仍解不到」（transit 不預充）
+					}
+					else
+					{
+						ReachWallFailSecs += StepDt;
+						if (ReachWallFailSecs > 0.6f)
+						{
+							bReachWallValid = false; // 自癒：牆點失效，交還自由 aim＋舊提示
+						}
+						else if (ReachWallFailSecs > 0.05f)
+						{
+							// 去抖 0.05s（A/B 實錘）：單 tick 的 Newton 噎住＝可達點的暫態，
+							// 立即回捲會微改 aim 軌跡→暖啟動路徑分岔→冗餘解流形落點漂移
+							//（directdraw far 針軸掠臂 3 FAIL 的真兇）；真域邊界的失敗是持續的。
+							DrawAimTiltLocal = ReachWallTilt;
+							AimEuroTilt.Snap(ReachWallTilt);
+							DrawAimTiltFilt = ReachWallTilt;
+							if (ReachWallFailSecs > 0.15f)
+							{
+								DrawAimAzLocal = ReachWallAz;
+								AimEuroAz.Snap(ReachWallAz);
+								DrawAimAzFilt = ReachWallAz;
+							}
+							HipDeg = PrevHip;
+							AnkleDeg = PrevAnkle;
+							DrawSolveYawDeg = PrevPsi;
+						}
+					}
+				}
+			}
 
 			// 眼錨定＝解析算「入座目標姿勢的眉心」（07-20 三修：舊版等首寫收斂才抓
 			// ＝抓到平滑層剛起步的半直立姿＝錨點恆在站直眉心高（~135cm）——

@@ -982,6 +982,14 @@ private:
 	// One Euro 濾波處理：靜止強濾抖、快掃近零滯後；姿勢=濾波 aim 的直接解）
 	bool bDrawTipReachable = false;    // 本 tick 筆尖可達（落墨閘）
 	float DrawTipResidualCm = -1.0f;   // 解算殘差（診斷/robo）
+	// 游標撞牆（2026-07-28 user 裁決「指得到=畫得到」；07-28 七/八輪規格重植）：
+	// trace 命中但解不到＝aim 回捲到最後可達值——「畫不到」對玩家不存在，域邊界
+	// =游標推不過去的牆。ReachWall*=最後一次解算成功的 aim；FailSecs=自癒計時
+	//（回捲點本身持續解不到＝釋放，寧可自由+舊提示、不可困死）。
+	float ReachWallAz = 0.0f;
+	float ReachWallTilt = 45.0f;
+	bool bReachWallValid = false;
+	float ReachWallFailSecs = 0.0f;
 	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
 	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
 	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。
