@@ -2161,8 +2161,31 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	MistPrevAimTilt = DrawAimTiltLocal;
 	bMistPrevAimValid = true;
 
-	// 搆不到計時（HUD 提示閘）：有目標但筆搆不著才累積；看向房間（無 P）不算
-	if (bDrawTargetValid && !bDrawTipReachable)
+	// 收筆裁決＝遮罩（07-29 單一裁判制；user 抓「標記與能畫之間有巨大差距」＝
+	// 兩裁判結構病）：遮罩烘完後「被標記⟺不能畫」——紗蓋到哪、筆就在哪抬起，
+	// 與顯示同一張表＝構造保證零縫；未烘好（入鎖 ~1s 內）退回活解算 reach。
+	// 活解算自此只管擺姿勢，不再兼任收筆裁判。
+	{
+		ANiceInkCharacter* GateTarget = LeanTarget.Get();
+		bCursorDrawable = bDrawTipReachable;
+		// 巡航（Liner 皮繩）沿用活 reach：機器工具自有導引/浮雕/速度契約，遮罩
+		// 2.6cm 粒度會把巡航切碎（速度契約 robo 實錘 tipSpd 2.9 vs 2.34）；
+		// 遮罩裁決管自由手繪（稿筆/霧針）＝user 抓差距的場景。PrevUV=縫區兩島
+		// 搶點的連續性偏好（與墨鏈同一約定，防島縫誤判閃斷）。
+		if (bReachMaskReady && bDrawTargetValid && !bTattooChaseActive &&
+			GateTarget && GateTarget->Body)
+		{
+			FVector2D CurUV;
+			const FVector2D* Prev = bHasLastPaintTip ? &LastPaintUV : nullptr;
+			if (GateTarget->Body->ResolveBodyUV(DrawTargetWorld, CurUV, 30.0f, Prev))
+			{
+				bCursorDrawable = IsMaskUVDrawable(CurUV);
+			}
+		}
+	}
+
+	// 搆不到計時（HUD 提示閘）：有目標但裁決不可畫才累積；看向房間（無 P）不算
+	if (bDrawTargetValid && !bCursorDrawable)
 	{
 		DrawUnreachSecs += DeltaSeconds;
 	}
@@ -2185,12 +2208,11 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 搆得到才畫得到：剛臂＋伸針解算（ApplyBowPose）裁決本 tick 針尖是否真的壓在皮膚上。
-	// 解不到（橫向殘差超容差）＝墨不落。刺青機再加一閘：針必須實際伸出（UpdatePenVisual
+	// 可畫才落墨（裁決=遮罩，見上）。刺青機再加一閘：針必須實際伸出（UpdatePenVisual
 	// 的針軸 trace 命中；上一 tick 值＝首個觸發 tick 針還沒彈出、墨慢一 tick=針彈出即墨）
 	// ——針懸空沒碰到就出墨＝視覺謊言（第三者因果：針戳進肉才有墨）。
 	// 打稿麥克筆無伸縮針＝此閘不適用（筆尖壓膚即畫）。
-	if (!bDrawTipReachable || !bPenStateValid ||
+	if (!bCursorDrawable || !bPenStateValid ||
 		(bPenIsMachineAsset && SelectedNeedle != EInkNeedle::Stencil &&
 			PenNeedleLenCm <= PenNeedleStubCm + 0.01f))
 	{
@@ -4019,6 +4041,28 @@ void ANiceInkCharacter::ApplyBowPose()
 				}
 				if (ReachBakePhase >= 2 && !bReachMaskReady)
 				{
+					// 去斑（3×3 多數決 ×2）：邊際帶的解算殘差在容差上下擲硬幣＝
+					// 鹽胡椒斑；多數決把零星斑併入周圍＝乾淨連續邊界。遮罩=標記與
+					// 收筆的唯一權威，這條邊就是玩家看到且感受到的可畫邊界。
+					for (int32 Pass = 0; Pass < 2; ++Pass)
+					{
+						const TArray<uint8> Src = ReachMaskData;
+						for (int32 Y = 1; Y < Fine - 1; ++Y)
+						{
+							for (int32 X = 1; X < Fine - 1; ++X)
+							{
+								int32 NumVeil = 0;
+								for (int32 Dy = -1; Dy <= 1; ++Dy)
+								{
+									for (int32 Dx = -1; Dx <= 1; ++Dx)
+									{
+										NumVeil += Src[(Y + Dy) * Fine + (X + Dx)] >= 128 ? 1 : 0;
+									}
+								}
+								ReachMaskData[Y * Fine + X] = NumVeil >= 5 ? 255 : 0;
+							}
+						}
+					}
 					bReachMaskReady = true;
 					UpdateReachVeilShell(); // 細化完成＝最終上傳
 				}
@@ -4211,6 +4255,18 @@ void ANiceInkCharacter::UpdateReachVeilShell()
 	ReachVeilShell->SetVisibility(true);
 }
 
+bool ANiceInkCharacter::IsMaskUVDrawable(const FVector2D& UV) const
+{
+	// 單一裁判查表（07-29）：遮罩未烘好＝一律可畫（收筆閘會用活 reach 兜）
+	if (!bReachMaskReady || ReachMaskData.Num() != ReachMaskRes * ReachMaskRes)
+	{
+		return true;
+	}
+	const int32 X = FMath::Clamp(static_cast<int32>(UV.X * ReachMaskRes), 0, ReachMaskRes - 1);
+	const int32 Y = FMath::Clamp(static_cast<int32>(UV.Y * ReachMaskRes), 0, ReachMaskRes - 1);
+	return ReachMaskData[Y * ReachMaskRes + X] < 128;
+}
+
 void ANiceInkCharacter::ClearReachVeilShell()
 {
 	bReachMaskReady = false;
@@ -4326,11 +4382,12 @@ void ANiceInkCharacter::UpdatePenVisual()
 			const FQuat PenQBone = FRotationMatrix::MakeFromZX(-BoneTipDir, HandQ.GetAxisX()).ToQuat();
 			float TipDist = MarkerHoverTipCm;
 			bool bTouching = false;
-			// 收筆閘（07-28 顯示制 user 定案）：游標在可達域外＝筆回「沒按左鍵」的
-			// 懸筆樣——收筆；游標回域內且左鍵仍按著＝自動壓回（墨鏈電平觸發、
-			// 筆劃自動分段續畫）。游標移動本身永不被干擾。
-			const bool bTrig = (IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld) &&
-				bDrawTipReachable;
+			// 收筆閘（07-28 顯示制；07-29 單一裁判＝遮罩）：游標在紗區＝筆回「沒按
+			// 左鍵」的懸筆樣——收筆；回可畫區且左鍵仍按著＝自動壓回（墨鏈電平觸發、
+			// 筆劃自動分段續畫）。游標移動本身永不被干擾。他端無遮罩＝沿用活 reach。
+			const bool bTrig = IsLocallyControlled()
+				? (bPenTriggerLocal && bCursorDrawable)
+				: (bPenTriggerHeld && bDrawTipReachable);
 			ANiceInkCharacter* Target = LeanTarget.Get();
 			if (bTrig && Target && Target->Body && GetWorld())
 			{
@@ -4430,9 +4487,10 @@ void ANiceInkCharacter::UpdatePenVisual()
 			float NeedleLen = PenNeedleStubCm;
 			float GripLen = PenGripBaseLenCm;
 			FVector ExitVisW = ExitBaseW;
-			// 收筆閘（07-28 顯示制）：域外＝針收樁（同稿筆——收筆的機械版）
-			const bool bTrig = (IsLocallyControlled() ? bPenTriggerLocal : bPenTriggerHeld) &&
-				bDrawTipReachable;
+			// 收筆閘（07-28 顯示制；07-29 單一裁判＝遮罩）：紗區＝針收樁（同稿筆）
+			const bool bTrig = IsLocallyControlled()
+				? (bPenTriggerLocal && bCursorDrawable)
+				: (bPenTriggerHeld && bDrawTipReachable);
 			ANiceInkCharacter* Target = LeanTarget.Get();
 			if (bTrig && Target && Target->Body && GetWorld())
 			{

@@ -1004,6 +1004,11 @@ private:
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ReachVeilMaterial; // M_ReachVeil lazy load
 	void UpdateReachVeilShell();  // 遮罩烘完＝上傳貼圖+掛殼
 	void ClearReachVeilShell();   // 出鎖/重鎖＝收殼+重置烘焙
+	// 遮罩＝唯一裁判（07-29 user 抓「標記與能畫之間有巨大差距」＝兩裁判結構病）：
+	// 烘完後「被標記⟺不能畫」——收筆閘/筆視覺/HUD 提示全查同一張表，
+	// 紗蓋到哪筆就在哪抬起（構造保證零縫）；未烘好前退回活解算 reach。
+	bool IsMaskUVDrawable(const FVector2D& UV) const;
+	bool bCursorDrawable = true;  // 本 tick 游標點的遮罩裁決快取（owner 端）
 	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
 	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
 	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。
