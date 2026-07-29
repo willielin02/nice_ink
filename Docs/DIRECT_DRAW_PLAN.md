@@ -1244,3 +1244,12 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
 - 坑：**ini 疊了兩行 StartupScripts**（reachradius 沒拆就加 veilshot）＝兩 harness
       互咬（README 警告字面應驗：radius 探針的 ServerExitLean 踢掉 veilshot 的鎖）。
 - [ ] user viewport：橢圓域大小/邊界讀感/灰紗+✕+收筆三位一體。
+
+### 07-29 續五：邊界環線（user 裁決「漸層單用=顯示與行為的公分級差距」→組合制）
+
+- [x] M_ReachVeil 加環線：|e−1| 三角脈衝（帶寬 0.06≈4mm 線）、環處 opacity 提升
+      ＋emissive 再壓暗 65%＝深灰細線正好落在收筆線 e=1 上（同源）；漸層照舊。
+      組合語義＝業界技能範圍圈標準構成：**環線=精確（筆會停在這裡）、漸層灰=區域
+      （這一側是外面）**；紅仍專屬筆尖 ✕。RingStrength 0.85 可調。
+- [x] veilshot 加中間俯角 veilshot_edge 存證：細線平滑橫過皮膚、線內亮線外漸灰。
+- [ ] user viewport：線的粗細/深淺讀感（RingStrength/帶寬 0.06 可調）。

@@ -165,6 +165,23 @@ class Probe:
                 return
             unreal.SystemLibrary.execute_console_command(
                 self.server(), "HighResShot 1 filename=veilshot_downtilt")
+            self.advance("aim_edge")
+        elif s == "aim_edge":
+            if self.elapsed() < 1.0:
+                return
+            # 中間俯角＝把橢圓邊界（環線+漸層起點）拉進畫面存證
+            host = find_char(self.server(), self.host_pid)
+            d = str(host.call_method("DebugLeanSummary", ()))
+            import re as _re
+            m = _re.search(r"az=(-?[\d.]+)", d)
+            az = float(m.group(1)) if m else 0.0
+            host.call_method("DebugRoboDrawAim", (az, 58.0))
+            self.advance("shot_edge")
+        elif s == "shot_edge":
+            if self.elapsed() < 1.2:
+                return
+            unreal.SystemLibrary.execute_console_command(
+                self.server(), "HighResShot 1 filename=veilshot_edge")
             self.advance("done")
         elif s == "done":
             if self.elapsed() < 2.0:
