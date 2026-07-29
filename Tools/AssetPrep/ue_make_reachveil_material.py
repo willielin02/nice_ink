@@ -19,10 +19,21 @@ mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
 
 MEL = unreal.MaterialEditingLibrary
 
-# Emissive＝純黑（veil=把後面的皮膚壓暗，不發光）
-col = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant3Vector, -560, -80)
-col.set_editor_property("constant", unreal.LinearColor(0.0, 0.0, 0.0, 1.0))
-MEL.connect_material_property(col, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
+# Emissive＝去飽和＋壓暗的背景（07-29 業界慣例校準：「停用區」=灰階去飽和壓暗，
+# 不是純陰影——SceneColor 讀後方皮膚→Desaturation 抽彩度→乘暗；紅色語義留給
+# 筆尖 ✕（點狀禁止），大面積不用有色覆蓋=不污染墨色判讀（判讀排序承重不變量））
+scene = MEL.create_material_expression(mat, unreal.MaterialExpressionSceneColor, -1080, -120)
+desat = MEL.create_material_expression(mat, unreal.MaterialExpressionDesaturation, -820, -120)
+MEL.connect_material_expressions(scene, "", desat, "")
+frac = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -1080, 40)
+frac.set_editor_property("r", 0.8)  # 抽 80% 彩度
+MEL.connect_material_expressions(frac, "", desat, "Fraction")
+dark = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -820, 40)
+dark.set_editor_property("r", 0.62)  # 壓暗到 62%
+mulcol = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, -80)
+MEL.connect_material_expressions(desat, "", mulcol, "A")
+MEL.connect_material_expressions(dark, "", mulcol, "B")
+MEL.connect_material_property(mulcol, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
 # Opacity＝ReachMask.R × VeilStrength（遮罩非 sRGB、LinearColor 取樣）
 tex = MEL.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, -820, 140)
@@ -34,7 +45,7 @@ if blk:
 
 strength = MEL.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -820, 360)
 strength.set_editor_property("parameter_name", "VeilStrength")
-strength.set_editor_property("default_value", 0.38)
+strength.set_editor_property("default_value", 0.6)  # 混合比（emissive=替換式灰階、非疊黑）
 
 mul = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, 220)
 MEL.connect_material_expressions(tex, "R", mul, "A")

@@ -1212,3 +1212,12 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
 - [x] 驗證：veilshot 深俯角紗+✕+提示三訊號同步＋directdraw 71/72（僅上述帶邊項）＋
       orbit 24/0＋feign 26/0＋maze 15/0。
 - [ ] user viewport：腳掌處現在應得到 ✕＋收筆（紗視角允許時也可見）；Liner 手感。
+
+### 07-29 續四：紗改業界「停用灰」（user 問業界慣例→裁決採納）
+
+- [x] M_ReachVeil 改 SceneColor→Desaturation(0.8)→×0.62 壓暗（替換式灰階；
+      VeilStrength 0.6）：業界三慣例（紅=禁止/灰階去飽和=停用/只標可畫域）中選灰階
+      ——皮膚畫布的色彩判讀是承重不變量、大面積有色覆蓋會污染墨色；紅色語義專屬
+      筆尖 ✕（點狀禁止=業界紅慣例）。veilshot 驗過：紗區=抽彩度的灰皮膚、非陰影。
+- 坑：uasset 被 4 隻殭屍編輯器鎖住＝delete_asset 半殘（registry/磁碟不同步）→
+      create_asset 回 None；解=清行程→rm 檔案→重跑 one-shot。
