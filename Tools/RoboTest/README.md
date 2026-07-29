@@ -92,4 +92,18 @@
 - **GUI 編輯器崩潰後殘留 Saved/Autosaves/PackageRestoreData.json＝下次啟動被
   Restore 對話框擋死（StartupScripts 永不執行、log 死寂）**——robo 啟動前清 Autosaves。
 - ini 的 StartupScripts 行用「git checkout 還原再 Add-Content」換腳本——直接 replace
-  容易疊行（腳本會跑兩份互咬）。
+  容易疊行（腳本會跑兩份互咬）。**換完必 `grep -c StartupScripts` 確認只有一行**
+  （07-29 實錘：radius 探針沒拆就疊 veilshot＝兩 harness 互咬，radius 的
+  ServerExitLean 把 veilshot 的鎖踢掉）。
+
+## 可畫域橢圓制儀器（2026-07-29）
+
+- `robo_veilshot.py`＝veil 殼視覺自查：host 鎖肚頂→等橢圓擬合完（maskOn=1）→
+  三角度截圖（正對/深俯 75°/邊界 58°）→**重鎖段**（exit→re-enter→RAW→截圖）＝
+  「第二鎖遮罩消失」類 bug 的迴歸籠。**HighResShot 1＝視窗原生尺寸**——固定
+  1280x720 的縱橫比≠視窗會把 HUD/投影驗證做成假象。
+- `robo_reachradius.py`＋`DebugRoboReachStats`＝可達域半徑統計（R100 嚴格圈/
+  R95 穩健圈/最近不可解點分布）：橢圓域大小的量測儀（設計裁決前先量）。
+- `robo_reachmap_probe.py` 現行語義（顯示制後）：游標全自由（eff=命令值）、
+  死區誠實 reach=0、回程無黏死；RAW 行印原始 summary（tblCols 時代欄位已改
+  maskRow=採樣游標/maskOn=橢圓就緒）。

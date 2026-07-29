@@ -193,7 +193,21 @@
   `wip/brow-camera-experiments`（c6abc56）——重啟前必讀（視差搖機理/迭代震盪/
   robo 橋接鐵則，全文=記憶 project_drawpose_jitter_fix.md）。**現行相機=07-20
   眼錨定（入鎖凍結）＝user 知情選擇；與 SPEC #44 矛盾未解、勘誤與否待 user。**
-  已知未了：大腿等陡俯區搆不到（reach 域 +6° 懸崖、診斷在 reachmap 探針）。
+  **＋07-28~29 可畫域全戰役（已提交；帳本=DIRECT_DRAW_PLAN.md 07-28~29 各節）**：
+  「莫名畫不到」三連改制（回捲牆→輸入鉗位→顯示制）收斂到 user 逐字終案＝
+  **嚴格最大橢圓制**：入鎖 64² 採樣（眼錨可見性 trace＋FLeanSolveCtx 可行性，
+  解算核心已抽出共用＝活解算/烘焙同源）→鎖點切面擬合「內部無不可解樣本」的
+  最大面積橢圓（無下限無人工放大，太小=誠實訊息玩家自己重鎖；實測肚頂 R100
+  15.3cm≥1.6×A5）→**單一裁判**：墨閘/筆視覺收筆/HUD 提示/筆尖紅 ✕ 全查同一條
+  IsInsideReachEllipse；顯示=veil 殼（本人 client 專屬、M_ReachVeil 材質內解析
+  橢圓公式＋fwidth 螢幕恆寬銳邊＋SceneColor 去飽和停用灰）＝零貼圖零斑。儀器=
+  robo_veilshot（三角度+重鎖段）/robo_reachradius/DebugRoboReachStats。
+  鐵則沉澱（血價，全文=記憶 project_drawpose_jitter_fix 十四~二十四輪）：輸入
+  裝置所有權歸玩家（系統只動回饋面）、掃射式狀態設定對晚誕生元件必出 bug
+  （OwnerNoSee 二鎖實錘）、皮膚上的暗線必被讀成身體特徵、掃描網格繞向/法線
+  不可信一律射線可見性、換 robo 探針先 grep 確認 ini 只一行 StartupScripts。
+  記帳：directdraw「cruise tipSpd」契約帶邊 flake（基準 2.60 壓線、環境漂移、
+  烘焙全關 A/B 排除因果）——乾淨機器重跑對照待辦；髖/踝鉗位加寬第二刀未開。
 
 ## 收尾紀律
 
