@@ -1263,3 +1263,16 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
       邊界即語義：界內亮、界外停用灰，一眼分明、零多餘元件。
 - [x] veilshot_edge 存證：乾淨斜切邊、內亮外灰。
 - [ ] user viewport：銳邊讀感/邊界與收筆吻合。
+
+### 07-29 續七：二鎖遮罩消失修（user 抓「第一次右鍵很好、第二次只剩 ✕」）
+
+- 真兇＝進鎖的 OwnerNoSee 掃射迴圈（「除筆外全部對本人隱藏」）：首鎖時 veil 殼
+  尚未誕生（擬合完成才建）逃過迴圈；二鎖時殼已存在→被設 OwnerNoSee＝對唯一
+  觀眾（本人）隱形——狀態診斷全綠（vis/reg/parent 健康）的隱形真兇。
+- [x] 修＝雙保險：進鎖迴圈排除 ReachVeilShell＋UpdateReachVeilShell 顯式
+      SetOwnerNoSee(false)。
+- [x] 驗證：veilshot 重鎖段（exit→re-enter→shot）＝二鎖紗與首鎖一致；
+      directdraw 71/72（唯一缺項=已定性 tipSpd 帶邊 flake）。
+- 鐵則：**「首次好、第二次壞」先找「首次時還不存在的東西」——晚誕生的元件會
+  逃過入場掃射、再入場時被掃到；掃射式狀態設定（迴圈全設）對晚誕生元件天然
+  有序性 bug，新元件要嘛進豁免清單、要嘛自己顯式設回。**

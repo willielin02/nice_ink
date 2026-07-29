@@ -182,6 +182,44 @@ class Probe:
                 return
             unreal.SystemLibrary.execute_console_command(
                 self.server(), "HighResShot 1 filename=veilshot_edge")
+            self.advance("relock_exit")
+        elif s == "relock_exit":
+            if self.elapsed() < 1.0:
+                return
+            # 第二鎖重現（user 抓「第二次按右鍵沒有遮罩」）
+            find_char(self.server(), self.host_pid).call_method("ServerExitLean", ())
+            self.advance("relock_enter")
+        elif s == "relock_enter":
+            if self.elapsed() < 1.2:
+                return
+            victim = find_char(self.server(), self.victim_pid)
+            bt = victim.get_editor_property("Body").get_world_transform()
+            p = bt.transform_location(unreal.Vector(0.0, 26.0, 95.0))
+            n = bt.transform_direction(unreal.Vector(0.0, 1.0, 0.0))
+            host = find_char(self.server(), self.host_pid)
+            log(f"relock enter={host.call_method('DebugRoboEnterLean', (victim, p, n))}")
+            self.advance("relock_settle")
+        elif s == "relock_settle":
+            if self.elapsed() < 4.0:
+                return
+            host = find_char(self.server(), self.host_pid)
+            log("RELOCK RAW " + str(host.call_method("DebugLeanSummary", ())))
+            self.advance("relock_aim")
+        elif s == "relock_aim":
+            if self.elapsed() < 0.5:
+                return
+            host = find_char(self.server(), self.host_pid)
+            d = str(host.call_method("DebugLeanSummary", ()))
+            import re as _re
+            m = _re.search(r"az=(-?[\d.]+)", d)
+            az = float(m.group(1)) if m else 0.0
+            host.call_method("DebugRoboDrawAim", (az, 58.0))
+            self.advance("relock_shot")
+        elif s == "relock_shot":
+            if self.elapsed() < 1.2:
+                return
+            unreal.SystemLibrary.execute_console_command(
+                self.server(), "HighResShot 1 filename=veilshot_relock")
             self.advance("done")
         elif s == "done":
             if self.elapsed() < 2.0:

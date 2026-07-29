@@ -3085,7 +3085,9 @@ void ANiceInkCharacter::OnRep_Lean()
 			TInlineComponentArray<UMeshComponent*> OwnMeshes(this);
 			for (UMeshComponent* M : OwnMeshes)
 			{
-				if (M && M != PenMesh && M != GripMesh && M != NeedleMesh)
+				// veil 殼豁免（07-29 二鎖實錘）：殼是「只演給本人看」的標記——首鎖時
+				// 殼尚未誕生逃過此迴圈、二鎖時被掃到＝遮罩消失只剩 ✕ 的真兇
+				if (M && M != PenMesh && M != GripMesh && M != NeedleMesh && M != ReachVeilShell)
 				{
 					M->SetOwnerNoSee(true);
 				}
@@ -4173,6 +4175,7 @@ void ANiceInkCharacter::UpdateReachVeilShell()
 	{
 		ReachVeilShell->SetMaterial(SlotIdx, ReachVeilMID);
 	}
+	ReachVeilShell->SetOwnerNoSee(false); // 顯式還原（進鎖的 OwnerNoSee 掃射雙保險）
 	ReachVeilShell->SetVisibility(true);
 }
 
