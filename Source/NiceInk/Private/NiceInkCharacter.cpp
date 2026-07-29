@@ -2161,26 +2161,15 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	MistPrevAimTilt = DrawAimTiltLocal;
 	bMistPrevAimValid = true;
 
-	// 收筆裁決＝遮罩（07-29 單一裁判制；user 抓「標記與能畫之間有巨大差距」＝
-	// 兩裁判結構病）：遮罩烘完後「被標記⟺不能畫」——紗蓋到哪、筆就在哪抬起，
-	// 與顯示同一張表＝構造保證零縫；未烘好（入鎖 ~1s 內）退回活解算 reach。
-	// 活解算自此只管擺姿勢，不再兼任收筆裁判。
+	// 收筆裁決＝橢圓公式（07-29 單一裁判制；user 定案「嚴格最大橢圓」）：
+	// 擬合完成後「橢圓外⟺不能畫」——灰紗畫到哪、筆就在哪抬起，顯示與行為同一條
+	// 公式＝構造保證零縫；未擬合完（入鎖 ~0.5s 內）退回活解算 reach。
+	// 巡航（Liner 皮繩）沿用活 reach：機器工具自有導引/浮雕/速度契約機構。
 	{
-		ANiceInkCharacter* GateTarget = LeanTarget.Get();
 		bCursorDrawable = bDrawTipReachable;
-		// 巡航（Liner 皮繩）沿用活 reach：機器工具自有導引/浮雕/速度契約，遮罩
-		// 2.6cm 粒度會把巡航切碎（速度契約 robo 實錘 tipSpd 2.9 vs 2.34）；
-		// 遮罩裁決管自由手繪（稿筆/霧針）＝user 抓差距的場景。PrevUV=縫區兩島
-		// 搶點的連續性偏好（與墨鏈同一約定，防島縫誤判閃斷）。
-		if (bReachMaskReady && bDrawTargetValid && !bTattooChaseActive &&
-			GateTarget && GateTarget->Body)
+		if (bReachEllipseReady && bDrawTargetValid && !bTattooChaseActive)
 		{
-			FVector2D CurUV;
-			const FVector2D* Prev = bHasLastPaintTip ? &LastPaintUV : nullptr;
-			if (GateTarget->Body->ResolveBodyUV(DrawTargetWorld, CurUV, 30.0f, Prev))
-			{
-				bCursorDrawable = IsMaskUVDrawable(CurUV);
-			}
+			bCursorDrawable = IsInsideReachEllipse(DrawTargetWorld);
 		}
 	}
 
@@ -3212,8 +3201,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		MistAimSpeedDegS,
 		static_cast<int32>(ComputeMistFlowByte()),
 		bStencilFollowActive ? 1 : 0,
-		ReachBakePhase * 10000 + ReachBakeIdx,
-		bReachMaskReady ? 1 : 0);
+		ReachSampleIdx,
+		bReachEllipseReady ? 1 : 0);
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const
@@ -3583,7 +3572,7 @@ void ANiceInkCharacter::ApplyBowPose()
 		FMath::Abs(FMath::FindDeltaAngleDegrees(Az, LastAppliedDrawAz)) >= DirtyThresholdDeg ||
 		FMath::Abs(Tilt - LastAppliedDrawTilt) >= DirtyThresholdDeg;
 	// 皮膚遮罩未烘完前不早退（烘焙塊住在解算段內、需要 Ctx；aim 靜止的重跑無害）
-	const bool bBakePending = IsLocallyControlled() && bDrawEyeAnchorValid && !bReachMaskReady;
+	const bool bBakePending = IsLocallyControlled() && bDrawEyeAnchorValid && !bReachEllipseReady;
 	if (!bLeanPoseDirty && !bAimMoved && !bBakePending)
 	{
 		return;
@@ -3906,36 +3895,37 @@ void ANiceInkCharacter::ApplyBowPose()
 		DrawSolveHipDeg = HipDeg;
 		DrawSolveAnkleDeg = AnkleDeg;
 
-		// 可畫域皮膚遮罩·漸進烘焙（07-29 三改制；粗到細+時間預算）：對受害者 UV0
-		// 逐 texel 問「這個皮膚點畫得到嗎」＝Ctx.Feasible（與收筆閘同一個解算器＝
-		// 同源）。可見性 trace 不需要：相機=眼錨點，從錨點看不到的 texel 根本不會
-		// 被渲染＝遮罩值無關緊要；背面點名 255 純粹省解算。粗掃 64²（~0.3s 先上屏
-		// 預覽）→只細化值不一致的邊界格到 256²（~1s 內收斂）；每 tick 5ms 預算
-		//（全解析度直掃曾把幀率拖到 5fps＝veilshot 實錘）。眼錨/受害者姿勢皆鎖內
-		// 常數＝遮罩整鎖有效（翻身會強退鎖重烘）。
-		// 巡航中完全停烘（07-29：烘焙負載落在巡航速度量測窗＝契約邊緣超標實錘；
-		// 巡航=精度時刻，讓路是原則不是優化）；出巡航續烘
-		if (IsLocallyControlled() && bDrawEyeAnchorValid && !bReachMaskReady && !bTattooChaseActive)
+		// 可畫域採樣＋嚴格最大橢圓（07-29 user 逐字定案「量測出來的圈太小就是
+		// 太小，對方自己調整，我們就是嚴格給他我們能給的最大『橢圓』」）：
+		// 對受害者皮膚逐點問「眼錨看得到嗎＋解算解得到嗎」（FLeanSolveCtx 同源），
+		// 不可解的可見樣本在鎖點切面座標 (u,v) 上成為約束；採樣完＝擬合「內部無
+		// 任何不可解樣本」的最大面積橢圓——無下限、無人工放大，太小=誠實資訊。
+		// 域=解析公式 ⇒ 顯示（材質逐像素）與收筆閘同一條式＝單一裁判、零貼圖零斑。
+		// 巡航中停採（速度量測窗讓路）；每 tick 3ms 預算。
+		if (IsLocallyControlled() && bDrawEyeAnchorValid && !bReachEllipseReady && !bTattooChaseActive)
 		{
 			ANiceInkCharacter* MaskVictim = LeanTarget.Get();
 			UInkBodyComponent* VB = MaskVictim ? ToRawPtr(MaskVictim->Body) : nullptr;
 			if (VB && GetWorld())
 			{
-				constexpr int32 Fine = ReachMaskRes;
-				constexpr int32 Coarse = ReachMaskCoarse;
-				constexpr int32 Block = Fine / Coarse;
-				if (ReachMaskData.Num() != Fine * Fine)
+				constexpr int32 Grid = ReachSampleGrid;
+				if (ReachSampleIdx == 0)
 				{
-					ReachMaskData.Init(0, Fine * Fine);
-					ReachCoarseVal.Init(0, Coarse * Coarse);
-					ReachBakePhase = 0;
-					ReachBakeIdx = 0;
+					// 切面座標系：V=aim 在切面上的投影（朝深處=懸崖向）、H=N×V（橫向）
+					ReachLockW = FVector(LeanPoint);
+					const FVector Nrm = FVector(LeanNormal).GetSafeNormal();
+					const FVector AimDir = (ReachLockW - DrawEyeAnchorWorld).GetSafeNormal();
+					FVector Vax = AimDir - Nrm * FVector::DotProduct(AimDir, Nrm);
+					if (!Vax.Normalize())
+					{
+						Vax = FVector::VectorPlaneProject(FVector::XAxisVector, Nrm).GetSafeNormal();
+					}
+					ReachAxisV = Vax;
+					ReachAxisH = FVector::CrossProduct(Nrm, Vax).GetSafeNormal();
+					ReachInfeasUV.Reset();
+					ReachMaxExtentCm = 0.0f;
 				}
 				const FVector Anchor = DrawEyeAnchorWorld;
-				// 眼錨可見性 trace（07-29 腳掌實錘＝繞向翻轉區讓法線判定不可信——
-				// 掃描重拓樸網格的三角繞向非全身一致，鎖點單點校準救不了翻轉區）：
-				// 「從錨點看不看得到」是幾何真相、與繞向無關——看不到＝游標永遠指不到
-				// ＝不可畫（免解算）；粗到細制下 trace 量可負擔
 				FCollisionQueryParams VisQP(SCENE_QUERY_STAT(NiceInkReachMask), /*bInTraceComplex=*/true);
 				for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
 				{
@@ -3944,141 +3934,71 @@ void ANiceInkCharacter::ApplyBowPose()
 						VisQP.AddIgnoredActor(*It);
 					}
 				}
-				// 三態：0=可畫、255=不可畫、128=島外（僅粗掃分類用；上屏一律映 0——
-				// 島外 texel 不對應皮膚，但**不能**與「可畫」同值：否則每條 UV 島邊都被
-				// 誤判成可行性邊界＝細化清單被幾百個島邊格灌爆（首版實錘）
-				auto EvalTexel = [&](float Uc, float Vc) -> uint8
+				const double BudgetEnd = FPlatformTime::Seconds() + 0.003;
+				while (FPlatformTime::Seconds() < BudgetEnd && ReachSampleIdx < Grid * Grid)
 				{
+					const int32 Idx = ReachSampleIdx++;
+					const float Uc = ((Idx % Grid) + 0.5f) / Grid;
+					const float Vc = ((Idx / Grid) + 0.5f) / Grid;
 					FVector Pw, Nw;
 					if (!VB->ResolveUVToWorldWithNormal(FVector2D(Uc, Vc), Pw, Nw))
 					{
-						return 128;
+						continue;
 					}
-					const FVector VisDir = (Pw - Anchor).GetSafeNormal();
-					FHitResult VisHit;
-					if (!GetWorld()->LineTraceSingleByChannel(VisHit, Anchor,
-							Pw + VisDir * 3.0f, ECC_Visibility, VisQP) ||
-						VisHit.GetActor() != MaskVictim ||
-						FVector::Dist(VisHit.ImpactPoint, Pw) > 2.5f)
+					const FVector Dir = (Pw - Anchor).GetSafeNormal();
+					FHitResult Hit;
+					if (!GetWorld()->LineTraceSingleByChannel(Hit, Anchor, Pw + Dir * 3.0f,
+							ECC_Visibility, VisQP) ||
+						Hit.GetActor() != MaskVictim ||
+						FVector::Dist(Hit.ImpactPoint, Pw) > 2.5f)
 					{
-						return 255; // 錨點看不到（背面/被自身遮擋）＝指不到＝不可畫
+						continue; // 錨點看不到＝游標指不到＝不構成橢圓的約束
 					}
-					// 暖啟動＝當前活解（鎖點鄰域的已收斂姿勢——可達域在姿勢空間連通，
-					// 從中心出發最穩；掃描鏈式暖啟動在 UV 跳島下是毒＝07-29 實錘）
+					const FVector D3 = Pw - ReachLockW;
+					const float Su = FVector::DotProduct(D3, ReachAxisH);
+					const float Sv = FVector::DotProduct(D3, ReachAxisV);
 					float SPsi = DrawSolveYawDeg, SHip = DrawSolveHipDeg, SAnk = DrawSolveAnkleDeg;
-					if (Ctx.Feasible(Pw, (Pw - Anchor).Rotation().Yaw, SPsi, SHip, SAnk))
+					if (Ctx.Feasible(Pw, Dir.Rotation().Yaw, SPsi, SHip, SAnk))
 					{
-						return 0;
-					}
-					return 255;
-				};
-				// 按著筆＝烘焙讓路（1ms）：滿預算 5ms 的烘焙負載會拖長巡航量測窗的
-				// 幀（速度契約邊緣超標 robo 實錘）；畫的時候不趕工、停筆繼續烘
-				const bool bPaintingNow = bPenTriggerLocal || bDebugPaintHeld;
-				const double TickBudgetEnd = FPlatformTime::Seconds() + (bPaintingNow ? 0.001 : 0.005);
-				while (FPlatformTime::Seconds() < TickBudgetEnd && ReachBakePhase < 2)
-				{
-					if (ReachBakePhase == 0)
-					{
-						// 粗掃：每格取中心 texel
-						const int32 Cy = ReachBakeIdx / Coarse;
-						const int32 Cx = ReachBakeIdx % Coarse;
-						ReachCoarseVal[ReachBakeIdx] = EvalTexel(
-							(Cx + 0.5f) / Coarse, (Cy + 0.5f) / Coarse);
-						if (++ReachBakeIdx >= Coarse * Coarse)
-						{
-							// 粗值鋪滿細緩衝＋建細化清單：只追「可畫↔不可畫」的真邊界
-							//（0↔255 相鄰）；島外（128）上屏映 0、不觸發細化
-							ReachRefineCells.Reset();
-							auto IsFeasBoundary = [](uint8 A, uint8 B)
-							{
-								return (A == 0 && B == 255) || (A == 255 && B == 0);
-							};
-							for (int32 C = 0; C < Coarse * Coarse; ++C)
-							{
-								const int32 Cy2 = C / Coarse;
-								const int32 Cx2 = C % Coarse;
-								const uint8 Val = ReachCoarseVal[C];
-								const uint8 Fill = (Val == 128) ? 0 : Val;
-								for (int32 By = 0; By < Block; ++By)
-								{
-									uint8* RowPtr = &ReachMaskData[(Cy2 * Block + By) * Fine + Cx2 * Block];
-									FMemory::Memset(RowPtr, Fill, Block);
-								}
-								const bool bEdge =
-									(Cx2 > 0 && IsFeasBoundary(ReachCoarseVal[C - 1], Val)) ||
-									(Cx2 + 1 < Coarse && IsFeasBoundary(ReachCoarseVal[C + 1], Val)) ||
-									(Cy2 > 0 && IsFeasBoundary(ReachCoarseVal[C - Coarse], Val)) ||
-									(Cy2 + 1 < Coarse && IsFeasBoundary(ReachCoarseVal[C + Coarse], Val));
-								if (bEdge)
-								{
-									ReachRefineCells.Add(C);
-								}
-							}
-							ReachBakeIdx = 0;
-							ReachBakePhase = 1;
-							UpdateReachVeilShell(); // 粗版先上屏（~0.3s 內可見、邊界隨後銳化）
-						}
+						ReachMaxExtentCm = FMath::Max(ReachMaxExtentCm,
+							FMath::Max(FMath::Abs(Su), FMath::Abs(Sv)));
 					}
 					else
 					{
-						if (ReachBakeIdx >= ReachRefineCells.Num())
-						{
-							ReachBakePhase = 2;
-							break;
-						}
-						const int32 C = ReachRefineCells[ReachBakeIdx++];
-						const int32 Cy = C / Coarse;
-						const int32 Cx = C % Coarse;
-						for (int32 By = 0; By < Block; ++By)
-						{
-							for (int32 Bx = 0; Bx < Block; ++Bx)
-							{
-								const int32 Fx = Cx * Block + Bx;
-								const int32 Fy = Cy * Block + By;
-								const uint8 E = EvalTexel(
-									(Fx + 0.5f) / Fine, (Fy + 0.5f) / Fine);
-								ReachMaskData[Fy * Fine + Fx] = (E == 128) ? 0 : E;
-							}
-						}
+						ReachInfeasUV.Add(FVector2D(Su, Sv));
 					}
 				}
-				if (ReachBakePhase >= 2 && !bReachMaskReady)
+				if (ReachSampleIdx >= Grid * Grid && !bReachEllipseReady)
 				{
-					// 去斑（只殺孤立點 ×2；07-29 二版）：初版 3×3 多數決把「細長的真
-					// 標記帶」（皺摺帶寬僅 1~2 格）整條當雜訊抹除＝user 抓「完全沒看到
-					// 標記」。改成：8 鄰中同值 ≤1 個＝真孤立雜點才翻面——鹽胡椒消失、
-					// 細帶保留（帶上每格沿帶方向至少有 2 個同值鄰）。遮罩=標記與收筆的
-					// 唯一權威，濾波動它=同時動視覺與行為，寧保守勿吃真相。
-					for (int32 Pass = 0; Pass < 2; ++Pass)
+					// 擬合最大嚴格橢圓：max A·B s.t. 每個不可解可見樣本都在橢圓外；
+					// 收 1.5cm＝取樣粒度（2.6cm 格）的誠實折讓——格與格之間沒問過的點
+					const float MaxR = FMath::Clamp(ReachMaxExtentCm + 3.0f, 6.0f, 60.0f);
+					float BestA = 3.0f;
+					float BestB = 3.0f;
+					float BestArea = 0.0f;
+					for (float CandA = 3.0f; CandA <= MaxR; CandA += 0.5f)
 					{
-						const TArray<uint8> Src = ReachMaskData;
-						for (int32 Y = 1; Y < Fine - 1; ++Y)
+						float CandB = MaxR;
+						for (const FVector2D& Sm : ReachInfeasUV)
 						{
-							for (int32 X = 1; X < Fine - 1; ++X)
+							const float Un = FMath::Abs(Sm.X) / CandA;
+							if (Un < 0.999f)
 							{
-								const uint8 Self = Src[Y * Fine + X];
-								int32 NumSame = 0;
-								for (int32 Dy = -1; Dy <= 1; ++Dy)
-								{
-									for (int32 Dx = -1; Dx <= 1; ++Dx)
-									{
-										if (Dy == 0 && Dx == 0)
-										{
-											continue;
-										}
-										NumSame += Src[(Y + Dy) * Fine + (X + Dx)] == Self ? 1 : 0;
-									}
-								}
-								if (NumSame <= 1)
-								{
-									ReachMaskData[Y * Fine + X] = Self >= 128 ? 0 : 255;
-								}
+								CandB = FMath::Min(CandB, FMath::Abs(Sm.Y) /
+									FMath::Sqrt(1.0f - Un * Un));
 							}
 						}
+						if (CandA * CandB > BestArea)
+						{
+							BestArea = CandA * CandB;
+							BestA = CandA;
+							BestB = CandB;
+						}
 					}
-					bReachMaskReady = true;
-					UpdateReachVeilShell(); // 細化完成＝最終上傳
+					ReachA = FMath::Max(BestA - 1.5f, 1.0f);
+					ReachB = FMath::Max(BestB - 1.5f, 1.0f);
+					bReachEllipseReady = true;
+					UpdateReachVeilShell(); // 擬合完成＝設材質參數+掛殼
 				}
 			}
 		}
@@ -4208,13 +4128,13 @@ void ANiceInkCharacter::ApplyBowPose()
 
 void ANiceInkCharacter::UpdateReachVeilShell()
 {
-	// veil 殼（07-29）：遮罩烘完＝上傳貼圖＋把同網格殼掛上受害者——只存在於
-	// 作畫者自己的 client（NewObject 本地元件、不複製）；材質=M_ReachVeil
-	//（半透明黑、Opacity=遮罩、WPO 法線外推）＝只有「畫不到的皮膚」變暗。
+	// veil 殼（07-29 橢圓制）：材質吃三個向量參數（橢圓心＋預除半軸的兩軸），
+	// 每個皮膚像素在材質裡直接算 (u/A)²+(v/B)²——光滑羽化圓弧、零貼圖＝斑在
+	// 構造上不存在。殼只存在於作畫者自己的 client（NewObject 本地元件、不複製）。
 	ANiceInkCharacter* Victim = LeanTarget.Get();
-	if (!Victim || !Victim->Body)
+	if (!Victim || !Victim->Body || !bReachEllipseReady)
 	{
-		return; // 粗掃完成即可先上屏（bReachMaskReady 只擋重烘，不擋上傳）
+		return;
 	}
 	if (!ReachVeilMaterial)
 	{
@@ -4225,31 +4145,18 @@ void ANiceInkCharacter::UpdateReachVeilShell()
 			return; // 資產缺席＝無標記（收筆閘照常工作）
 		}
 	}
-	if (!ReachMaskTex)
-	{
-		ReachMaskTex = UTexture2D::CreateTransient(ReachMaskRes, ReachMaskRes, PF_B8G8R8A8);
-		ReachMaskTex->SRGB = false;
-		ReachMaskTex->Filter = TF_Bilinear;
-	}
-	if (FTexturePlatformData* PD = ReachMaskTex->GetPlatformData())
-	{
-		uint8* Px = static_cast<uint8*>(PD->Mips[0].BulkData.Lock(LOCK_READ_WRITE));
-		for (int32 i = 0; i < ReachMaskRes * ReachMaskRes; ++i)
-		{
-			const uint8 M = ReachMaskData[i];
-			Px[i * 4 + 0] = M;
-			Px[i * 4 + 1] = M;
-			Px[i * 4 + 2] = M;
-			Px[i * 4 + 3] = M;
-		}
-		PD->Mips[0].BulkData.Unlock();
-		ReachMaskTex->UpdateResource();
-	}
 	if (!ReachVeilMID)
 	{
 		ReachVeilMID = UMaterialInstanceDynamic::Create(ReachVeilMaterial, this);
 	}
-	ReachVeilMID->SetTextureParameterValue(TEXT("ReachMask"), ReachMaskTex);
+	const FVector PH = ReachAxisH / FMath::Max(ReachA, 1.0f);
+	const FVector PV = ReachAxisV / FMath::Max(ReachB, 1.0f);
+	ReachVeilMID->SetVectorParameterValue(TEXT("EllipseCenter"),
+		FLinearColor(ReachLockW.X, ReachLockW.Y, ReachLockW.Z, 0.0f));
+	ReachVeilMID->SetVectorParameterValue(TEXT("EllipseAxisH"),
+		FLinearColor(PH.X, PH.Y, PH.Z, 0.0f));
+	ReachVeilMID->SetVectorParameterValue(TEXT("EllipseAxisV"),
+		FLinearColor(PV.X, PV.Y, PV.Z, 0.0f));
 	if (!ReachVeilShell)
 	{
 		ReachVeilShell = NewObject<UStaticMeshComponent>(this, TEXT("ReachVeilShell"));
@@ -4269,25 +4176,143 @@ void ANiceInkCharacter::UpdateReachVeilShell()
 	ReachVeilShell->SetVisibility(true);
 }
 
-bool ANiceInkCharacter::IsMaskUVDrawable(const FVector2D& UV) const
+bool ANiceInkCharacter::IsInsideReachEllipse(const FVector& P) const
 {
-	// 單一裁判查表（07-29）：遮罩未烘好＝一律可畫（收筆閘會用活 reach 兜）
-	if (!bReachMaskReady || ReachMaskData.Num() != ReachMaskRes * ReachMaskRes)
+	// 單一裁判查式（07-29 橢圓制）：未擬合完＝一律可畫（收筆閘用活 reach 兜）
+	if (!bReachEllipseReady || ReachA <= 0.0f || ReachB <= 0.0f)
 	{
 		return true;
 	}
-	const int32 X = FMath::Clamp(static_cast<int32>(UV.X * ReachMaskRes), 0, ReachMaskRes - 1);
-	const int32 Y = FMath::Clamp(static_cast<int32>(UV.Y * ReachMaskRes), 0, ReachMaskRes - 1);
-	return ReachMaskData[Y * ReachMaskRes + X] < 128;
+	const FVector D = P - ReachLockW;
+	const float U = FVector::DotProduct(D, ReachAxisH) / ReachA;
+	const float V = FVector::DotProduct(D, ReachAxisV) / ReachB;
+	return U * U + V * V <= 1.0f;
+}
+
+FString ANiceInkCharacter::DebugRoboReachStats()
+{
+	// 距離圓半徑量測（07-29；量測不猜）：可見皮膚樣本按「離鎖點距離」排序，
+	// 回報嚴格圈 R100（最近不可解點）與穩健圈 R95（圈內可解率 ≥95% 的最大半徑）
+	ANiceInkCharacter* Victim = LeanTarget.Get();
+	if (!bLeanLocked || !Victim || !Victim->Body || !bDrawEyeAnchorValid ||
+		!BowBody || !EnsureBowBodyAsset() || !bPenGripCalibrated || !GetWorld())
+	{
+		return TEXT("ERR not-locked/anchor/calib");
+	}
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	auto IdxOf = [&](const TCHAR* BoneName) { return Ref.FindBoneIndex(FName(BoneName)); };
+	TArray<FTransform> CS;
+	ComposeLeanBaseCS(Ref, CS);
+	const int32 HipsIdx = IdxOf(TEXT("Hips"));
+	const int32 LFootIdx = IdxOf(TEXT("LeftFoot"));
+	const int32 RFootIdx = IdxOf(TEXT("RightFoot"));
+	const int32 LToeIdx = IdxOf(TEXT("LeftToeBase"));
+	const int32 RToeIdx = IdxOf(TEXT("RightToeBase"));
+	const int32 GripBoneIdx = Ref.FindBoneIndex(PenGripBoneName);
+	if (HipsIdx == INDEX_NONE || LFootIdx == INDEX_NONE || RFootIdx == INDEX_NONE ||
+		GripBoneIdx == INDEX_NONE)
+	{
+		return TEXT("ERR bones");
+	}
+	FLeanSolveCtx Ctx;
+	Ctx.HipPivot = CS[HipsIdx].GetLocation();
+	Ctx.AnklePivot = (CS[LFootIdx].GetLocation() + CS[RFootIdx].GetLocation()) * 0.5f;
+	Ctx.Foot0[0] = CS[LFootIdx].GetLocation();
+	Ctx.Foot0[1] = CS[RFootIdx].GetLocation();
+	Ctx.Toe0[0] = LToeIdx != INDEX_NONE ? CS[LToeIdx].GetLocation() : Ctx.Foot0[0];
+	Ctx.Toe0[1] = RToeIdx != INDEX_NONE ? CS[RToeIdx].GetLocation() : Ctx.Foot0[1];
+	Ctx.Tip0 = CS[GripBoneIdx].GetLocation() +
+		CS[GripBoneIdx].GetRotation().RotateVector(PenTipLocalCm);
+	Ctx.TipDirCS = (Ctx.Tip0 - CS[GripBoneIdx].GetLocation()) / FMath::Max(PenTipAheadCm, 1.0f);
+	Ctx.ExitCS = Ctx.Tip0 - Ctx.TipDirCS * PenNeedleNominalCm;
+	Ctx.ActorLoc = GetActorLocation();
+	Ctx.BodyRelLoc = BodyStandRelLoc;
+	Ctx.BodyRelRot = BodyStandRelRot;
+	Ctx.NeedleNominalCm = PenNeedleNominalCm;
+
+	const FVector Anchor = DrawEyeAnchorWorld;
+	const FVector Lock(LeanPoint);
+	FCollisionQueryParams VisQP(SCENE_QUERY_STAT(NiceInkReachStats), /*bInTraceComplex=*/true);
+	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+	{
+		if (*It != Victim)
+		{
+			VisQP.AddIgnoredActor(*It);
+		}
+	}
+	constexpr int32 N = 64;
+	struct FReachSample
+	{
+		float D;
+		bool bFeas;
+	};
+	TArray<FReachSample> Samples;
+	Samples.Reserve(N * N / 2);
+	for (int32 Gy = 0; Gy < N; ++Gy)
+	{
+		for (int32 Gx = 0; Gx < N; ++Gx)
+		{
+			FVector Pw, Nw;
+			if (!Victim->Body->ResolveUVToWorldWithNormal(
+					FVector2D((Gx + 0.5f) / N, (Gy + 0.5f) / N), Pw, Nw))
+			{
+				continue;
+			}
+			const FVector Dir = (Pw - Anchor).GetSafeNormal();
+			FHitResult Hit;
+			if (!GetWorld()->LineTraceSingleByChannel(Hit, Anchor, Pw + Dir * 3.0f,
+					ECC_Visibility, VisQP) ||
+				Hit.GetActor() != Victim ||
+				FVector::Dist(Hit.ImpactPoint, Pw) > 2.5f)
+			{
+				continue; // 不可見＝游標永遠指不到＝不屬於圈語義的樣本
+			}
+			float SPsi = DrawSolveYawDeg, SHip = DrawSolveHipDeg, SAnk = DrawSolveAnkleDeg;
+			const bool bFeas = Ctx.Feasible(Pw, Dir.Rotation().Yaw, SPsi, SHip, SAnk);
+			Samples.Add({ static_cast<float>(FVector::Dist(Pw, Lock)), bFeas });
+		}
+	}
+	Samples.Sort([](const FReachSample& A, const FReachSample& B) { return A.D < B.D; });
+	float R100 = -1.0f;
+	float R95 = 0.0f;
+	int32 FeasCount = 0;
+	FString NearStr;
+	int32 NearN = 0;
+	for (int32 i = 0; i < Samples.Num(); ++i)
+	{
+		if (Samples[i].bFeas)
+		{
+			++FeasCount;
+		}
+		else
+		{
+			if (R100 < 0.0f)
+			{
+				R100 = Samples[i].D;
+			}
+			if (NearN < 5)
+			{
+				NearStr += FString::Printf(TEXT("%.1f "), Samples[i].D);
+				++NearN;
+			}
+		}
+		if (static_cast<float>(FeasCount) / static_cast<float>(i + 1) >= 0.95f)
+		{
+			R95 = Samples[i].D;
+		}
+	}
+	return FString::Printf(TEXT("vis=%d feas=%d R100=%.1f R95=%.1f nearInfeas=[%s]"),
+		Samples.Num(), FeasCount, R100, R95, *NearStr);
 }
 
 void ANiceInkCharacter::ClearReachVeilShell()
 {
-	bReachMaskReady = false;
-	ReachBakePhase = 0;
-	ReachBakeIdx = 0;
-	ReachRefineCells.Reset();
-	ReachMaskData.Reset(); // Num=0 ⇒ 下次烘焙從 init 分支重來
+	bReachEllipseReady = false;
+	ReachSampleIdx = 0;
+	ReachInfeasUV.Reset();
+	ReachA = 0.0f;
+	ReachB = 0.0f;
 	if (ReachVeilShell)
 	{
 		ReachVeilShell->SetVisibility(false);

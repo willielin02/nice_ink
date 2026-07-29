@@ -758,6 +758,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString DebugRoboCoverageScan(ANiceInkCharacter* Target, int32 GridN);
 
+	// 距離圓半徑量測（07-29 圈域制前置調查）：對受害者 UV0 網格逐點問可見性＋
+	// 可解性，回報以鎖點為心的半徑統計——R100=最近不可解點距離（嚴格圈上限）、
+	// R95=圈內可解率 ≥95% 的最大半徑、最近 5 個不可解點距離（孤立噪聲 vs 真邊界）。
+	// 需在 lean-lock 中且眼錨定已成立時呼叫。
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugRoboReachStats();
+
 	// robo：直接畫制狀態（機器可讀）——鎖定/aim/相機/筆尖/ghost 數
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString DebugLeanSummary() const;
@@ -989,30 +996,30 @@ private:
 	// One Euro 濾波處理：靜止強濾抖、快掃近零滯後；姿勢=濾波 aim 的直接解）
 	bool bDrawTipReachable = false;    // 本 tick 筆尖可達（落墨閘）
 	float DrawTipResidualCm = -1.0f;   // 解算殘差（診斷/robo）
-	// 可畫域皮膚遮罩（07-29 三改制＝user 抓螢幕紗三病：蓋到地板/紗內可畫/真不可畫
-	// 沒紗——標記必須畫在皮膚上且與收筆同源）：入鎖眼錨定後對受害者 UV0 網格逐點
-	// 問同一個 FLeanSolveCtx（可見性＋可解性）→烘遮罩貼圖→本地 veil 殼（同網格
-	// +法線外推 2.5mm+M_ReachVeil 半透明黑）疊在受害者身上。殼只存在於作畫者自己
-	// 的 client（不複製）；游標本身永不被動（收筆閘=UpdatePenVisual）。
-	static constexpr int32 ReachMaskRes = 256;    // 圖集 UV0 空間；~2.6cm/texel＋雙線性
-	static constexpr int32 ReachMaskCoarse = 64;  // 粗掃網格（4×4 texel/格）
-	TArray<uint8> ReachMaskData;
-	TArray<uint8> ReachCoarseVal;
-	TArray<int32> ReachRefineCells;               // 粗掃後值不一致的邊界格＝細化清單
-	int32 ReachBakePhase = 0;                     // 0=粗掃 1=邊界細化 2=完成
-	int32 ReachBakeIdx = 0;
-	bool bReachMaskReady = false;
-	UPROPERTY(Transient) TObjectPtr<UTexture2D> ReachMaskTex;
+	// 可畫域＝嚴格最大橢圓（07-29 user 逐字定案「量測出來的圈太小就是太小，對方
+	// 自己調整，我們就是嚴格給他我們能給的最大『橢圓』」）：入鎖眼錨定後對受害者
+	// 皮膚採樣可見性＋可解性（FLeanSolveCtx 同源），在鎖點切面座標 (u,v) 上擬合
+	// 「內部無任何不可解樣本」的最大面積橢圓——無下限、無人工放大。域=解析公式
+	// (u/A)²+(v/B)²≤1：顯示（veil 殼材質內逐像素算、光滑羽化圓弧、零貼圖=斑在
+	// 構造上不存在）與收筆閘/✕/提示全查同一條公式＝單一裁判。殼只存在於作畫者
+	// 自己的 client（不複製）；游標本身永不被動。
+	static constexpr int32 ReachSampleGrid = 64;  // 採樣網格（~2.6cm 粒度）
+	int32 ReachSampleIdx = 0;                     // 漸進採樣游標（時間預算制）
+	bool bReachEllipseReady = false;
+	TArray<FVector2D> ReachInfeasUV;              // 不可解可見樣本的 (u,v)（cm）
+	float ReachMaxExtentCm = 0.0f;                // 可解樣本最遠延伸（無約束軸的上限）
+	FVector ReachLockW = FVector::ZeroVector;     // 橢圓心（鎖點世界座標）
+	FVector ReachAxisH = FVector::XAxisVector;    // 切面橫軸（垂直於 aim 的水平向）
+	FVector ReachAxisV = FVector::YAxisVector;    // 切面縱軸（aim 在切面上的投影＝懸崖向）
+	float ReachA = 0.0f;                          // 橫半軸 cm
+	float ReachB = 0.0f;                          // 縱半軸 cm
+	bool IsInsideReachEllipse(const FVector& P) const;
 	UPROPERTY(Transient) TObjectPtr<UStaticMeshComponent> ReachVeilShell;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInstanceDynamic> ReachVeilMID;
 	UPROPERTY(Transient) TObjectPtr<UMaterialInterface> ReachVeilMaterial; // M_ReachVeil lazy load
-	void UpdateReachVeilShell();  // 遮罩烘完＝上傳貼圖+掛殼
-	void ClearReachVeilShell();   // 出鎖/重鎖＝收殼+重置烘焙
-	// 遮罩＝唯一裁判（07-29 user 抓「標記與能畫之間有巨大差距」＝兩裁判結構病）：
-	// 烘完後「被標記⟺不能畫」——收筆閘/筆視覺/HUD 提示全查同一張表，
-	// 紗蓋到哪筆就在哪抬起（構造保證零縫）；未烘好前退回活解算 reach。
-	bool IsMaskUVDrawable(const FVector2D& UV) const;
-	bool bCursorDrawable = true;  // 本 tick 游標點的遮罩裁決快取（owner 端）
+	void UpdateReachVeilShell();  // 橢圓擬合完成＝設材質參數+掛殼
+	void ClearReachVeilShell();   // 出鎖/重鎖＝收殼+重置採樣
+	bool bCursorDrawable = true;  // 本 tick 游標點的裁決快取（owner 端；橢圓公式）
 	// 落墨點快取：aim 動了才重新 trace。眼睛長在會被解算搬動的頭上——每 tick 重
 	// trace＝「眼→P→姿勢→眼」自我參照回饋，aim 靜止時 P 仍會漂移到鉗位角落
 	//（07-20 探針實錘：三幀漂 10cm）。P 凍結＝迴圈斷開、姿勢收斂為定點。

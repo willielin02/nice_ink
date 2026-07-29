@@ -1221,3 +1221,26 @@ trace 命中但姿勢解不到＝owner aim 回捲到最後可達值——**指�
       筆尖 ✕（點狀禁止=業界紅慣例）。veilshot 驗過：紗區=抽彩度的灰皮膚、非陰影。
 - 坑：uasset 被 4 隻殭屍編輯器鎖住＝delete_asset 半殘（registry/磁碟不同步）→
       create_asset 回 None；解=清行程→rm 檔案→重跑 one-shot。
+
+### 07-29 終案：嚴格最大橢圓制（user 逐字定案「量測出來的圈太小就是太小，對方
+自己調整，我們就是嚴格給他我們能給的最大『橢圓』」）
+
+貼圖遮罩整條鏈退役（256² 烘焙/粗細/去斑/連通區/羽化/貼圖上傳全拆）→解析橢圓：
+
+- [x] 域定義＝鎖點切面座標 (u,v) 上「內部無任何不可解可見樣本」的**最大面積橢圓**
+      （V 軸=aim 切面投影=懸崖向、H 軸=法線×V=橫向）；無下限、無人工放大——
+      太小=誠實資訊、玩家自己換位重鎖。收 1.5cm=取樣粒度誠實折讓。
+- [x] 前置量測（robo_reachradius.py＋DebugRoboReachStats 新儀器）：肚頂 R100=15.3/
+      R95=18.9、腹中 R100=12.8——嚴格圓已 ≥1.6×A5，「圈會超小」證偽；橢圓再多
+      收橫向自由。
+- [x] 採樣＝64² 漸進（3ms/tick、巡航停採、可見性 trace＋Feasible 同源）→擬合
+      max A·B（0.5cm 網格掃描）。
+- [x] 顯示＝材質內解析橢圓公式（WorldPos−Center 對兩預除軸點積平方和、羽化 0.35、
+      停用灰 SceneColor 去飽和）——**零貼圖＝斑在構造上不存在**；像素級光滑圓弧。
+- [x] 收筆閘/✕/提示＝同一條公式（IsInsideReachEllipse）＝單一裁判。
+- [x] 驗證：veilshot 正對全亮零斑/深俯均勻灰＋✕＋提示同步＋directdraw 71/72
+      （唯一缺項=已定性 cruise tipSpd 帶邊 flake 2.62 vs 2.60）＋orbit 24/0＋
+      feign 26/0＋maze 15/0。
+- 坑：**ini 疊了兩行 StartupScripts**（reachradius 沒拆就加 veilshot）＝兩 harness
+      互咬（README 警告字面應驗：radius 探針的 ServerExitLean 踢掉 veilshot 的鎖）。
+- [ ] user viewport：橢圓域大小/邊界讀感/灰紗+✕+收筆三位一體。

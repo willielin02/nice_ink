@@ -1,6 +1,8 @@
-# M_ReachVeil 生成（07-29 可畫域皮膚遮罩制）：作畫者 client 本地疊在受害者身上的
-# veil 殼材質——Unlit 半透明黑、透明度=遮罩貼圖 R×強度、頂點沿法線外推 2.5mm 防
-# z-fight。只暗「畫不到的皮膚」；遮罩由 runtime 逐點解算烘出（與收筆閘同源）。
+# M_ReachVeil 生成（07-29 橢圓制）：作畫者 client 本地疊在受害者身上的 veil 殼
+# 材質——每個皮膚像素直接算橢圓公式 (u/A)²+(v/B)²，>1 漸灰（羽化）：光滑解析
+# 邊界、零貼圖＝斑在構造上不存在。外觀=業界「停用灰」（SceneColor 去飽和壓暗）；
+# 紅色語義留給筆尖 ✕。參數由 runtime 每鎖設定（EllipseCenter/AxisH/AxisV=預除
+# 半軸的軸向量）。單面（雙面=全身半透明像素×2 曾涉巡航速度契約嫌疑）。
 # Run: UnrealEditor-Cmd.exe <uproject> -ExecutePythonScript=<this> -unattended -nosplash
 import unreal
 
@@ -13,50 +15,85 @@ mat = unreal.AssetToolsHelpers.get_asset_tools().create_asset(
     NAME, PATH, unreal.Material, unreal.MaterialFactoryNew())
 mat.set_editor_property("blend_mode", unreal.BlendMode.BLEND_TRANSLUCENT)
 mat.set_editor_property("shading_model", unreal.MaterialShadingModel.MSM_UNLIT)
-# 單面（07-29 終裁）：雙面曾為「繞向翻轉區紗被剔除」開過——但全身半透明殼像素
-# 量 ×2＝巡航速度契約邊緣超標（stash A/B 定罪 GPU 拖幀）。翻轉區紗不可見的資訊
-# 損失由筆尖 ✕（讀墨閘同一裁決）承擔；遮罩本身用可見性 trace＝判定不受繞向影響。
 
 MEL = unreal.MaterialEditingLibrary
 
-# Emissive＝去飽和＋壓暗的背景（07-29 業界慣例校準：「停用區」=灰階去飽和壓暗，
-# 不是純陰影——SceneColor 讀後方皮膚→Desaturation 抽彩度→乘暗；紅色語義留給
-# 筆尖 ✕（點狀禁止），大面積不用有色覆蓋=不污染墨色判讀（判讀排序承重不變量））
-scene = MEL.create_material_expression(mat, unreal.MaterialExpressionSceneColor, -1080, -120)
-desat = MEL.create_material_expression(mat, unreal.MaterialExpressionDesaturation, -820, -120)
+
+def vec_param(name, x, y):
+    p = MEL.create_material_expression(mat, unreal.MaterialExpressionVectorParameter, x, y)
+    p.set_editor_property("parameter_name", name)
+    p.set_editor_property("default_value", unreal.LinearColor(0.0, 0.0, 0.0, 0.0))
+    m = MEL.create_material_expression(mat, unreal.MaterialExpressionComponentMask, x + 180, y)
+    m.set_editor_property("r", True)
+    m.set_editor_property("g", True)
+    m.set_editor_property("b", True)
+    m.set_editor_property("a", False)
+    MEL.connect_material_expressions(p, "", m, "")
+    return m
+
+
+# Emissive＝去飽和＋壓暗的背景（停用灰）
+scene = MEL.create_material_expression(mat, unreal.MaterialExpressionSceneColor, -1080, -220)
+desat = MEL.create_material_expression(mat, unreal.MaterialExpressionDesaturation, -820, -220)
 MEL.connect_material_expressions(scene, "", desat, "")
-frac = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -1080, 40)
-frac.set_editor_property("r", 0.8)  # 抽 80% 彩度
+frac = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -1080, -80)
+frac.set_editor_property("r", 0.8)
 MEL.connect_material_expressions(frac, "", desat, "Fraction")
-dark = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -820, 40)
-dark.set_editor_property("r", 0.62)  # 壓暗到 62%
-mulcol = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, -80)
+dark = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -820, -80)
+dark.set_editor_property("r", 0.62)
+mulcol = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, -180)
 MEL.connect_material_expressions(desat, "", mulcol, "A")
 MEL.connect_material_expressions(dark, "", mulcol, "B")
 MEL.connect_material_property(mulcol, "", unreal.MaterialProperty.MP_EMISSIVE_COLOR)
 
-# Opacity＝ReachMask.R × VeilStrength（遮罩非 sRGB、LinearColor 取樣）
-tex = MEL.create_material_expression(mat, unreal.MaterialExpressionTextureSampleParameter2D, -820, 140)
-tex.set_editor_property("parameter_name", "ReachMask")
-tex.set_editor_property("sampler_type", unreal.MaterialSamplerType.SAMPLERTYPE_LINEAR_COLOR)
-blk = unreal.load_asset("/Engine/EngineResources/Black")
-if blk:
-    tex.set_editor_property("texture", blk)  # 預設全透明（殼在遮罩烘好前不顯示，防禦性）
-
-strength = MEL.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -820, 360)
+# Opacity＝橢圓公式：e=(dot(d,H/A))²+(dot(d,V/B))²；e≤1 全透明、1→1.35 羽化轉灰
+wpos = MEL.create_material_expression(mat, unreal.MaterialExpressionWorldPosition, -1600, 200)
+center = vec_param("EllipseCenter", -1600, 360)
+axh = vec_param("EllipseAxisH", -1600, 520)
+axv = vec_param("EllipseAxisV", -1600, 680)
+dvec = MEL.create_material_expression(mat, unreal.MaterialExpressionSubtract, -1240, 260)
+MEL.connect_material_expressions(wpos, "", dvec, "A")
+MEL.connect_material_expressions(center, "", dvec, "B")
+dot_h = MEL.create_material_expression(mat, unreal.MaterialExpressionDotProduct, -1040, 420)
+MEL.connect_material_expressions(dvec, "", dot_h, "A")
+MEL.connect_material_expressions(axh, "", dot_h, "B")
+sq_h = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -880, 420)
+MEL.connect_material_expressions(dot_h, "", sq_h, "A")
+MEL.connect_material_expressions(dot_h, "", sq_h, "B")
+dot_v = MEL.create_material_expression(mat, unreal.MaterialExpressionDotProduct, -1040, 580)
+MEL.connect_material_expressions(dvec, "", dot_v, "A")
+MEL.connect_material_expressions(axv, "", dot_v, "B")
+sq_v = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -880, 580)
+MEL.connect_material_expressions(dot_v, "", sq_v, "A")
+MEL.connect_material_expressions(dot_v, "", sq_v, "B")
+esum = MEL.create_material_expression(mat, unreal.MaterialExpressionAdd, -720, 500)
+MEL.connect_material_expressions(sq_h, "", esum, "A")
+MEL.connect_material_expressions(sq_v, "", esum, "B")
+one = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -720, 640)
+one.set_editor_property("r", 1.0)
+esub = MEL.create_material_expression(mat, unreal.MaterialExpressionSubtract, -560, 520)
+MEL.connect_material_expressions(esum, "", esub, "A")
+MEL.connect_material_expressions(one, "", esub, "B")
+feather = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -560, 660)
+feather.set_editor_property("r", 0.35)  # 羽化帶寬（橢圓正規化空間）
+ediv = MEL.create_material_expression(mat, unreal.MaterialExpressionDivide, -420, 560)
+MEL.connect_material_expressions(esub, "", ediv, "A")
+MEL.connect_material_expressions(feather, "", ediv, "B")
+clampn = MEL.create_material_expression(mat, unreal.MaterialExpressionClamp, -300, 560)
+MEL.connect_material_expressions(ediv, "", clampn, "")
+strength = MEL.create_material_expression(mat, unreal.MaterialExpressionScalarParameter, -300, 700)
 strength.set_editor_property("parameter_name", "VeilStrength")
-strength.set_editor_property("default_value", 0.6)  # 混合比（emissive=替換式灰階、非疊黑）
+strength.set_editor_property("default_value", 0.6)
+mulop = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -160, 600)
+MEL.connect_material_expressions(clampn, "", mulop, "A")
+MEL.connect_material_expressions(strength, "", mulop, "B")
+MEL.connect_material_property(mulop, "", unreal.MaterialProperty.MP_OPACITY)
 
-mul = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, 220)
-MEL.connect_material_expressions(tex, "R", mul, "A")
-MEL.connect_material_expressions(strength, "", mul, "B")
-MEL.connect_material_property(mul, "", unreal.MaterialProperty.MP_OPACITY)
-
-# WPO＝頂點法線外推 0.25cm（同網格疊殼防 z-fight；殼永遠貼著皮膚形狀）
-nrm = MEL.create_material_expression(mat, unreal.MaterialExpressionVertexNormalWS, -820, 560)
-push = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -820, 700)
+# WPO＝頂點法線外推 0.25cm（同網格疊殼防 z-fight）
+nrm = MEL.create_material_expression(mat, unreal.MaterialExpressionVertexNormalWS, -560, 840)
+push = MEL.create_material_expression(mat, unreal.MaterialExpressionConstant, -560, 980)
 push.set_editor_property("r", 0.25)
-wpo = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -560, 600)
+wpo = MEL.create_material_expression(mat, unreal.MaterialExpressionMultiply, -420, 880)
 MEL.connect_material_expressions(nrm, "", wpo, "A")
 MEL.connect_material_expressions(push, "", wpo, "B")
 MEL.connect_material_property(wpo, "", unreal.MaterialProperty.MP_WORLD_POSITION_OFFSET)
