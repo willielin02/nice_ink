@@ -219,12 +219,13 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.3", ClampMax = "5"))
 	float TattooStencilSnapCm = 1.5f;
 
-	// --- 稿筆游標制（07-31 user 定案：手=游標、臉/相機=惰性注視）---
-	// 游標=皮膚上的世界點（狀態）；滑鼠以恆定公分增益直推（cm/格=角靈敏度×基準
-	// 眼距——增益不再隨眼距/掠射角漂移=小畫家手感的來源）；aim 每 tick 由
-	//「射線原點→游標」反算 ⇒ P/解算/墨/筆全下游鏈零改動。注視(gaze)=aim 的惰性
-	// 追隨，只餵相機與臉（他端經 DrawAimAzDeg 複製通道收到的就是 gaze）。
-	// 恆定增益基準眼距（cm）：60cm 處手感與舊角度制一致
+	// --- 稿筆自由滑鼠制（07-31 五版 user 逐字定案「放滑鼠自由，僅接收資訊而不
+	// 控制滑鼠的走向」）---
+	// 滑鼠→aim 純積分（零投影/吸附/否決；凍結相機下角度≡螢幕位置=小畫家的
+	// 螢幕恆定增益）；皮膚點 P/筆/墨=每 tick 讀出來的導出量、打不到=收筆（純回饋）。
+	// 注視(gaze)=aim 的惰性追隨只餵臉（他端經 DrawAimAzDeg 複製通道收到的就是 gaze）；
+	// 相機=凍結＋遠拉平滑置中（見 StencilCamRecenterRatio）。
+	// HUD 出剪影退路的筆錨定深度（cm）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "20", ClampMax = "150"))
 	float DrawCursorRefDistCm = 60.0f;
 
@@ -235,15 +236,10 @@ public:
 
 	// 稿筆相機重置門檻（畫面半寬倍數）：user 定案「除非玩家刻意往畫面外很遠的地方
 	// 拉很長一個距離，否則相機靜止」——相機恆凍結，游標方向超出畫面邊界此倍數
-	// （1.0=剛好在邊界、1.5=邊界外再半個畫面）才硬切重新置中（硬切=美術語言 #24、
-	// 只在刻意長拉時發生=可預期）
+	// （1.0=剛好在邊界、1.5=邊界外再半個畫面）才觸發置中；置中=τ 平滑滑移
+	//（三版 user 定案「像原來一樣慢慢移動」）、追到正中再度凍結
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "1.0", ClampMax = "4.0"))
 	float StencilCamRecenterRatio = 1.5f;
-
-	// 摺縫跳點鉗（cm）：一步游標允許位移 = 命令步長×2.5 + 此值；重投影跨皺摺的
-	// 瞬跳被鉗＝游標釘縫邊（07-28 十二輪教訓的游標版）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "5"))
-	float DrawCursorJumpClampCm = 0.75f;
 
 	// 導引預測路徑前瞻距離（cm，皮膚弧長）——業界式導引（07-22 二改；五修 user
 	//「還是太短」8→16 ≈ 7s 路程）：與速度同域，調速時導引自動等比
@@ -950,13 +946,10 @@ private:
 	                                                     // 鐵則：角度命令歸角度制、
 	                                                     // 游標制只屬於增量輸入）
 
-	// --- 稿筆游標制內部（07-31；只在 Stencil 工具時活躍）---
-	FVector DrawCursorW = FVector::ZeroVector; // 皮膚游標（世界點；owner 本地狀態）
-	FVector DrawCursorNrm = FVector::UpVector; // 游標處面法線（切面步進用；符號無所謂）
-	bool bDrawCursorValid = false;             // false=角度制退路（出剪影/未命中）
-	bool bDrawCursorRelatch = false;           // 角度是權威的時刻（入鎖/錨點重瞄/robo
-	                                           // 角度命令/切工具）＝游標從 aim 命中點
-	                                           // 再生＋gaze 硬切
+	// --- 稿筆自由滑鼠制內部（07-31 五版；只在 Stencil 工具時活躍）---
+	bool bDrawCursorRelatch = false;           // 硬切事件旗標（入鎖/錨點重瞄/robo
+	                                           // 角度命令/切工具）＝gaze 與凍結相機
+	                                           // 重新對準
 	float DrawGazeAz = 0.0f;                   // 注視（臉的來源；τ 指數追游標）
 	float DrawGazeTilt = 45.0f;
 	bool bDrawGazeInit = false;
@@ -1035,8 +1028,6 @@ private:
 	bool ResolveAimToTargetUV(const FVector& DirWorld, FVector2D& OutUV,
 		const FVector2D* PrevUV = nullptr) const;
 	bool TraceAimToTarget(const FVector& DirWorld, FVector& OutImpact) const; // 共用射線段
-	bool TraceAimToTargetWithNormal(const FVector& DirWorld, FVector& OutImpact,
-		FVector& OutNormal) const; // ＋面法線（游標切面步進用；切面投影對繞向符號免疫）
 	FVector GetAimRayOrigin() const; // 眉心（骨骼現值；相機/骨缺席有退路）
 	FVector2D LastPaintUV = FVector2D::ZeroVector; // 縫區連續性偏好的錨（bHasLastPaintTip 同步）
 
