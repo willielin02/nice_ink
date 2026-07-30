@@ -360,7 +360,7 @@ void ANiceInkHUD::DrawHUD()
 		// 搆不到持續 >1s＝邊界開口說話（無聲失敗鐵則）：筆收起是物理訊號，
 		// 這行話補上「該怎麼辦」
 		DrawBottomHint(MyChar->GetDrawUnreachableSeconds() > 1.0f
-			? TEXT("out of reach — darkened skin needs a closer lean (RMB stand up)")
+			? TEXT("out of reach — veiled skin needs a closer lean (RMB stand up)")
 			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up"),
 			MyChar->GetDrawUnreachableSeconds() > 1.0f ? NiHudColor::Amber : NiHudColor::PaperDim);
 		DrawPaletteStrip(MyChar); // 色票列＝「1-9,0 color」提示的可視化本體
