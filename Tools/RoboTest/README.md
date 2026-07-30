@@ -107,3 +107,14 @@
 - `robo_reachmap_probe.py` 現行語義（顯示制後）：游標全自由（eff=命令值）、
   死區誠實 reach=0、回程無黏死；RAW 行印原始 summary（tblCols 時代欄位已改
   maskRow=採樣游標/maskOn=橢圓就緒）。
+
+## veil 覆膜制儀器（2026-07-31）
+
+- `robo_veilflicker.py`＝veil 顯示雙用探針：①**時域閃爍差分**——鎖肚頂→深俯角
+  （畫面大半=veil）→同機位隔 1s 連拍 veilflk_a/b，配 `veil_flicker_diff.py`
+  （face pipeline venv 的 python 跑）逐像素差分：p99≤2/255＝TAA 噪底、更高＝
+  時域閃爍實錘（translucent 螢幕空間偏移取樣在 TAA/TSR 下天然閃——07-31 焦外版
+  模糊 4-tap 就是這樣死的）；②**跨鎖點一致性**——第二段換鎖下腹（較小橢圓）拍
+  veilflk_c，驗條紋實體寬度不隨橢圓縮放（固定公分制的迴歸籠）。
+- 鐵則：閃爍/呼吸類 bug 單張截圖是瞎的，差分才是儀器；口味迭代（條紋深淺/帶距）
+  每輪跑一次此探針＝順手拿到外觀截圖＋時域數字雙證據。

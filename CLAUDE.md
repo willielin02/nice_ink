@@ -144,7 +144,10 @@
   （11 個合成音；**閉眼沉睡全域靜音＝感官規格、無任何甦醒音**）、
   `NiceInkUiTokens.h`（HUD 調色盤共用）。打包＝RunUAT BuildCookRun（cook 白名單在
   DefaultGame.ini；**只被 C++ 字串路徑引用的資產要 AlwaysCook**）。
-- 場地＝`L_Dojo`（道場 25 獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；L_Sauna 保留）；
+- 場地＝`L_Dojo`（道場獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；07-30~31 場景修：
+  兩門洞各四片拉門重排（軌距=板厚→任兩板零重疊=共面閃爍歸零）＋四張武道布掛軸
+  （日の丸/空手道/大日本/柔術）拆除——流派錯棚+戰前讀感=平台風險，網格留 Parts 可逆，
+  現 21 個部件 actor；門楣松鶴/富士框畫保留=正確扁額位；L_Sauna 保留）；
   光照＝fullbright 均勻環境光（環境亮度旋鈕=SaunaSkyLight Intensity，曝光 bias 5.2 是承重值）；
   皮膚質感＝M_InkBodyChar 材質內假光（SPEC 定案 #37：全啞光＋頭燈假光＋掃描色度血色場；
   旋鈕全是 Scalar Parameter：Headlight*/SkinBrightness/SkinDesat/ChromaStrength/SkinSpecular；
@@ -200,8 +203,13 @@
   最大面積橢圓（無下限無人工放大，太小=誠實訊息玩家自己重鎖；實測肚頂 R100
   15.3cm≥1.6×A5）→**單一裁判**：墨閘/筆視覺收筆/HUD 提示/筆尖紅 ✕ 全查同一條
   IsInsideReachEllipse；顯示=veil 殼（本人 client 專屬、M_ReachVeil 材質內解析
-  橢圓公式＋fwidth 螢幕恆寬銳邊＋SceneColor 去飽和停用灰）＝零貼圖零斑。儀器=
-  robo_veilshot（三角度+重鎖段）/robo_reachradius/DebugRoboReachStats。
+  橢圓公式＋fwidth 螢幕恆寬裁切亮邊線）＝零貼圖零斑。**veil 外觀=07-30~31 覆膜戰役
+  終案（帳本=DIRECT_DRAW_PLAN.md 該節）：柔灰暖膚「靜音層」（desat 0.5+近中性微暗
+  +α0.88=膚色保留，霜白版=睡臉屍白、焦外模糊版=TAA 閃爍均打回）＋固定公分寬對角
+  柔帶（StripePeriodCm 3.5 user 定值——橢圓歸一化條紋會隨鎖點縮放=已退役孤兒）；
+  旋鈕全材質參數：VeilStrength/StripeAmp/StripePeriodCm/RingOpacity。**儀器=
+  robo_veilshot（三角度+重鎖段）/robo_veilflicker（隔秒差分抓時域閃爍+雙鎖點驗
+  條紋恆寬）/robo_reachradius/DebugRoboReachStats。
   鐵則沉澱（血價，全文=記憶 project_drawpose_jitter_fix 十四~二十四輪）：輸入
   裝置所有權歸玩家（系統只動回饋面）、掃射式狀態設定對晚誕生元件必出 bug
   （OwnerNoSee 二鎖實錘）、皮膚上的暗線必被讀成身體特徵、掃描網格繞向/法線
