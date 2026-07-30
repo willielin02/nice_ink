@@ -1456,11 +1456,13 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		bDrawGazeInit = false;
 		bDrawCamInit = false; // 硬切事件＝相機重新對準（入鎖/錨點重瞄/robo 角度命令/切工具）
 		FVector Hit;
-		bDrawCursorValid = TraceAimToTarget(
-			FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), Hit);
+		FVector Nrm;
+		bDrawCursorValid = TraceAimToTargetWithNormal(
+			FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), Hit, Nrm);
 		if (bDrawCursorValid)
 		{
 			DrawCursorW = Hit;
+			DrawCursorNrm = Nrm;
 		}
 	}
 
@@ -1476,7 +1478,20 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		const FVector StepW = (VM.GetUnitAxis(EAxis::Y) * MouseX +
 			VM.GetUnitAxis(EAxis::Z) * MouseY) * CmPerUnit;
 		const float StepCm = StepW.Size();
-		const FVector Cand = DrawCursorW + StepW;
+		// 切面步進（07-31 四版）：視平面步直接位移＋「命中位移≤2.5×步長」摺縫判定
+		// ＝結構性誤殺——斜面上合法位移=步長÷cos(入射角)，>66° 就超帶被整步拒收
+		//（user 抓「滑鼠往右筆不動」的方向性卡死＝陡坡方向恆拒、等高線方向能走）。
+		// 正解=滑鼠步先投影到游標處皮膚切平面、以指令長度沿面走、再射線收回皮膚
+		// ——期望位移≈步長本身（只剩曲率小差），摺縫鉗只抓真摺縫；「滑鼠一格=
+		// 皮膚固定公分」的承諾同時更嚴格成立。切面投影對法線符號免疫（掃描網格
+		// 繞向不可信鐵則不破）。
+		FVector StepTan = StepW - DrawCursorNrm *
+			FVector::DotProduct(StepW, DrawCursorNrm);
+		if (StepTan.SizeSquared() < 1e-6f)
+		{
+			StepTan = StepW; // 退化（步向∥法線）：罕見，退回視平面步
+		}
+		const FVector Cand = DrawCursorW + StepTan.GetSafeNormal() * StepCm;
 		// 全域 tilt 域＝預鉗進候選射線（沿邊界滑動）：低位鎖游標常坐在 80° 邊界上，
 		//「出域=整步拒收」曾把橫向移動整個殺死（robo mid 鎖 0.00cm 實錘）——舊角度制
 		// 在邊界只鉗 tilt、az 照走，這裡同義；aim=游標恆等式保持（命中點就在鉗後射線上）
@@ -1484,12 +1499,16 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		const float CandTilt = FMath::Clamp(-static_cast<float>(CandR.Pitch),
 			DrawTiltMinDeg, DrawTiltMaxDeg);
 		FVector Hit;
-		if (TraceAimToTarget(FRotator(-CandTilt, static_cast<float>(CandR.Yaw), 0.0f).Vector(), Hit))
+		FVector Nrm;
+		if (TraceAimToTargetWithNormal(
+				FRotator(-CandTilt, static_cast<float>(CandR.Yaw), 0.0f).Vector(), Hit, Nrm))
 		{
-			// 摺縫跳點鉗（重投影跨皺摺=游標瞬跳幾 cm→釘縫邊；07-28 十二輪教訓的游標版）
+			// 摺縫跳點鉗（重投影跨皺摺=游標瞬跳幾 cm→釘縫邊；07-28 十二輪教訓的游標版。
+			// 切面步進後期望位移≈StepCm＝2.5× 帶只剩真摺縫會撞）
 			if (FVector::Dist(Hit, DrawCursorW) <= StepCm * 2.5f + DrawCursorJumpClampCm)
 			{
 				DrawCursorW = Hit;
+				DrawCursorNrm = Nrm;
 			}
 		}
 		else
@@ -1514,9 +1533,12 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * SensDeg,
 			DrawTiltMinDeg, DrawTiltMaxDeg);
 		FVector Hit;
-		if (TraceAimToTarget(FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), Hit))
+		FVector Nrm;
+		if (TraceAimToTargetWithNormal(
+				FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), Hit, Nrm))
 		{
 			DrawCursorW = Hit;
+			DrawCursorNrm = Nrm;
 			bDrawCursorValid = true;
 		}
 	}
@@ -2110,6 +2132,13 @@ FVector ANiceInkCharacter::GetAimRayOrigin() const
 
 bool ANiceInkCharacter::TraceAimToTarget(const FVector& DirWorld, FVector& OutImpact) const
 {
+	FVector Unused;
+	return TraceAimToTargetWithNormal(DirWorld, OutImpact, Unused);
+}
+
+bool ANiceInkCharacter::TraceAimToTargetWithNormal(const FVector& DirWorld, FVector& OutImpact,
+	FVector& OutNormal) const
+{
 	// 中心射線→受害者皮膚命中點。其他角色一律被射線無視（ghost＝別人的頭脖永遠
 	// 擋不住你的筆）。射程只是找 P 的幾何上限——「搆不搆得到」由姿勢解算裁決
 	//（舊 PaintReach=140 讓「站高俯瞰低點」入座首幀差 2cm 打不到＝低位永遠無 P，
@@ -2137,6 +2166,7 @@ bool ANiceInkCharacter::TraceAimToTarget(const FVector& DirWorld, FVector& OutIm
 		return false;
 	}
 	OutImpact = Hit.ImpactPoint;
+	OutNormal = Hit.ImpactNormal;
 	return true;
 }
 

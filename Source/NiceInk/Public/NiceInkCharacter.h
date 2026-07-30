@@ -952,6 +952,7 @@ private:
 
 	// --- 稿筆游標制內部（07-31；只在 Stencil 工具時活躍）---
 	FVector DrawCursorW = FVector::ZeroVector; // 皮膚游標（世界點；owner 本地狀態）
+	FVector DrawCursorNrm = FVector::UpVector; // 游標處面法線（切面步進用；符號無所謂）
 	bool bDrawCursorValid = false;             // false=角度制退路（出剪影/未命中）
 	bool bDrawCursorRelatch = false;           // 角度是權威的時刻（入鎖/錨點重瞄/robo
 	                                           // 角度命令/切工具）＝游標從 aim 命中點
@@ -1034,6 +1035,8 @@ private:
 	bool ResolveAimToTargetUV(const FVector& DirWorld, FVector2D& OutUV,
 		const FVector2D* PrevUV = nullptr) const;
 	bool TraceAimToTarget(const FVector& DirWorld, FVector& OutImpact) const; // 共用射線段
+	bool TraceAimToTargetWithNormal(const FVector& DirWorld, FVector& OutImpact,
+		FVector& OutNormal) const; // ＋面法線（游標切面步進用；切面投影對繞向符號免疫）
 	FVector GetAimRayOrigin() const; // 眉心（骨骼現值；相機/骨缺席有退路）
 	FVector2D LastPaintUV = FVector2D::ZeroVector; // 縫區連續性偏好的錨（bHasLastPaintTip 同步）
 
