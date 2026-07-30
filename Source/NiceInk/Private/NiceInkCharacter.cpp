@@ -1448,9 +1448,14 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 	// SensDeg 內）。皮膚點 P/筆/墨＝每 tick 從「射線打到哪」讀出來的導出量；
 	// 打不到/出橢圓＝收筆與 ✕（純回饋面）＝十六輪鐵則「輸入所有權歸玩家、
 	// 系統只動回饋面」的字面義。
+	const float PrevAimAz = DrawAimAzLocal;
+	const float PrevAimTilt = DrawAimTiltLocal;
 	DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * SensDeg);
 	DrawAimTiltLocal = FMath::Clamp(DrawAimTiltLocal - MouseY * SensDeg,
 		DrawTiltMinDeg, DrawTiltMaxDeg);
+	// 本 tick 的實際 aim 位移（tilt 取鉗後實走量——域邊界上推不動就不算外推）
+	const float TickAz = FMath::FindDeltaAngleDegrees(PrevAimAz, DrawAimAzLocal);
+	const float TickTilt = DrawAimTiltLocal - PrevAimTilt;
 
 	// 硬切事件（入鎖播種/錨點重瞄/robo 角度命令/切工具）＝gaze 與凍結相機重新對準
 	if (bDrawCursorRelatch)
@@ -1477,42 +1482,36 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		DrawGazeTilt += (DrawAimTiltLocal - DrawGazeTilt) * A;
 	}
 
-	// 稿筆相機（07-31 二版 user 逐字定案「除非玩家刻意往畫面外很遠的地方拉很長
-	// 一個距離，否則相機靜止」）：恆凍結——初版 gaze 慢追＝畫每一筆背景都在飄
-	//（非定常參考系復辟、user 抓「不是固定也不是自由、難控制」）。游標方向超出
-	// 畫面邊界 StencilCamRecenterRatio 倍（1.5=邊界外再半個畫面）＝刻意長拉
-	// →置中（只在刻意動作時發生=可預期的二態，無中間態）。
-	// 三版（user 定案「不要瞬間移動、像原來一樣慢慢移動」）：置中=τ 平滑滑過去
-	//（DrawGazeTauS 同一速度感）、追到正中（<0.5°）＝再度凍結——移動只發生在
-	// 觸發後的收斂段，畫畫時參考系仍然真靜止
+	// 稿筆相機（07-31 六版 user 定案＝邊緣推擠制）：恆凍結；只有「筆貼在畫面
+	// 最邊緣（StencilCamEdgeFrac）＋本 tick 還在往外推＋左鍵沒按住」時，視野才
+	// 吃掉這一 tick 的外推量（速度=推的速度、每 tick 上限=溢出量——不是碰邊就把
+	// 既有溢出一次吃掉）。手停/筆回畫面內/畫畫中（LMB 按住）＝視野完全靜止。
+	//（二三版「遠拉觸發→置中追趕」退役：停手後還會自己滑=user 打回）
 	if (!bDrawCamInit)
 	{
 		DrawCamAz = DrawAimAzLocal;
 		DrawCamTilt = DrawAimTiltLocal;
 		bDrawCamInit = true;
-		bDrawCamChasing = false;
 	}
-	else
+	else if (!bPenTriggerLocal)
 	{
 		const float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
 		const float HalfV = FMath::RadiansToDegrees(FMath::Atan(
 			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f)));
+		const float EdgeH = HalfH * StencilCamEdgeFrac;
+		const float EdgeV = HalfV * StencilCamEdgeFrac;
 		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzLocal);
 		const float DTl = DrawAimTiltLocal - DrawCamTilt;
-		if (FMath::Max(FMath::Abs(DAz) / HalfH, FMath::Abs(DTl) / HalfV) > StencilCamRecenterRatio)
+		// 各軸獨立：貼邊（|偏移|>邊緣帶）且本 tick 同向外推 → 讓位 min(推量, 溢出)
+		if (FMath::Abs(DAz) > EdgeH && TickAz * DAz > 0.0f)
 		{
-			bDrawCamChasing = true;
+			const float Give = FMath::Min(FMath::Abs(TickAz), FMath::Abs(DAz) - EdgeH);
+			DrawCamAz = FMath::UnwindDegrees(DrawCamAz + FMath::Sign(DAz) * Give);
 		}
-		if (bDrawCamChasing)
+		if (FMath::Abs(DTl) > EdgeV && TickTilt * DTl > 0.0f)
 		{
-			const float A = (DrawGazeTauS <= 0.001f) ? 1.0f
-				: 1.0f - FMath::Exp(-DeltaSeconds / DrawGazeTauS);
-			DrawCamAz = FMath::UnwindDegrees(DrawCamAz + DAz * A);
-			DrawCamTilt += DTl * A;
-			if (FMath::Abs(DAz) < 0.5f && FMath::Abs(DTl) < 0.5f)
-			{
-				bDrawCamChasing = false; // 追上正中＝再度凍結
-			}
+			const float Give = FMath::Min(FMath::Abs(TickTilt), FMath::Abs(DTl) - EdgeV);
+			DrawCamTilt += FMath::Sign(DTl) * Give;
 		}
 	}
 }

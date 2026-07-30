@@ -224,22 +224,23 @@ public:
 	// 滑鼠→aim 純積分（零投影/吸附/否決；凍結相機下角度≡螢幕位置=小畫家的
 	// 螢幕恆定增益）；皮膚點 P/筆/墨=每 tick 讀出來的導出量、打不到=收筆（純回饋）。
 	// 注視(gaze)=aim 的惰性追隨只餵臉（他端經 DrawAimAzDeg 複製通道收到的就是 gaze）；
-	// 相機=凍結＋遠拉平滑置中（見 StencilCamRecenterRatio）。
+	// 相機=凍結＋邊緣推擠（見 StencilCamEdgeFrac）。
 	// HUD 出剪影退路的筆錨定深度（cm）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "20", ClampMax = "150"))
 	float DrawCursorRefDistCm = 60.0f;
 
 	// 注視追隨時間常數（秒）：臉落後游標的惰性（第三人稱「臉追著筆走」讀感）——
-	// 0=硬跟、大=懶。（相機自 07-31 二版起不吃 gaze——見 RecenterRatio）
+	// 0=硬跟、大=懶。（相機自 07-31 二版起不吃 gaze——見 StencilCamEdgeFrac）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "1.5"))
 	float DrawGazeTauS = 0.22f;
 
-	// 稿筆相機重置門檻（畫面半寬倍數）：user 定案「除非玩家刻意往畫面外很遠的地方
-	// 拉很長一個距離，否則相機靜止」——相機恆凍結，游標方向超出畫面邊界此倍數
-	// （1.0=剛好在邊界、1.5=邊界外再半個畫面）才觸發置中；置中=τ 平滑滑移
-	//（三版 user 定案「像原來一樣慢慢移動」）、追到正中再度凍結
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "1.0", ClampMax = "4.0"))
-	float StencilCamRecenterRatio = 1.5f;
+	// 稿筆相機邊緣帶（畫面半寬比例）：六版 user 定案「只有把筆移到最邊緣還持續
+	// 往外移動才改變視野方向；不是碰到邊緣就給大位移，而是碰到邊緣後還持續位移
+	// 多少才給多少位移；左鍵按下後無論滑鼠怎麼動視野都不位移」＝邊緣推擠制：
+	// 筆過此線且本 tick 還在外推＝視野只吃「這一 tick 的外推量」（速度=推的速度、
+	// 上限=溢出量）；手停/筆回畫面內/左鍵按住＝視野完全靜止。0.92=貼近畫面邊緣
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "1.0"))
+	float StencilCamEdgeFrac = 0.92f;
 
 	// 導引預測路徑前瞻距離（cm，皮膚弧長）——業界式導引（07-22 二改；五修 user
 	//「還是太短」8→16 ≈ 7s 路程）：與速度同域，調速時導引自動等比
@@ -953,12 +954,9 @@ private:
 	float DrawGazeAz = 0.0f;                   // 注視（臉的來源；τ 指數追游標）
 	float DrawGazeTilt = 45.0f;
 	bool bDrawGazeInit = false;
-	float DrawCamAz = 0.0f;                    // 稿筆凍結相機（07-31 二版 user 定案：
-	float DrawCamTilt = 45.0f;                 // 恆靜止、只有游標拉出畫面外很遠才
-	bool bDrawCamInit = false;                 // 置中）
-	bool bDrawCamChasing = false;              // 置中進行中（三版 user 定案「像原來
-	                                           // 一樣慢慢移動」：τ 平滑追到正中→
-	                                           // 再度凍結；非瞬移）
+	float DrawCamAz = 0.0f;                    // 稿筆凍結相機（六版=邊緣推擠制：
+	float DrawCamTilt = 45.0f;                 // 恆靜止、只吃「貼邊後本 tick 的
+	bool bDrawCamInit = false;                 // 外推量」；見 StencilCamEdgeFrac）
 	void UpdateStencilCursor(float MouseX, float MouseY, float SensDeg, float DeltaSeconds);
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---
