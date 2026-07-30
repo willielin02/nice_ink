@@ -961,7 +961,10 @@ private:
 	bool bDrawGazeInit = false;
 	float DrawCamAz = 0.0f;                    // 稿筆凍結相機（07-31 二版 user 定案：
 	float DrawCamTilt = 45.0f;                 // 恆靜止、只有游標拉出畫面外很遠才
-	bool bDrawCamInit = false;                 // 硬切置中）
+	bool bDrawCamInit = false;                 // 置中）
+	bool bDrawCamChasing = false;              // 置中進行中（三版 user 定案「像原來
+	                                           // 一樣慢慢移動」：τ 平滑追到正中→
+	                                           // 再度凍結；非瞬移）
 	void UpdateStencilCursor(float MouseX, float MouseY, float SensDeg, float DeltaSeconds);
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---

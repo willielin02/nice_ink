@@ -1542,24 +1542,38 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 	// 一個距離，否則相機靜止」）：恆凍結——初版 gaze 慢追＝畫每一筆背景都在飄
 	//（非定常參考系復辟、user 抓「不是固定也不是自由、難控制」）。游標方向超出
 	// 畫面邊界 StencilCamRecenterRatio 倍（1.5=邊界外再半個畫面）＝刻意長拉
-	// →硬切置中（#24；只在刻意動作時發生=可預期的二態，無中間態）
+	// →置中（只在刻意動作時發生=可預期的二態，無中間態）。
+	// 三版（user 定案「不要瞬間移動、像原來一樣慢慢移動」）：置中=τ 平滑滑過去
+	//（DrawGazeTauS 同一速度感）、追到正中（<0.5°）＝再度凍結——移動只發生在
+	// 觸發後的收斂段，畫畫時參考系仍然真靜止
 	if (!bDrawCamInit)
 	{
 		DrawCamAz = DrawAimAzLocal;
 		DrawCamTilt = DrawAimTiltLocal;
 		bDrawCamInit = true;
+		bDrawCamChasing = false;
 	}
 	else
 	{
 		const float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
 		const float HalfV = FMath::RadiansToDegrees(FMath::Atan(
 			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f)));
-		const float RH = FMath::Abs(FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzLocal)) / HalfH;
-		const float RV = FMath::Abs(DrawAimTiltLocal - DrawCamTilt) / HalfV;
-		if (FMath::Max(RH, RV) > StencilCamRecenterRatio)
+		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzLocal);
+		const float DTl = DrawAimTiltLocal - DrawCamTilt;
+		if (FMath::Max(FMath::Abs(DAz) / HalfH, FMath::Abs(DTl) / HalfV) > StencilCamRecenterRatio)
 		{
-			DrawCamAz = DrawAimAzLocal;
-			DrawCamTilt = DrawAimTiltLocal;
+			bDrawCamChasing = true;
+		}
+		if (bDrawCamChasing)
+		{
+			const float A = (DrawGazeTauS <= 0.001f) ? 1.0f
+				: 1.0f - FMath::Exp(-DeltaSeconds / DrawGazeTauS);
+			DrawCamAz = FMath::UnwindDegrees(DrawCamAz + DAz * A);
+			DrawCamTilt += DTl * A;
+			if (FMath::Abs(DAz) < 0.5f && FMath::Abs(DTl) < 0.5f)
+			{
+				bDrawCamChasing = false; // 追上正中＝再度凍結
+			}
 		}
 	}
 }
