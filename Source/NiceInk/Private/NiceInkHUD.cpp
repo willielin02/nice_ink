@@ -960,7 +960,26 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			// 恆=針尖=墨的出生點——2D 筆/落點/針線錨死中心即與墨重合，viewmodel
 			// 恆定（07-22 定案）不破。（一修曾把筆錨到針的投影＝筆離開中心，被
 			// user 打回「筆要維持在螢幕中間」——正解是畫面歸針，不是筆追針。）
-			const FVector2D Aim(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
+			// 三工具制（07-25 打稿制）：打稿筆=龍膽紫小方點＋2D 麥克筆 viewmodel；
+			// 液線針=選色小方點；霧針=筆刷範圍圈（自由揮掃要知道落在哪圈）
+			const bool bShaderNeedle = MyChar->SelectedNeedle == EInkNeedle::Shader;
+			const bool bStencilPen = MyChar->SelectedNeedle == EInkNeedle::Stencil;
+			// 錨點：機器工具=螢幕中心（畫面歸針＝中心構造上恆=針尖）；稿筆游標制
+			//（07-31）=游標的螢幕投影（相機=惰性 gaze、游標在畫面上自由移動——
+			// 小畫家式；投影必用 Canvas->Project＝HUD 投影鐵律）
+			FVector2D Aim(Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f);
+			if (bStencilPen)
+			{
+				FVector CursorW;
+				if (MyChar->GetStencilCursorHudWorld(CursorW))
+				{
+					const FVector Pr = Project(CursorW);
+					if (Pr.Z > 0.0f)
+					{
+						Aim = FVector2D(Pr.X, Pr.Y);
+					}
+				}
+			}
 			// 落墨小點/✕ 讀的是墨閘同一個裁決（07-29 單一裁判）——皮膚紗在稜線
 			// 掠射角會被透視壓成看不見的細縫（腳掌實錘），筆尖級提示任何角度都準
 			const bool bReach = MyChar->IsCursorDrawable();
@@ -972,10 +991,6 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 				DrawLine(Aim.X - A, Aim.Y - A, Aim.X + A, Aim.Y + A, XCol, 2.5f * UiScale);
 				DrawLine(Aim.X - A, Aim.Y + A, Aim.X + A, Aim.Y - A, XCol, 2.5f * UiScale);
 			}
-			// 三工具制（07-25 打稿制）：打稿筆=龍膽紫小方點（3D 麥克筆本人可見、無 2D
-			// viewmodel）；液線針=選色小方點；霧針=筆刷範圍圈（自由揮掃要知道落在哪圈）
-			const bool bShaderNeedle = MyChar->SelectedNeedle == EInkNeedle::Shader;
-			const bool bStencilPen = MyChar->SelectedNeedle == EInkNeedle::Stencil;
 			if (bReach && !bShaderNeedle)
 			{
 				const float B = UiScale;

@@ -219,6 +219,24 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.3", ClampMax = "5"))
 	float TattooStencilSnapCm = 1.5f;
 
+	// --- 稿筆游標制（07-31 user 定案：手=游標、臉/相機=惰性注視）---
+	// 游標=皮膚上的世界點（狀態）；滑鼠以恆定公分增益直推（cm/格=角靈敏度×基準
+	// 眼距——增益不再隨眼距/掠射角漂移=小畫家手感的來源）；aim 每 tick 由
+	//「射線原點→游標」反算 ⇒ P/解算/墨/筆全下游鏈零改動。注視(gaze)=aim 的惰性
+	// 追隨，只餵相機與臉（他端經 DrawAimAzDeg 複製通道收到的就是 gaze）。
+	// 恆定增益基準眼距（cm）：60cm 處手感與舊角度制一致
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "20", ClampMax = "150"))
+	float DrawCursorRefDistCm = 60.0f;
+
+	// 注視追隨時間常數（秒）：臉/相機落後游標的惰性——0=硬跟（舊讀感）、大=懶
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "1.5"))
+	float DrawGazeTauS = 0.22f;
+
+	// 摺縫跳點鉗（cm）：一步游標允許位移 = 命令步長×2.5 + 此值；重投影跨皺摺的
+	// 瞬跳被鉗＝游標釘縫邊（07-28 十二輪教訓的游標版）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "5"))
+	float DrawCursorJumpClampCm = 0.75f;
+
 	// 導引預測路徑前瞻距離（cm，皮膚弧長）——業界式導引（07-22 二改；五修 user
 	//「還是太短」8→16 ≈ 7s 路程）：與速度同域，調速時導引自動等比
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "2", ClampMax = "40"))
@@ -725,6 +743,15 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboPaintHold(bool bHold);
 
+	// robo：合成滑鼠增量（稿筆游標制的真人管線探針——角度命令會 relatch 游標＝
+	// 測不到增益/漂移；此鉤子走與真滑鼠同一條 UpdateStencilCursor）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboMouse(float DX, float DY);
+
+	// HUD：稿筆游標的世界錨（P=墨的落點＝單一真相；P 無效=沿 aim 射線基準距離）。
+	// 只在本人稿筆鎖定中回 true——HUD 以 Canvas->Project 投影為 2D 筆/小點/✕ 錨
+	bool GetStencilCursorHudWorld(FVector& Out) const;
+
 	// robo：模擬方向拉桿（巡航中每 tick 重申覆寫、免疫滑鼠歸零；(0,0)=解除。
 	// 必須在 PaintHold(true) 之後呼叫——非巡航 tick 會把拉桿歸零）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
@@ -910,6 +937,21 @@ private:
 	bool bHasPendingDebugDrawAim = false;   // DebugRoboDrawAim 待消化（本地 tick）
 	FVector2D PendingDebugDrawAim = FVector2D::ZeroVector;
 	bool bDebugPaintHeld = false;           // robo「模擬按住左鍵」輸入源
+	bool bHasPendingDebugMouse = false;     // DebugRoboMouse 待消化（合成滑鼠增量、
+	FVector2D PendingDebugMouse = FVector2D::ZeroVector; // 走真人游標管線；robo 橋接
+	                                                     // 鐵則：角度命令歸角度制、
+	                                                     // 游標制只屬於增量輸入）
+
+	// --- 稿筆游標制內部（07-31；只在 Stencil 工具時活躍）---
+	FVector DrawCursorW = FVector::ZeroVector; // 皮膚游標（世界點；owner 本地狀態）
+	bool bDrawCursorValid = false;             // false=角度制退路（出剪影/未命中）
+	bool bDrawCursorRelatch = false;           // 角度是權威的時刻（入鎖/錨點重瞄/robo
+	                                           // 角度命令/切工具）＝游標從 aim 命中點
+	                                           // 再生＋gaze 硬切
+	float DrawGazeAz = 0.0f;                   // 注視（相機/臉的來源；τ 指數追游標）
+	float DrawGazeTilt = 45.0f;
+	bool bDrawGazeInit = false;
+	void UpdateStencilCursor(float MouseX, float MouseY, float SensDeg, float DeltaSeconds);
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---
 	float TattooNeedleAz = 0.0f;       // 針 aim（皮繩追趕者；LMB 按住期間＝姿勢/筆/墨
