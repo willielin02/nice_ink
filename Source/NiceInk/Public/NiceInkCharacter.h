@@ -228,9 +228,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "20", ClampMax = "150"))
 	float DrawCursorRefDistCm = 60.0f;
 
-	// 注視追隨時間常數（秒）：臉/相機落後游標的惰性——0=硬跟（舊讀感）、大=懶
+	// 注視追隨時間常數（秒）：臉落後游標的惰性（第三人稱「臉追著筆走」讀感）——
+	// 0=硬跟、大=懶。（相機自 07-31 二版起不吃 gaze——見 RecenterRatio）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "1.5"))
 	float DrawGazeTauS = 0.22f;
+
+	// 稿筆相機重置門檻（畫面半寬倍數）：user 定案「除非玩家刻意往畫面外很遠的地方
+	// 拉很長一個距離，否則相機靜止」——相機恆凍結，游標方向超出畫面邊界此倍數
+	// （1.0=剛好在邊界、1.5=邊界外再半個畫面）才硬切重新置中（硬切=美術語言 #24、
+	// 只在刻意長拉時發生=可預期）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "1.0", ClampMax = "4.0"))
+	float StencilCamRecenterRatio = 1.5f;
 
 	// 摺縫跳點鉗（cm）：一步游標允許位移 = 命令步長×2.5 + 此值；重投影跨皺摺的
 	// 瞬跳被鉗＝游標釘縫邊（07-28 十二輪教訓的游標版）
@@ -948,9 +956,12 @@ private:
 	bool bDrawCursorRelatch = false;           // 角度是權威的時刻（入鎖/錨點重瞄/robo
 	                                           // 角度命令/切工具）＝游標從 aim 命中點
 	                                           // 再生＋gaze 硬切
-	float DrawGazeAz = 0.0f;                   // 注視（相機/臉的來源；τ 指數追游標）
+	float DrawGazeAz = 0.0f;                   // 注視（臉的來源；τ 指數追游標）
 	float DrawGazeTilt = 45.0f;
 	bool bDrawGazeInit = false;
+	float DrawCamAz = 0.0f;                    // 稿筆凍結相機（07-31 二版 user 定案：
+	float DrawCamTilt = 45.0f;                 // 恆靜止、只有游標拉出畫面外很遠才
+	bool bDrawCamInit = false;                 // 硬切置中）
 	void UpdateStencilCursor(float MouseX, float MouseY, float SensDeg, float DeltaSeconds);
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---

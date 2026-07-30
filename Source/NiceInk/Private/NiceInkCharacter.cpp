@@ -1344,7 +1344,8 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	else
 	{
 		bDrawCursorValid = false; // 機器工具＝角度制原樣（畫面歸針；速度屬於機器）
-		bDrawGazeInit = false;    // 切回稿筆時 gaze 重新 snap
+		bDrawGazeInit = false;    // 切回稿筆時 gaze/凍結相機重新 snap
+		bDrawCamInit = false;
 		DrawAimAzLocal = FMath::UnwindDegrees(DrawAimAzLocal + MouseX * Sens);
 		// （07-28 顯示制：游標只受全域 tilt 域鉗——可達域邊界不鉗游標、只做 HUD 標記
 		// 與收筆；「永遠不要去干擾玩家畫筆的移動」＝user 逐字定案）
@@ -1453,6 +1454,7 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 	{
 		bDrawCursorRelatch = false;
 		bDrawGazeInit = false;
+		bDrawCamInit = false; // 硬切事件＝相機重新對準（入鎖/錨點重瞄/robo 角度命令/切工具）
 		FVector Hit;
 		bDrawCursorValid = TraceAimToTarget(
 			FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector(), Hit);
@@ -1464,11 +1466,12 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 
 	if (bDrawCursorValid && (MouseX != 0.0f || MouseY != 0.0f))
 	{
-		// 螢幕平面位移（軸=gaze 視圖的 right/up＝所見即所推）；增益=恆定公分
+		// 螢幕平面位移（軸=凍結相機的 right/up＝所見即所推：滑鼠右=畫面右）；
+		// 增益=恆定公分
 		const float CmPerUnit = FMath::DegreesToRadians(SensDeg) *
 			FMath::Max(DrawCursorRefDistCm, 1.0f);
-		const FRotator ViewRot(-(bDrawGazeInit ? DrawGazeTilt : DrawAimTiltLocal),
-			bDrawGazeInit ? DrawGazeAz : DrawAimAzLocal, 0.0f);
+		const FRotator ViewRot(-(bDrawCamInit ? DrawCamTilt : DrawAimTiltLocal),
+			bDrawCamInit ? DrawCamAz : DrawAimAzLocal, 0.0f);
 		const FRotationMatrix VM(ViewRot);
 		const FVector StepW = (VM.GetUnitAxis(EAxis::Y) * MouseX +
 			VM.GetUnitAxis(EAxis::Z) * MouseY) * CmPerUnit;
@@ -1518,8 +1521,8 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		}
 	}
 
-	// 注視（gaze）＝aim 的惰性追隨——只餵相機與臉（本人）與複製通道（他端臉）；
-	// τ→0=硬跟（旋鈕歸零可回舊讀感）
+	// 注視（gaze）＝aim 的惰性追隨——只餵臉（本人姿勢與他端複製通道＝
+	// 第三人稱「臉追著筆走」讀感）；τ→0=硬跟
 	if (!bDrawGazeInit)
 	{
 		DrawGazeAz = DrawAimAzLocal;
@@ -1533,6 +1536,31 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		DrawGazeAz = FMath::UnwindDegrees(DrawGazeAz +
 			FMath::FindDeltaAngleDegrees(DrawGazeAz, DrawAimAzLocal) * A);
 		DrawGazeTilt += (DrawAimTiltLocal - DrawGazeTilt) * A;
+	}
+
+	// 稿筆相機（07-31 二版 user 逐字定案「除非玩家刻意往畫面外很遠的地方拉很長
+	// 一個距離，否則相機靜止」）：恆凍結——初版 gaze 慢追＝畫每一筆背景都在飄
+	//（非定常參考系復辟、user 抓「不是固定也不是自由、難控制」）。游標方向超出
+	// 畫面邊界 StencilCamRecenterRatio 倍（1.5=邊界外再半個畫面）＝刻意長拉
+	// →硬切置中（#24；只在刻意動作時發生=可預期的二態，無中間態）
+	if (!bDrawCamInit)
+	{
+		DrawCamAz = DrawAimAzLocal;
+		DrawCamTilt = DrawAimTiltLocal;
+		bDrawCamInit = true;
+	}
+	else
+	{
+		const float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
+		const float HalfV = FMath::RadiansToDegrees(FMath::Atan(
+			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f)));
+		const float RH = FMath::Abs(FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzLocal)) / HalfH;
+		const float RV = FMath::Abs(DrawAimTiltLocal - DrawCamTilt) / HalfV;
+		if (FMath::Max(RH, RV) > StencilCamRecenterRatio)
+		{
+			DrawCamAz = DrawAimAzLocal;
+			DrawCamTilt = DrawAimTiltLocal;
+		}
 	}
 }
 
@@ -5177,14 +5205,15 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 	// 自由 aim 時相機用「生」手 aim（零延遲）；**皮繩追趕中相機=針 aim**（07-24
 	// 二修：畫面屬於針——螢幕中心恆=針尖=墨、2D 筆恆中心、手抖不進畫面；慢畫=
 	// 針貼手=畫面跟手、快甩=限速慢移=機器的重量）。進出追趕針手重合=相機零跳。
-	// 稿筆游標制（07-31）：相機朝向=注視（gaze、惰性追游標）——畫布在螢幕上
-	// 近似不動＝自由手繪的參考系；位置照舊=凍結眼錨（位置早就與臉脫鉤，這裡
-	// 只是把方向也交給 gaze）。機器工具照舊「畫面歸針」。
-	const bool bStencilGazeCam = SelectedNeedle == EInkNeedle::Stencil && bDrawGazeInit;
+	// 稿筆游標制（07-31 二版 user 定案）：相機朝向=凍結狀態（DrawCam*）——恆靜止的
+	// 紙＝自由手繪的參考系；只有游標被刻意拉出畫面外很遠才硬切置中（見
+	// UpdateStencilCursor 的 RecenterRatio 段）。位置照舊=凍結眼錨。
+	// 機器工具照舊「畫面歸針」。
+	const bool bStencilFrozenCam = SelectedNeedle == EInkNeedle::Stencil && bDrawCamInit;
 	const float CamAz = bTattooChaseActive ? TattooNeedleAz
-		: (bStencilGazeCam ? DrawGazeAz : DrawAimAzLocal);
+		: (bStencilFrozenCam ? DrawCamAz : DrawAimAzLocal);
 	const float CamTilt = bTattooChaseActive ? TattooNeedleTilt
-		: (bStencilGazeCam ? DrawGazeTilt : DrawAimTiltLocal);
+		: (bStencilFrozenCam ? DrawCamTilt : DrawAimTiltLocal);
 	const FRotator AimRot(-CamTilt, CamAz, 0.0f);
 	FVector EyePos;
 	if (bDrawEyeAnchorValid)
