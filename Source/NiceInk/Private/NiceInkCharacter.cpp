@@ -1514,7 +1514,8 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
 		float HalfV = FMath::RadiansToDegrees(FMath::Atan(
 			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f))); // 無投影退路
-		if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+		APlayerController* PC = Cast<APlayerController>(GetController());
+		if (PC)
 		{
 			if (const ULocalPlayer* LP = PC->GetLocalPlayer())
 			{
@@ -1535,14 +1536,37 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 		const float EdgeV = HalfV * StencilCamEdgeFrac;
 		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzFilt);
 		const float DTl = DrawAimTiltFilt - DrawCamTilt;
-		// 各軸獨立：可見筆貼邊（|偏移|>邊緣帶）且本 tick 手還在同向外推
+		// 三修（08-01 user 再抓「根本還沒碰到邊界就在移動、左右特別嚴重」）：
+		// 貼邊的主詞必須是**螢幕上那支筆**——射線滑出身體剪影時 P 凍結、筆停在
+		// 畫面內，但 aim（看不見）繼續積分過帶＝視野在筆離邊還遠時就動；左右最
+		// 容易滑出剪影＝左右特別嚴重。改＝可見筆尖（MarkerPenSmoothedTip=網格
+		// 實繪位置）投影到本視窗像素、其螢幕偏移超過 EdgeFrac 且在同側才准讓位
+		// ——筆推不到邊（出剪影/搆不到）＝視野永不動（user 契約字面義）。
+		bool bPenEdgeH = false;
+		bool bPenEdgeV = false;
+		if (PC && bMarkerPenSmoothValid)
+		{
+			FVector2D PenPx;
+			int32 SX = 0, SY = 0;
+			PC->GetViewportSize(SX, SY);
+			if (SX > 0 && SY > 0 &&
+				PC->ProjectWorldLocationToScreen(MarkerPenSmoothedTip, PenPx, true))
+			{
+				const float FxR = (static_cast<float>(PenPx.X) - SX * 0.5f) / (SX * 0.5f); // +右
+				const float FyD = (static_cast<float>(PenPx.Y) - SY * 0.5f) / (SY * 0.5f); // +下
+				bPenEdgeH = FMath::Abs(FxR) > StencilCamEdgeFrac && (FxR > 0.0f) == (DAz > 0.0f);
+				// 螢幕 +下 = tilt +（AimRot pitch=-tilt：tilt 大=低頭=畫面下方）
+				bPenEdgeV = FMath::Abs(FyD) > StencilCamEdgeFrac && (FyD > 0.0f) == (DTl > 0.0f);
+			}
+		}
+		// 各軸獨立：可見筆貼邊＋濾波 aim 過帶＋本 tick 手還在同向外推
 		// → 讓位 min(推量, 溢出)
-		if (FMath::Abs(DAz) > EdgeH && TickAz * DAz > 0.0f)
+		if (bPenEdgeH && FMath::Abs(DAz) > EdgeH && TickAz * DAz > 0.0f)
 		{
 			const float Give = FMath::Min(FMath::Abs(TickAz), FMath::Abs(DAz) - EdgeH);
 			DrawCamAz = FMath::UnwindDegrees(DrawCamAz + FMath::Sign(DAz) * Give);
 		}
-		if (FMath::Abs(DTl) > EdgeV && TickTilt * DTl > 0.0f)
+		if (bPenEdgeV && FMath::Abs(DTl) > EdgeV && TickTilt * DTl > 0.0f)
 		{
 			const float Give = FMath::Min(FMath::Abs(TickTilt), FMath::Abs(DTl) - EdgeV);
 			DrawCamTilt += FMath::Sign(DTl) * Give;
