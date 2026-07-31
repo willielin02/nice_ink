@@ -11,8 +11,8 @@
 #   c6 relatch  DebugRoboDrawAim 角度命令 → rawAz 逐字生效＋gaze 硬切＝robo 相容
 #   c7 tap      單擊（LMB 按住、滑鼠零移動）→ 恰好落 1~4 針（首針即點；上限=
 #               靜止不灌墨——移動閘拆除後的守恆契約）
-#   c8 slow     慢速域（0.1 單位/tick×StencilCursorGain 0.4 ≈ 1.3°/s＝舊閘 3°/s
-#               門檻之下）按住 LMB 慢掃 → 全程有墨（gain≥5；舊閘下=0＝回歸鎖）
+#   c8 slow     慢速域（0.05 單位/tick ≈ 1.6°/s＝舊閘 3°/s 門檻之下）按住 LMB
+#               慢掃 → 全程有墨（gain≥5；舊閘下=0＝慢畫整段無墨的回歸鎖）
 # 產出：Saved/robo_stencilcursor_result.txt
 import math
 import re
@@ -252,8 +252,8 @@ class Probe:
             self.host().call_method("DebugRoboPaintHold", (True,))
             self.advance("slowpaint")
         elif s == "slowpaint":
-            if self.slow_n < 150:
-                self.host().call_method("DebugRoboMouse", (0.1, 0.0))
+            if self.slow_n < 120:
+                self.host().call_method("DebugRoboMouse", (0.05, 0.0))
                 self.slow_n += 1
                 return
             if self.elapsed() < 1.0:

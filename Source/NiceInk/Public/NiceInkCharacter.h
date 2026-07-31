@@ -234,12 +234,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "1.5"))
 	float DrawGazeTauS = 0.22f;
 
-	// 稿筆游標獨立增益（08-01 user「依然太敏感、一直觸發視野移動」）：疊在開鏡
-	// 定律縮放之上、只吃稿筆。開鏡縮放只把游標壓回「站姿視角的螢幕速度」＝FPS
-	// 瞄準級（實測 ~69 滑鼠單位掃完整個畫面）——畫圖要的是再慢一級的紙上手速；
-	// 游標慢了、撞邊緣推擠帶也從意外變刻意。Liner/Shader（機器工具）不吃。
+	// 稿筆游標增益（口味旋鈕，疊在開鏡縮放上、只吃稿筆）。預設 1.0=不動手感
+	//（08-01 教訓：user「太敏感」指的是邊緣推擠早觸發、不是游標速度——0.4 版
+	// 誤修已還原；速度是 user 的口味域，沒點名就不動）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "1.5"))
-	float StencilCursorGain = 0.4f;
+	float StencilCursorGain = 1.0f;
 
 	// 稿筆相機邊緣帶（畫面半寬比例）：六版 user 定案「只有把筆移到最邊緣還持續
 	// 往外移動才改變視野方向；不是碰到邊緣就給大位移，而是碰到邊緣後還持續位移

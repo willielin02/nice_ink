@@ -6,8 +6,12 @@
 #include "Components/PoseableMeshComponent.h"
 #include "DreamMazeComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
+#include "SceneView.h"
+#include "UnrealClient.h"
 #include "EngineUtils.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -1497,14 +1501,42 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 	}
 	else if (!bPenTriggerLocal)
 	{
-		const float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
-		const float HalfV = FMath::RadiansToDegrees(FMath::Atan(
-			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f)));
+		// 邊緣帶（08-01 二修 user 抓「還沒碰到邊緣就開始移動視野」——兩個真兇
+		// 皆量測定罪，儀器=robo_fovaxis_probe）：
+		// ①視野半角不能用「LeanLockedFov/2＋16:9」假設——引擎實際維持垂直 FOV
+		//  （halfV 恆 10.36°、halfH 隨視窗長寬比走；方窗實測 halfH≈10.3° vs
+		//   假設 18°=邊緣帶落在畫面外/內側看視窗形狀）→ 直接讀投影矩陣的實際
+		//   半角，任何視窗恆準；
+		// ②貼邊判定不能用生 aim——玩家看到的筆/小點=濾波 aim（One Euro 快移
+		//   滯後數度）→ 生 aim 先過帶=視野在「筆看起來還沒到邊」時就動。
+		//   改判濾波 aim（=可見筆的位置）；推量仍取生 aim 本 tick 實走
+		//  （「持續位移多少才給多少」=手的動作）、溢出取濾波域。
+		float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
+		float HalfV = FMath::RadiansToDegrees(FMath::Atan(
+			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f))); // 無投影退路
+		if (const APlayerController* PC = Cast<APlayerController>(GetController()))
+		{
+			if (const ULocalPlayer* LP = PC->GetLocalPlayer())
+			{
+				FSceneViewProjectionData PD;
+				if (LP->ViewportClient &&
+					LP->GetProjectionData(LP->ViewportClient->Viewport, PD))
+				{
+					const FMatrix& M = PD.ProjectionMatrix;
+					if (M.M[0][0] > KINDA_SMALL_NUMBER && M.M[1][1] > KINDA_SMALL_NUMBER)
+					{
+						HalfH = static_cast<float>(FMath::RadiansToDegrees(FMath::Atan(1.0 / M.M[0][0])));
+						HalfV = static_cast<float>(FMath::RadiansToDegrees(FMath::Atan(1.0 / M.M[1][1])));
+					}
+				}
+			}
+		}
 		const float EdgeH = HalfH * StencilCamEdgeFrac;
 		const float EdgeV = HalfV * StencilCamEdgeFrac;
-		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzLocal);
-		const float DTl = DrawAimTiltLocal - DrawCamTilt;
-		// 各軸獨立：貼邊（|偏移|>邊緣帶）且本 tick 同向外推 → 讓位 min(推量, 溢出)
+		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzFilt);
+		const float DTl = DrawAimTiltFilt - DrawCamTilt;
+		// 各軸獨立：可見筆貼邊（|偏移|>邊緣帶）且本 tick 手還在同向外推
+		// → 讓位 min(推量, 溢出)
 		if (FMath::Abs(DAz) > EdgeH && TickAz * DAz > 0.0f)
 		{
 			const float Give = FMath::Min(FMath::Abs(TickAz), FMath::Abs(DAz) - EdgeH);
