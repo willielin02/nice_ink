@@ -297,7 +297,8 @@ public:
 	float ShaderStampSpacingCm = 0.2f;
 
 	// 移動閘門檻（aim 角速 度/秒）：低於此=停針=不出墨。滑鼠靜止時 delta 精確為零
-	//（閘量在 raw aim 上＝解算抖動偽造不了移動）
+	//（閘量在 raw aim 上＝解算抖動偽造不了移動）。只管 Shader——稿筆自 08-01 起
+	// 豁免（慢工細描=打稿操作域，閘=慢畫無墨；稿筆墨=P、無此閘要防的噪聲源）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "30"))
 	float MistMinAimSpeedDegS = 3.0f;
 

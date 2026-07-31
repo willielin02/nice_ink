@@ -2426,7 +2426,20 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		// 流量天花板=出針預算（九版：純防外掛——3000/s 真人構不到）。
 		// 移動閘：LMB 按住「且」aim 在動才出墨——停針=零沉積；
 		// 閘同時擋掉解算噪聲位移的距離灌水（liner 巡航閘的老教訓）。
-		if (MistAimSpeedDegS >= MistMinAimSpeedDegS)
+		// 稿筆豁免移動閘＋首針即點（08-01）：閘要防的噪聲位移在稿筆鏈沒有載體
+		//（墨=P、aim 靜止時 P 走快取＝凍結、原地同 UV 針冪等跳過），而慢工細描
+		// 正是打稿的操作域——3°/s 閘＝慢畫整段無墨（閘關 tick 走過的路徑不記帳
+		// ＝永久丟棄）、點一下＝沒有點、短筆劃 EMA 爬坡期＝斷頭。「拒收式防護在
+		// 連續操作域=移動牆」鐵則的出墨層適用；Shader 閘照舊（打霧操作域在快端）。
+		const bool bStencilPen = SelectedNeedle == EInkNeedle::Stencil;
+		if (bStencilPen && !bStrokeOpen && TattooDotBudget >= 1.0f)
+		{
+			// 首針即點（與 Liner 同構：接觸即墨、沒接觸下一 tick 重試）
+			MistDistAccum = 0.0f;
+			TattooDotBudget -= 1.0f;
+			EmitDotAt(TipNow);
+		}
+		if (bStencilPen || MistAimSpeedDegS >= MistMinAimSpeedDegS)
 		{
 			const float MistSpacing = (SelectedNeedle == EInkNeedle::Stencil)
 				? SpacingCm : FMath::Max(ShaderStampSpacingCm, 0.1f);

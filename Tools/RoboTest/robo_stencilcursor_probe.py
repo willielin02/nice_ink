@@ -9,6 +9,10 @@
 #   c4 gaze     停手後注視收斂到 aim（|gazeAz-rawAz|≤0.6°）
 #   c5 paint    按住 LMB＋畫圈滑鼠 → dotN 增長（墨走游標）
 #   c6 relatch  DebugRoboDrawAim 角度命令 → rawAz 逐字生效＋gaze 硬切＝robo 相容
+#   c7 tap      單擊（LMB 按住、滑鼠零移動）→ 恰好落 1~4 針（首針即點；上限=
+#               靜止不灌墨——移動閘拆除後的守恆契約）
+#   c8 slow     慢速域（0.05 單位/tick ≈ 舊閘 3°/s 門檻之下）按住 LMB 慢掃 →
+#               全程有墨（gain≥5；舊閘下=0＝慢畫整段無墨的回歸鎖）
 # 產出：Saved/robo_stencilcursor_result.txt
 import math
 import re
@@ -225,6 +229,39 @@ class Probe:
             d = self.summary()
             self.host().call_method("DebugRoboPaintHold", (False,))
             check("c5_paint_dots", d.get("dotN", 0) >= 10, f"dotN={d.get('dotN')}")
+            self.advance("tap_arm")
+        elif s == "tap_arm":
+            if self.elapsed() < 0.5:
+                return  # 前一筆確實收筆＋濾波尾巴沉降
+            self.dot_before = self.summary().get("dotN", 0)
+            self.host().call_method("DebugRoboPaintHold", (True,))
+            self.advance("tap")
+        elif s == "tap":
+            if self.elapsed() < 1.5:
+                return  # 按住不動 1.5s：給「靜止灌墨」足夠的顯影時間
+            d = self.summary()
+            self.host().call_method("DebugRoboPaintHold", (False,))
+            gain = d.get("dotN", 0) - self.dot_before
+            check("c7_tap_dot", 1 <= gain <= 4, f"gain={gain}")
+            self.advance("slow_arm")
+        elif s == "slow_arm":
+            if self.elapsed() < 0.5:
+                return
+            self.dot_before = self.summary().get("dotN", 0)
+            self.slow_n = 0
+            self.host().call_method("DebugRoboPaintHold", (True,))
+            self.advance("slowpaint")
+        elif s == "slowpaint":
+            if self.slow_n < 120:
+                self.host().call_method("DebugRoboMouse", (0.05, 0.0))
+                self.slow_n += 1
+                return
+            if self.elapsed() < 1.0:
+                return
+            d = self.summary()
+            self.host().call_method("DebugRoboPaintHold", (False,))
+            gain = d.get("dotN", 0) - self.dot_before
+            check("c8_slow_paint", gain >= 5, f"gain={gain}")
             self.advance("relatch")
         elif s == "relatch":
             if self.elapsed() < 0.5:

@@ -129,7 +129,10 @@
   否決」——tilt 牆/掃程拒收/斜坡拒收三連教訓）、P/筆/墨=每 tick 讀出的導出量、
   相機恆凍結+**邊緣推擠**（貼邊 0.92+本 tick 外推才讓位 min(推量,溢出)、LMB 按住
   視野鎖死）、臉=gaze 惰性追隨（τ0.22）＝2D 筆/小點/✕ 錨 P 投影；旋鈕
-  StencilCamEdgeFrac/DrawGazeTauS；儀器=robo_stencilcursor_probe＋DebugRoboMouse）；Liner=**皮繩追趕巡航**（07-24 拉桿退役：滑鼠恆指哪、
+  StencilCamEdgeFrac/DrawGazeTauS；儀器=robo_stencilcursor_probe＋DebugRoboMouse；
+  **08-01 出墨層修＝拆 Shader 遺留移動閘＋首針即點**（3°/s 閘=慢畫整段無墨、
+  單擊無點——閘關 tick 路徑不記帳=永久丟棄；稿筆墨=P 無此閘要防的噪聲源、
+  Shader 閘照舊；probe 補 c7 單擊守恆/c8 慢速域契約=14/0＋directdraw 72/72）；Liner=**皮繩追趕巡航**（07-24 拉桿退役：滑鼠恆指哪、
   針以 v_max 追意圖點、**畫面歸針**=相機/螢幕中心/2D 筆構造上恆=針尖=墨；貼手域
   直接落點防繞點震盪）＋守恆式 v_max=k·d·f＋行進蟻＋浮雕跨越＋**壓稿線 1.5cm 內
   =沿稿自動走**（手勢歸打稿、慢工歸機器；動滑鼠=取消）；Shader=**填色
