@@ -1338,8 +1338,10 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	if (SelectedNeedle == EInkNeedle::Stencil)
 	{
 		// 稿筆游標制（07-31 user 定案）：手=皮膚游標（恆定公分增益）、臉/相機=惰性
-		// 注視——畫布在螢幕上近似不動＝自由手繪的參考系；aim 由游標反算＝下游零改動
-		UpdateStencilCursor(MouseX, MouseY, Sens, DeltaSeconds);
+		// 注視——畫布在螢幕上近似不動＝自由手繪的參考系；aim 由游標反算＝下游零改動。
+		// StencilCursorGain（08-01）：畫圖手速=瞄準手速再降一級（角度命令 relatch
+		// 不經此處=robo 角度契約逐字原樣）
+		UpdateStencilCursor(MouseX, MouseY, Sens * StencilCursorGain, DeltaSeconds);
 	}
 	else
 	{
