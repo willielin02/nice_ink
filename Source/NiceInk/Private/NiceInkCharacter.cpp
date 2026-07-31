@@ -1501,16 +1501,11 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 	}
 	else if (!bPenTriggerLocal)
 	{
-		// 邊緣帶（08-01 二修 user 抓「還沒碰到邊緣就開始移動視野」——兩個真兇
-		// 皆量測定罪，儀器=robo_fovaxis_probe）：
-		// ①視野半角不能用「LeanLockedFov/2＋16:9」假設——引擎實際維持垂直 FOV
-		//  （halfV 恆 10.36°、halfH 隨視窗長寬比走；方窗實測 halfH≈10.3° vs
-		//   假設 18°=邊緣帶落在畫面外/內側看視窗形狀）→ 直接讀投影矩陣的實際
-		//   半角，任何視窗恆準；
-		// ②貼邊判定不能用生 aim——玩家看到的筆/小點=濾波 aim（One Euro 快移
-		//   滯後數度）→ 生 aim 先過帶=視野在「筆看起來還沒到邊」時就動。
-		//   改判濾波 aim（=可見筆的位置）；推量仍取生 aim 本 tick 實走
-		//  （「持續位移多少才給多少」=手的動作）、溢出取濾波域。
+		// 邊緣帶半角＝讀投影矩陣（08-01 三修，儀器=robo_fovaxis_probe）：引擎
+		// 實際維持垂直 FOV（halfV 恆 10.36°、halfH 隨視窗長寬比走；方窗實測
+		// halfH≈10.3° vs 舊假設 18°）——「LeanLockedFov/2＋16:9」假設只在 16:9
+		// 窗成立；讀矩陣=任何視窗恆準。貼邊判定的主詞演化＝生 aim（六版）→
+		// 濾波 aim（三修）→筆網格尖（四修）→**游標標記投影**（六修終案，見下）。
 		float HalfH = FMath::Clamp(LeanLockedFov * 0.5f, 5.0f, 85.0f);
 		float HalfV = FMath::RadiansToDegrees(FMath::Atan(
 			FMath::Tan(FMath::DegreesToRadians(HalfH)) * (9.0f / 16.0f))); // 無投影退路
@@ -1532,44 +1527,48 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 				}
 			}
 		}
-		const float EdgeH = HalfH * StencilCamEdgeFrac;
-		const float EdgeV = HalfV * StencilCamEdgeFrac;
-		const float DAz = FMath::FindDeltaAngleDegrees(DrawCamAz, DrawAimAzFilt);
-		const float DTl = DrawAimTiltFilt - DrawCamTilt;
-		// 三修（08-01 user 再抓「根本還沒碰到邊界就在移動、左右特別嚴重」）：
-		// 貼邊的主詞必須是**螢幕上那支筆**——射線滑出身體剪影時 P 凍結、筆停在
-		// 畫面內，但 aim（看不見）繼續積分過帶＝視野在筆離邊還遠時就動；左右最
-		// 容易滑出剪影＝左右特別嚴重。改＝可見筆尖（MarkerPenSmoothedTip=網格
-		// 實繪位置）投影到本視窗像素、其螢幕偏移超過 EdgeFrac 且在同側才准讓位
-		// ——筆推不到邊（出剪影/搆不到）＝視野永不動（user 契約字面義）。
-		bool bPenEdgeH = false;
-		bool bPenEdgeV = false;
-		if (PC && bMarkerPenSmoothValid)
+		// 六修（08-01 user 抓「左側還有一段就觸發、右側就不會」）：四修錨在紫筆
+		// 網格筆尖——但筆只有射線打得到皮膚才跟得動（鎖點皮膚在左半＝往左筆貼
+		// 膚跟到邊、往右筆卡在原地永不到帶）＝觸發與否跟著身體幾何走、不跟邊框
+		// ＝方向不對稱。終錨＝**游標標記**（✕/小點的世界錨=GetStencilCursorHudWorld
+		// ：P 有效=P、出剪影=aim 射線基準深度——永遠跟滑鼠走的那個可見記號）
+		// 投影到本視窗像素；邊條寬=四邊統一像素（短邊半長×(1-EdgeFrac)，五修）
+		// ——上下左右/往左往右觸發時游標離邊框距離恆等。讓位量=min(本 tick 手的
+		// 外推量, 游標超出帶的角度溢出)——速度=推的速度、絕不吃既有溢出。
+		FVector CursorW;
+		FVector2D CursorPx;
+		int32 SX = 0, SY = 0;
+		if (PC)
 		{
-			FVector2D PenPx;
-			int32 SX = 0, SY = 0;
 			PC->GetViewportSize(SX, SY);
-			if (SX > 0 && SY > 0 &&
-				PC->ProjectWorldLocationToScreen(MarkerPenSmoothedTip, PenPx, true))
+		}
+		if (PC && SX > 0 && SY > 0 && GetStencilCursorHudWorld(CursorW) &&
+			PC->ProjectWorldLocationToScreen(CursorW, CursorPx, true))
+		{
+			const float HalfPxX = SX * 0.5f;
+			const float HalfPxY = SY * 0.5f;
+			const float BandPx = (1.0f - StencilCamEdgeFrac) * FMath::Min(HalfPxX, HalfPxY);
+			const float Fx = (static_cast<float>(CursorPx.X) - HalfPxX) / HalfPxX; // +右
+			const float Fy = (static_cast<float>(CursorPx.Y) - HalfPxY) / HalfPxY; // +下
+			const float FxEdge = 1.0f - BandPx / HalfPxX;
+			const float FyEdge = 1.0f - BandPx / HalfPxY;
+			const float TanH = FMath::Tan(FMath::DegreesToRadians(HalfH));
+			const float TanV = FMath::Tan(FMath::DegreesToRadians(HalfV));
+			if (FMath::Abs(Fx) > FxEdge && TickAz * Fx > 0.0f)
 			{
-				const float FxR = (static_cast<float>(PenPx.X) - SX * 0.5f) / (SX * 0.5f); // +右
-				const float FyD = (static_cast<float>(PenPx.Y) - SY * 0.5f) / (SY * 0.5f); // +下
-				bPenEdgeH = FMath::Abs(FxR) > StencilCamEdgeFrac && (FxR > 0.0f) == (DAz > 0.0f);
-				// 螢幕 +下 = tilt +（AimRot pitch=-tilt：tilt 大=低頭=畫面下方）
-				bPenEdgeV = FMath::Abs(FyD) > StencilCamEdgeFrac && (FyD > 0.0f) == (DTl > 0.0f);
+				const float OverDeg = FMath::RadiansToDegrees(
+					FMath::Atan(FMath::Abs(Fx) * TanH) - FMath::Atan(FxEdge * TanH));
+				const float Give = FMath::Min(FMath::Abs(TickAz), OverDeg);
+				DrawCamAz = FMath::UnwindDegrees(DrawCamAz + FMath::Sign(Fx) * Give);
 			}
-		}
-		// 各軸獨立：可見筆貼邊＋濾波 aim 過帶＋本 tick 手還在同向外推
-		// → 讓位 min(推量, 溢出)
-		if (bPenEdgeH && FMath::Abs(DAz) > EdgeH && TickAz * DAz > 0.0f)
-		{
-			const float Give = FMath::Min(FMath::Abs(TickAz), FMath::Abs(DAz) - EdgeH);
-			DrawCamAz = FMath::UnwindDegrees(DrawCamAz + FMath::Sign(DAz) * Give);
-		}
-		if (bPenEdgeV && FMath::Abs(DTl) > EdgeV && TickTilt * DTl > 0.0f)
-		{
-			const float Give = FMath::Min(FMath::Abs(TickTilt), FMath::Abs(DTl) - EdgeV);
-			DrawCamTilt += FMath::Sign(DTl) * Give;
+			// 螢幕 +下 = tilt +（AimRot pitch=-tilt：tilt 大=低頭=畫面下方）
+			if (FMath::Abs(Fy) > FyEdge && TickTilt * Fy > 0.0f)
+			{
+				const float OverDeg = FMath::RadiansToDegrees(
+					FMath::Atan(FMath::Abs(Fy) * TanV) - FMath::Atan(FyEdge * TanV));
+				const float Give = FMath::Min(FMath::Abs(TickTilt), OverDeg);
+				DrawCamTilt += FMath::Sign(Fy) * Give;
+			}
 		}
 	}
 }

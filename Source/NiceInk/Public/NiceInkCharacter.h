@@ -240,11 +240,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "1.5"))
 	float StencilCursorGain = 1.0f;
 
-	// 稿筆相機邊緣帶（畫面半寬比例）：六版 user 定案「只有把筆移到最邊緣還持續
-	// 往外移動才改變視野方向；不是碰到邊緣就給大位移，而是碰到邊緣後還持續位移
-	// 多少才給多少位移；左鍵按下後無論滑鼠怎麼動視野都不位移」＝邊緣推擠制：
-	// 筆過此線且本 tick 還在外推＝視野只吃「這一 tick 的外推量」（速度=推的速度、
-	// 上限=溢出量）；手停/筆回畫面內/左鍵按住＝視野完全靜止。0.92=貼近畫面邊緣
+	// 稿筆相機邊緣帶：六版 user 定案「只有把筆移到最邊緣還持續往外移動才改變
+	// 視野方向；碰到邊緣後還持續位移多少才給多少位移；左鍵按下後視野不位移」
+	// ＝邊緣推擠制。判定主詞=可見筆尖投影到本視窗像素（四修）；邊條寬=四邊
+	// 統一像素「視窗短邊半長×(1-此值)」（五修：各軸自算百分比在寬螢幕=左右帶
+	// 比上下寬近一倍）。0.92≈720 高視窗上離邊框 29px；調小=帶更寬、更早讓位
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "1.0"))
 	float StencilCamEdgeFrac = 0.92f;
 
