@@ -248,6 +248,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "1.0"))
 	float StencilCamEdgeFrac = 0.92f;
 
+	// 稿筆拉繩穩定器（08-02，Lazy Mouse／拉繩模式）：按住 LMB 時墨尖 B 被一條
+	// 定長繩拖著追游標 P——d≤L 繩鬆不動、d>L 沿 B→P 前進 (d−L)。手擁有速度
+	//（每 tick 只走手多拉出的距離；鬆繩存量放開時由收筆補完吐出=位移全記帳）、
+	// 路徑=追逐曲線（垂直於行進向的抖動被 L 按比例壓掉=空間低通）。游標/✕/
+	// 小點/邊緣推擠照舊吃生滑鼠——繩子只拉墨與 2D 筆（回饋面）。
+	// 08-02 user 驗收「只感覺鈍」＝預設 0（關閉）：手抖只有筆寬 3.9mm 的一成、
+	// 上游 One Euro 已濾——平滑收益不可感、滯後可感。旋鈕留（細線需求再開）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "3.0"))
+	float StencilLazyRadiusCm = 0.0f;
+
+
 	// 導引預測路徑前瞻距離（cm，皮膚弧長）——業界式導引（07-22 二改；五修 user
 	//「還是太短」8→16 ≈ 7s 路程）：與速度同域，調速時導引自動等比
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "2", ClampMax = "40"))
@@ -764,6 +775,10 @@ public:
 	// 只在本人稿筆鎖定中回 true——HUD 以 Canvas->Project 投影為 2D 筆/小點/✕ 錨
 	bool GetStencilCursorHudWorld(FVector& Out) const;
 
+	// HUD：稿筆拉繩墨尖的世界錨（按住 LMB 繪製中才回 true）——2D 筆錨到墨尖
+	// =「筆尖在墨出處」的誠實呈現；游標小點/✕ 照舊錨生游標（恆隨手）
+	bool GetStencilLazyTipHudWorld(FVector& Out) const;
+
 	// robo：模擬方向拉桿（巡航中每 tick 重申覆寫、免疫滑鼠歸零；(0,0)=解除。
 	// 必須在 PaintHold(true) 之後呼叫——非巡航 tick 會把拉桿歸零）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
@@ -964,6 +979,8 @@ private:
 	float DrawCamAz = 0.0f;                    // 稿筆凍結相機（六版=邊緣推擠制：
 	float DrawCamTilt = 45.0f;                 // 恆靜止、只吃「貼邊後本 tick 的
 	bool bDrawCamInit = false;                 // 外推量」；見 StencilCamEdgeFrac）
+	FVector StencilLazyTip = FVector::ZeroVector; // 拉繩墨尖 B（稿筆按住 LMB 時
+	bool bStencilLazyValid = false;               // 被繩拖著追 P；收筆補完後失效）
 	void UpdateStencilCursor(float MouseX, float MouseY, float SensDeg, float DeltaSeconds);
 
 	// --- 刺青巡航內部（本人端；07-22 刺青手感、07-24 皮繩追趕制）---

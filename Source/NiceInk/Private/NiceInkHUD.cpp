@@ -1007,7 +1007,19 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 				const float TiltRad = FMath::DegreesToRadians(PenTiltDeg);
 				const FVector2D AxisUp(FMath::Sin(TiltRad), -FMath::Cos(TiltRad));
 				const float GapPx = (bInkingPen ? 2.0f : 14.0f) * UiScale;
-				const FVector2D TipPt = Aim + AxisUp * GapPx;
+				// 拉繩穩定器（08-02）：繪製中 2D 筆錨到拉繩墨尖（筆尖=墨出處；
+				// 游標先走、筆沿平滑路徑追=Lazy Mouse 讀感）；小點/✕ 照舊錨生游標
+				FVector2D PenAnchor = Aim;
+				FVector LazyW;
+				if (MyChar->GetStencilLazyTipHudWorld(LazyW))
+				{
+					const FVector Pr = Project(LazyW);
+					if (Pr.Z > 0.0f)
+					{
+						PenAnchor = FVector2D(Pr.X, Pr.Y);
+					}
+				}
+				const FVector2D TipPt = PenAnchor + AxisUp * GapPx;
 				if (MarkerSprite)
 				{
 					// 筆尖在貼圖內的正規化座標（render_marker_ui.py 印出）

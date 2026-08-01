@@ -2020,12 +2020,25 @@ float ANiceInkCharacter::EffectiveDrawAz() const
 {
 	// 本人＝One Euro 濾波值（姿勢/筆/墨的共同驅動源）；他端＝複製追趕值。
 	// 相機不走這裡（UpdateLeanCamera 直讀生值＝視角零延遲）。
-	return IsLocallyControlled() ? DrawAimAzFilt : RemoteDrawAzDeg;
+	// 稿筆＝生 aim（08-02 user 定案「讓滑鼠當純輸入」）：游標/墨/姿勢全鏈同源
+	// 零延遲——One Euro 是 07-20「畫面歸針」時代防姿勢抖的層，自由游標制下它
+	// 變成游標的直接滯後（慢速 ~0.16s 果凍感）。靜止不抖由構造保證（滑鼠
+	// delta=0→aim 靜止→P 走快取）；移動中手抖 ≈0.5mm 對公尺級身體姿勢不可見。
+	// 機器工具照舊吃濾波（巡航/導引鏈粒度敏感、且畫面歸針下滯後無感）。
+	if (IsLocallyControlled())
+	{
+		return SelectedNeedle == EInkNeedle::Stencil ? DrawAimAzLocal : DrawAimAzFilt;
+	}
+	return RemoteDrawAzDeg;
 }
 
 float ANiceInkCharacter::EffectiveDrawTilt() const
 {
-	return IsLocallyControlled() ? DrawAimTiltFilt : RemoteDrawTiltDeg;
+	if (IsLocallyControlled())
+	{
+		return SelectedNeedle == EInkNeedle::Stencil ? DrawAimTiltLocal : DrawAimTiltFilt;
+	}
+	return RemoteDrawTiltDeg;
 }
 
 void ANiceInkCharacter::DebugRoboDrawAim(float AzDeg, float TiltDeg)
@@ -2063,6 +2076,20 @@ bool ANiceInkCharacter::GetStencilCursorHudWorld(FVector& Out) const
 		FRotator(-DrawAimTiltLocal, DrawAimAzLocal, 0.0f).Vector() * DrawCursorRefDistCm;
 	return true;
 }
+
+bool ANiceInkCharacter::GetStencilLazyTipHudWorld(FVector& Out) const
+{
+	// 拉繩墨尖（08-02）：只在本人稿筆繪製中有效——2D 筆錨到這裡=「筆尖在墨
+	// 出處」；不繪製/繩關閉時 HUD 落回游標錨（GetStencilCursorHudWorld）
+	if (!bLeanLocked || !IsLocallyControlled() || SelectedNeedle != EInkNeedle::Stencil ||
+		!bPainting || !bStencilLazyValid || StencilLazyRadiusCm <= 0.01f)
+	{
+		return false;
+	}
+	Out = StencilLazyTip;
+	return true;
+}
+
 
 void ANiceInkCharacter::DebugRoboNeedle(int32 NeedleIndex)
 {
@@ -2371,10 +2398,17 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		DrawUnreachSecs = 0.0f;
 	}
 
-	if (!bWantsPaint)
+	// 拉繩收筆補完（08-02）：放開左鍵的這一 tick 繩長歸零，墨尖走完最後 ≤L 的
+	// 鬆繩段再收筆——不補=每條線恆短一截（「筆跟不上」讀感）。補完段走同一條
+	// 出墨機（StopPaintingLocal 會先 flush 再 End，補完點不丟）
+	const bool bStencilCatchUp = !bWantsPaint && bPainting && bStencilLazyValid &&
+		SelectedNeedle == EInkNeedle::Stencil &&
+		PaintTarget.IsValid() && PaintTarget.Get() == LeanTarget.Get();
+	if (!bWantsPaint && !bStencilCatchUp)
 	{
 		StopPaintingLocal();
 		bHasLastPaintTip = false;
+		bStencilLazyValid = false;
 		return;
 	}
 
@@ -2430,7 +2464,33 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 自然湧現（v_max/間距=f）；預算天花板 f×1.5 防異常快移灌針（robo 傳送/hitch）。
 	// 幀內多針沿路徑內插（hitch 不留縫——覆蓋保證按最壞幀推，r15 老教訓）。
 	// 舊 0.5cm 連續軌跡取樣退役——點與點之間不再內插，縫區內插毛邊整類病失去載體。
-	const FVector TipNow = PenTipWorld;
+	const bool bStrokeOpen = bPainting && PaintTarget.Get() == Target;
+	FVector TipNow = PenTipWorld;
+	// 稿筆拉繩穩定器（08-02）：墨尖 B 被定長繩拖著追游標 P——d≤L 繩鬆不動、
+	// d>L 沿 B→P 前進 (d−L)＝手擁有速度（每 tick 只走手多拉出的距離；鬆繩存量
+	// 不丟帳，收筆補完吐出）。路徑=追逐曲線＝以 L 為截止尺度的空間低通（垂直
+	// 抖動被繩長按比例壓掉）。只動墨鏈的 TipNow——PenTipWorld/游標 P/✕/小點/
+	// 邊緣推擠全不經此（繩子只拉回饋面）；首針即點原樣（繩起點=按下點）。
+	if (SelectedNeedle == EInkNeedle::Stencil && IsLocallyControlled() &&
+		StencilLazyRadiusCm > 0.01f)
+	{
+		if (!bStrokeOpen || !bStencilLazyValid)
+		{
+			StencilLazyTip = TipNow; // 繩起點=按下點（首針即點打在生游標上）
+			bStencilLazyValid = true;
+		}
+		else
+		{
+			const float L = bStencilCatchUp ? 0.0f : StencilLazyRadiusCm;
+			const FVector To = TipNow - StencilLazyTip;
+			const float D = static_cast<float>(To.Size());
+			if (D > L)
+			{
+				StencilLazyTip += To * ((D - L) / D);
+			}
+			TipNow = StencilLazyTip;
+		}
+	}
 	const FVector TipFrom = bHasLastPaintTip ? LastPaintTipWorld : TipNow;
 	// 液線針=距離節拍實線；霧針/打稿筆=自由揮掃距離節拍（07-23 四版；07-25 打稿制）
 	// ——打稿=手擁有速度（草稿的本質），節拍頻率走 Shader 的寬鬆天花板（純防外掛）
@@ -2473,7 +2533,6 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 同 tick 所有針同因子（EMA 時間尺度 >> tick）；量化 byte 隨針進筆劃資料
 	const uint8 FlowByte = ComputeMistFlowByte();
 
-	const bool bStrokeOpen = bPainting && PaintTarget.Get() == Target;
 	if (bFreehandTool)
 	{
 		// 霧針（07-23 五修＝距離節拍）／打稿筆（07-25）：自由揮掃、沿筆尖路徑每
@@ -2628,6 +2687,13 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	{
 		FlushPendingPoints();
 		PointFlushTimer = 0.0f;
+	}
+	if (bStencilCatchUp)
+	{
+		// 補完段已入帳——正式收筆（flush 由 StopPaintingLocal 保證）
+		StopPaintingLocal();
+		bHasLastPaintTip = false;
+		bStencilLazyValid = false;
 	}
 }
 
@@ -3386,7 +3452,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TEXT("cruise=%d stick=%.2f dotN=%d dotGapCm=%.2f vmaxCm=%.2f guideN=%d ")
 		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d ")
 		TEXT("maskRow=%d maskOn=%d ")
-		TEXT("curs=%d cursW=(%.2f,%.2f,%.2f) gazeAz=%.1f gazeTilt=%.1f"),
+		TEXT("curs=%d cursW=(%.2f,%.2f,%.2f) gazeAz=%.1f gazeTilt=%.1f ")
+		TEXT("cursOk=%d"),
 		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
 		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
 		GhostedChars.Num(),
@@ -3413,7 +3480,8 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		// curs/cursW（五版起）＝P 的別名：自由滑鼠制下游標無獨立狀態、皮膚點=導出量
 		bDrawTargetValid ? 1 : 0,
 		DrawTargetWorld.X, DrawTargetWorld.Y, DrawTargetWorld.Z,
-		DrawGazeAz, DrawGazeTilt);
+		DrawGazeAz, DrawGazeTilt,
+		bCursorDrawable ? 1 : 0);
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const

@@ -12,7 +12,10 @@
 #   c7 tap      單擊（LMB 按住、滑鼠零移動）→ 恰好落 1~4 針（首針即點；上限=
 #               靜止不灌墨——移動閘拆除後的守恆契約）
 #   c8 slow     慢速域（0.05 單位/tick ≈ 1.6°/s＝舊閘 3°/s 門檻之下）按住 LMB
-#               慢掃 → 全程有墨（gain≥5；舊閘下=0＝慢畫整段無墨的回歸鎖）
+#               慢掃 → 按住期間墨在流（inflight gain≥1；拉繩穩定器 08-02：墨尖
+#               落後游標 ≤L）＋收筆補完後全量守恆（gain≥5；舊閘下=0＝慢畫整段
+#               無墨的回歸鎖、繩子丟帳也鎖在這條）
+#（08-02 曲線制 c9/c10 已隨功能整組刪除——user 定案；決策史見 DIRECT_DRAW_PLAN.md）
 # 產出：Saved/robo_stencilcursor_result.txt
 import math
 import re
@@ -58,7 +61,8 @@ def find_char(w, pid):
 
 def parse_summary(s):
     d = {}
-    for k in ("curs", "gazeAz", "gazeTilt", "rawAz", "dotN", "tilt", "az", "reach"):
+    for k in ("curs", "gazeAz", "gazeTilt", "rawAz", "dotN", "tilt", "az", "reach",
+              "cursOk"):
         m = re.search(r"\b" + k + r"=(-?[\d.]+)", s)
         if m:
             d[k] = float(m.group(1))
@@ -259,7 +263,16 @@ class Probe:
             if self.elapsed() < 1.0:
                 return
             d = self.summary()
+            # 拉繩穩定器（08-02）：按住期間墨尖被繩拖著落後游標 ≤L——慢速域
+            # 「墨在流」的活契約=首針＋繩繃直後的尾巴；全量守恆在收筆補完後量（下態）
+            gain = d.get("dotN", 0) - self.dot_before
+            check("c8_slow_inflight", gain >= 1, f"gain={gain}")
             self.host().call_method("DebugRoboPaintHold", (False,))
+            self.advance("slowdone")
+        elif s == "slowdone":
+            if self.elapsed() < 0.6:
+                return  # 收筆補完（繩長歸零走完鬆繩段）吃一個 tick＋批次 flush
+            d = self.summary()
             gain = d.get("dotN", 0) - self.dot_before
             check("c8_slow_paint", gain >= 5, f"gain={gain}")
             self.advance("relatch")
