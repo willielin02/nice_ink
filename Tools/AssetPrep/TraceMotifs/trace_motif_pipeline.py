@@ -111,7 +111,7 @@ def point_at_arc(pts, closed, total_len, s):
     t = f - int(f)
     return pts[i] * (1 - t) + pts[j] * t
 
-def pursuit_sim(pts, closed, total_len, ahead=0.7, vmax=1.8, dt=1 / 30):
+def pursuit_sim(pts, closed, total_len, ahead=0.55, vmax=1.8, dt=1 / 30):
     n = len(pts)
     step = total_len / n
     window = max(int(3.0 / step), 2)
@@ -260,6 +260,7 @@ def collect_interiors(polys, sil, diag):
     return out[:2]
 
 results = []
+ev_by_file = {}
 files = sorted(os.listdir(KAMON)) if os.path.isdir(KAMON) else []
 print("files:", len(files), flush=True)
 for fname in files:
@@ -342,6 +343,7 @@ for fname in files:
                    done=bool(done), feats=feats, circ=round(circ, 3), src=src,
                    ok_cup0=ok0, ok_cup2=ok2)
         evaled.append((u, rec))
+    ev_by_file[fname] = evaled
     best = None
     for u, rec in evaled:
         if rec["src"].startswith('route') and rec["ok_cup0"]:
@@ -389,31 +391,57 @@ for sheet_i in range(0, len(passing), 24):
     print("sheet:", out, flush=True)
 
 # --- 匯出（烘焙用）：指定檔案的最終路線 ---
+# (name, mirror, band_half)：band=該圖所屬杯的帶半寬（筆寬×2.0/1.8/1.6÷2）
 EXPORT = {
-    "torii_26e9.svg": ("Torii", False),
-    "sakura_1f338.svg": ("Sakura", False),
-    "fuji_1f5fb.svg": ("Fuji", True),
-    "dango_1f361.svg": ("Dango", True),
-    "fish_1f41f.svg": ("Koi", True),
-    "fan_1faad.svg": ("Fan", True),
-    "lantern_1f3ee.svg": ("Lantern", False),
-    "onigiri_1f359.svg": ("Onigiri", False),
-    "wave_1f30a.svg": ("Wave", True),
-    "turtle_1f422.svg": ("Turtle", True),
-    "octopus_1f419.svg": ("Octopus", False),
-    "oni_1f479.svg": ("Oni", False),
-    "maple_1f341.svg": ("Momiji", True),
-    "snake_1f40d.svg": ("Snake", True),
-    "moon_1f319.svg": ("Moon", True),
-    "castle_1f3ef.svg": ("Castle", False),
+    "onigiri_1f359.svg": ("Onigiri", False, 0.30),
+    "fan_1faad.svg": ("Fan", True, 0.30),
+    "fuji_1f5fb.svg": ("Fuji", True, 0.30),
+    "moon_1f319.svg": ("Moon", True, 0.30),
+    "wave_1f30a.svg": ("Wave", True, 0.30),
+    "dango_1f361.svg": ("Dango", True, 0.27),
+    "lantern_1f3ee.svg": ("Lantern", False, 0.27),
+    "fish_1f41f.svg": ("Koi", True, 0.27),
+    "octopus_1f419.svg": ("Octopus", False, 0.27),
+    "snake_1f40d.svg": ("Snake", True, 0.27),
+    "turtle_1f422.svg": ("Turtle", True, 0.24),
+    "sakura_1f338.svg": ("Sakura", False, 0.24),
+    "torii_26e9.svg": ("Torii", False, 0.24),
+    "oni_1f479.svg": ("Oni", False, 0.24),
+    "maple_1f341.svg": ("Momiji", True, 0.24),
+    "castle_1f3ef.svg": ("Castle", False, 0.24),
 }
 export = []
-for u, r in results:
-    if r["file"] in EXPORT and r["ok_cup0"]:
-        name, mirror = EXPORT[r["file"]]
-        export.append(dict(name=name, closed=r["closed"], mirror=mirror,
-                           src=r["src"], msd=r["msd"], dev=r["dev"], feats=r["feats"],
-                           points=[[round(float(x), 3), round(float(y), 3)] for x, y in u]))
+for fname_e, (name, mirror, band) in EXPORT.items():
+    # 用該圖所屬杯的帶重新裁決候選（優先權：內線路線＞剪影＞子路徑）
+    picked = None
+    for u, r in results:
+        if r["file"] != fname_e:
+            continue
+        cand_pool = ev_by_file.get(fname_e, [])
+        for uu, rr in cand_pool:
+            ok = rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band
+            if ok and rr["src"].startswith("route"):
+                picked = (uu, rr)
+                break
+        if picked is None:
+            for uu, rr in cand_pool:
+                ok = rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band
+                if ok and rr["src"] == "union":
+                    picked = (uu, rr)
+                    break
+        if picked is None:
+            for uu, rr in cand_pool:
+                if rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band:
+                    picked = (uu, rr)
+                    break
+        break
+    if picked is None:
+        print(f"EXPORT MISS: {name} (band {band}) — no candidate passes", flush=True)
+        continue
+    u, r = picked
+    export.append(dict(name=name, closed=r["closed"], mirror=mirror, band=band,
+                       src=r["src"], msd=r["msd"], dev=r["dev"], feats=r["feats"],
+                       points=[[round(float(x), 3), round(float(y), 3)] for x, y in u]))
 if export:
     with open(os.path.join(BASE, f"{PREFIX}_export.json"), "w", encoding="utf-8") as f:
         json.dump(export, f)
