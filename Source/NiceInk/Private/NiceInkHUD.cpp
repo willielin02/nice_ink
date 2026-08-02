@@ -794,9 +794,14 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	if (Trace && Trace->IsTraceActive())
 	{
 		// 整圖入鏡（08-02 user 裁決：圖案是夢裡唯一的參考系——速度=完成時間與
-		// 針速/帶寬比，皆縮放不變；畫面歸針/像素倍率同源已退役）
-		const FVector2D PanelCenter(W * 0.5f, H * 0.47f);
-		Trace->DrawTracePanel(Canvas, PanelCenter, FMath::Min(W, H) * 0.40f);
+		// 針速/帶寬比，皆縮放不變；畫面歸針/像素倍率同源已退役）。
+		// 可用矩形＝杯數列之下、姿勢面板頂之上、左右留邊——包圍盒貼合最大化
+		//（圓形面板＋MaxAbsR 半徑貼合對非圓圖案縮到三~五成＝「圖太小」病根）。
+		const float PanelTop = 95.0f * UiScale;             // 標題+杯數列（底 80）之下
+		const float PanelBottom = H - 256.0f * UiScale;     // 姿勢面板（頂 H-246）之上
+		const FVector2D PanelCenter(W * 0.5f, (PanelTop + PanelBottom) * 0.5f);
+		const FVector2D PanelHalfSize(W * 0.5f - 50.0f * UiScale, (PanelBottom - PanelTop) * 0.5f);
+		Trace->DrawTracePanel(Canvas, PanelCenter, PanelHalfSize);
 
 		// 進度＋事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）
 		DrawTok(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f)),

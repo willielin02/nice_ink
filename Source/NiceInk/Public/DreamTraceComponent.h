@@ -55,8 +55,8 @@ public:
 	int32 GetFailCount() const { return FailCount; }
 	bool IsFailFlashing() const;
 
-	// HUD 委派繪製（固定圓形面板；全 canvas 三角形直畫）
-	void DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, float RadiusPx);
+	// HUD 委派繪製（圖形包圍盒貼合可用矩形＝整圖入鏡下的最大化；全 canvas 三角形直畫）
+	void DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, const FVector2D& HalfSizePx);
 
 	// --- robo 除錯（只設 pending；RPC 發送一律發生在 TickComponent＝python guard 外） ---
 
@@ -83,6 +83,10 @@ private:
 	bool bActive = false;
 	FDreamTraceFigure Figure;
 	FDreamTraceParams Params;
+
+	// 圖形包圍盒（圖形 cm 空間；StartTrace 時一次算好——繪製縮放與游標鉗位共用）
+	FVector2D FigCenterCm = FVector2D::ZeroVector;
+	FVector2D FigHalfCm = FVector2D(1.0f, 1.0f);
 
 	// 針與游標（盤面 cm 空間）
 	FVector2D NeedlePanel = FVector2D::ZeroVector;

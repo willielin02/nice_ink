@@ -104,6 +104,21 @@ void UDreamTraceComponent::StartTrace(int32 Seed, const FDreamTraceParams& InPar
 		return;
 	}
 
+	// 包圍盒（繪製縮放與游標鉗位共用）：MaxAbsR 圓貼合對非圓圖案吃掉大半螢幕
+	// ——寬扁圖（雙浪/扇/鳥居）縮成三成——bbox 才是「整圖入鏡」的緊界
+	FVector2D BBMin = Figure.Points[0];
+	FVector2D BBMax = Figure.Points[0];
+	for (const FVector2D& Pt : Figure.Points)
+	{
+		BBMin.X = FMath::Min(BBMin.X, Pt.X);
+		BBMin.Y = FMath::Min(BBMin.Y, Pt.Y);
+		BBMax.X = FMath::Max(BBMax.X, Pt.X);
+		BBMax.Y = FMath::Max(BBMax.Y, Pt.Y);
+	}
+	FigCenterCm = (BBMin + BBMax) * 0.5f;
+	FigHalfCm.X = FMath::Max((BBMax.X - BBMin.X) * 0.5f, 1.0f);
+	FigHalfCm.Y = FMath::Max((BBMax.Y - BBMin.Y) * 0.5f, 1.0f);
+
 	bActive = true;
 	NeedlePanel = Figure.Points[0];
 	CursorPanel = NeedlePanel;
@@ -355,11 +370,10 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		CursorPanel = NeedlePanel;
 	}
 
-	// 游標鉗位：盤面邏輯域（整圖入鏡＝圖案範圍＋餘裕）防跑飛；
-	// 皮繩鉗＝游標最多跑在針前皮繩長
-	const float Bound = Figure.MaxAbsR + 4.0f;
-	CursorPanel.X = FMath::Clamp(CursorPanel.X, -Bound, Bound);
-	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, -Bound, Bound);
+	// 游標鉗位：盤面邏輯域（整圖入鏡＝圖案範圍＋餘裕）防跑飛——包圍盒域
+	//（半徑域對寬扁圖在窄軸放游標跑出畫面外）；皮繩鉗＝游標最多跑在針前皮繩長
+	CursorPanel.X = FMath::Clamp(CursorPanel.X, FigCenterCm.X - FigHalfCm.X - 4.0f, FigCenterCm.X + FigHalfCm.X + 4.0f);
+	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, FigCenterCm.Y - FigHalfCm.Y - 4.0f, FigCenterCm.Y + FigHalfCm.Y + 4.0f);
 	const float LeashCm = FMath::Max(C->TattooChaseLeashCm, 0.5f);
 	const FVector2D ToCursor = CursorPanel - NeedlePanel;
 	if (bPenDown && ToCursor.Size() > LeashCm)
@@ -447,7 +461,7 @@ FString UDreamTraceComponent::GetDebugSummary() const
 
 // --- 繪製 ---
 
-void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, float RadiusPx)
+void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, const FVector2D& HalfSizePx)
 {
 	if (!bActive || !Canvas || !Figure.IsValid())
 	{
@@ -460,11 +474,16 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& Cent
 	// 手感（游標增益/帶寬）全在公分域＝縮放不變。先前「px/cm 對齊割線視圖」
 	// 拿螢幕像素當參考系＝把割線視圖才有的實物參考搬進沒有參考物的夢＝錯誤
 	// 座標系（整圖大於螢幕八倍、圖案辨識度歸零——user 抓「這是什麼圖案」實錘）。
-	const float Scale = (RadiusPx * 0.86f) / FMath::Max(Figure.MaxAbsR + Params.BandHalfWidthCm + 1.5f, 1.0f);
+	// 縮放＝包圍盒貼合可用矩形（等比、取兩軸較小者）；餘裕 1.5cm 同時蓋住
+	// 搖晃位移上限（1.2cm 振幅 × 包絡 0.6 × wobble 峰 1.5 ≈ 1.08cm）。
+	const float PadCm = Params.BandHalfWidthCm + 1.5f;
+	const float Scale = FMath::Min(
+		HalfSizePx.X / FMath::Max(FigHalfCm.X + PadCm, 1.0f),
+		HalfSizePx.Y / FMath::Max(FigHalfCm.Y + PadCm, 1.0f));
 
 	const FVector2D OffsetCm = ShakeOffsetCm();
-	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + Cm * Scale; };
-	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm + OffsetCm) * Scale; };
+	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm - FigCenterCm) * Scale; };
+	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm - FigCenterCm + OffsetCm) * Scale; };
 
 	// 螢幕外裁剪（整張圖遠大於視窗——canvas 不裁、自己裁）
 	const float CullMargin = 80.0f;
