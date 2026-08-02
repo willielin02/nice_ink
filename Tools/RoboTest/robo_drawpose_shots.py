@@ -236,7 +236,7 @@ class Test:
                 return
             w1 = get_world("UEDPIE_1")
             v1 = find_char(w1, self.victim_pid)
-            v1.get_editor_property("DreamMaze").call_method("DebugTriggerExit", ())
+            v1.get_editor_property("DreamTrace").call_method("DebugForceComplete", ())  # v4.0
             self.advance("victim_look")
         elif s == "victim_look":
             if self.elapsed() < 1.5:

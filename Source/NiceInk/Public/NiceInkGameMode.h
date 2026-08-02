@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "DreamMaze.h"
+#include "DreamTrace.h"
 #include "GameFramework/GameMode.h"
 #include "NiceInkTypes.h"
 #include "NiceInkGameMode.generated.h"
@@ -97,6 +98,31 @@ public:
 	// SPEC 定案 #31 常數：兇手轉盤 5 秒（非難度旋鈕，改它＝改 SPEC）
 	static constexpr float TrapDialSeconds = 5.0f;
 
+	// --- 醉夢描圖（SPEC v4.0 定案 #49/#50；迷宮退役） ---
+
+	// 每杯一組難度檔（索引＝受害者當前罰酒杯數——酒越深夢越深）。
+	// Config 覆寫語意同 MazeParamsPerCup（先 !Clear 再逐條 +）。
+	UPROPERTY(Config, EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	TArray<FDreamTraceParams> TraceParamsPerCup;
+
+	// 搖晃攻擊（定案 #50；費用佔位 500＝金額錨定連動 SPEC 待定 #6/#18）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Economy")
+	int32 ShakeAttackCost = 500;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	float ShakeAttackSeconds = 2.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	float ShakeAttackAmpCm = 1.2f;
+
+	// 每攻擊者冷卻（防機關槍連砸；金錢是主限流、冷卻是節拍保底）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	float ShakeAttackCooldownSec = 4.0f;
+
+	// 搖晃攻擊路由（Character 的 Server RPC 轉進來）：驗相位/身分/現金/冷卻
+	// →扣款→受害者端套用（攻擊者顯名）；回執只給攻擊者
+	void HandleShakeAttack(class ANiceInkCharacter* Attacker);
+
 	// --- 迷宮事件路由（Character 的 Server RPC 轉進來） ---
 
 	// 受害者踩中陷阱：驗證後只通知兇手開轉盤＋掛失效保險（逾時/掉線＝0 度）
@@ -155,6 +181,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString DebugMazeStats(int32 NumSeeds, int32 Cup);
 
+	// 描圖生成統計（v4.0 調參儀器；純計算可直呼）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugTraceStats(int32 NumSeeds, int32 Cup);
+
+	// 搖晃攻擊（timer-deferred；以第一位非受害者玩家為攻擊者走真實 Handle 路徑）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboShake();
+
 	// robo 測試：指定開場受害者的席位（-1＝隨機，正式行為）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedVictimSeat = -1;
@@ -170,6 +204,9 @@ private:
 	// Resolution 演出後要接的分支
 	int32 PendingNextVictimId = INDEX_NONE;
 	bool bPendingFinale = false;
+
+	// 搖晃攻擊冷卻表（server-only；每回合 EnterSeating 清空）
+	TMap<int32, float> LastShakeTimeByPlayer;
 
 	// 兇手轉盤 pending（一次一件；受害者死亡序列中不會再踩）
 	int32 PendingDialKillerId = INDEX_NONE;

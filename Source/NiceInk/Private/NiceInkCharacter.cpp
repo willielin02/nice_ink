@@ -5,6 +5,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "DreamMazeComponent.h"
+#include "DreamTraceComponent.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
 #include "Engine/LocalPlayer.h"
@@ -269,7 +270,11 @@ ANiceInkCharacter::ANiceInkCharacter()
 	InkCanvas = CreateDefaultSubobject<UInkCanvasComponent>(TEXT("InkCanvas"));
 
 	// 醉夢迷宮：受害者 client 本地模擬（不複製——其餘玩家一無所知）
+	//（v4.0 退役封存：元件保留、永不啟動——描圖取代）
 	DreamMaze = CreateDefaultSubobject<UDreamMazeComponent>(TEXT("DreamMaze"));
+
+	// 醉夢描圖（v4.0 定案 #49）：受害者 client 本地模擬（不複製——作畫者看不到夢的進度）
+	DreamTrace = CreateDefaultSubobject<UDreamTraceComponent>(TEXT("DreamTrace"));
 
 	FirstPersonCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FirstPersonCamera"));
 	FirstPersonCamera->SetupAttachment(GetCapsuleComponent());
@@ -488,6 +493,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollTrapDial(PC);
 	PollCounterplay(PC);
 	PollFlip(PC);
+	PollShakeAttack(PC);
 	PollAccusation(PC);
 	PollLobby(PC);
 	PollPalette(PC);
@@ -856,8 +862,9 @@ APlayerState* ANiceInkCharacter::GetAccuseSuspect() const
 
 void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
 {
-	// 沉睡者限定：噴射／拳腳。瞄準＝頭部視野方向（聽聲推理、盲瞄）。
-	if (!bAsleep)
+	// 沉睡者限定：噴射／拳腳（v4.0 定案 #51 移出核心循環——全域閘封存；
+	// 未來更新回歸時改回 true）。瞄準＝頭部視野方向（聽聲推理、盲瞄）。
+	if (!bAsleep || (!GNiceInkSprayEnabled && !GNiceInkKickEnabled))
 	{
 		return;
 	}
@@ -868,7 +875,7 @@ void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
 	if (PC->WasInputKeyJustPressed(EKeys::Three)) { SelectedSprayOrigin = EInkEvidenceType::Shit; }
 
 	const float AimYawWorld = FirstPersonCamera->GetComponentRotation().Yaw;
-	if (PC->WasInputKeyJustPressed(EKeys::Q) && SprayCharges > 0)
+	if (GNiceInkSprayEnabled && PC->WasInputKeyJustPressed(EKeys::Q) && SprayCharges > 0)
 	{
 		ServerSpray(SelectedSprayOrigin, AimYawWorld);
 	}
@@ -876,6 +883,19 @@ void ANiceInkCharacter::PollCounterplay(APlayerController* PC)
 	{
 		ServerKick(AimYawWorld);
 	}
+}
+
+void ANiceInkCharacter::PollShakeAttack(APlayerController* PC)
+{
+	// 搖晃攻擊（v4.0 定案 #50）：作畫階段、非受害者、G 鍵＝花錢搖他的夢。
+	// 鎖定作畫中也可按（G 不與 lean 輸入衝突）；現金/冷卻驗證在 server。
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::Drawing || bAsleep ||
+		GetInkAuthorId() == GS->VictimPlayerId || !PC->WasInputKeyJustPressed(EKeys::G))
+	{
+		return;
+	}
+	ServerAttackShake();
 }
 
 void ANiceInkCharacter::EnsureAvatarApplied()
@@ -2973,8 +2993,56 @@ void ANiceInkCharacter::ServerMazeExited_Implementation()
 	ApplySleepVisual();
 }
 
+// --- 醉夢描圖（SPEC v4.0 定案 #49/#50）---
+
+void ANiceInkCharacter::ClientStartTrace_Implementation(int32 Seed, const FDreamTraceParams& Params)
+{
+	if (DreamTrace)
+	{
+		DreamTrace->StartTrace(Seed, Params);
+	}
+}
+
+void ANiceInkCharacter::ServerTraceComplete_Implementation()
+{
+	// 描完只在作畫階段有效；睜眼＝無聲甦醒（與 ServerMazeExited 同語意同驗證）
+	if (!ValidateMazeSender(this, /*bAllowSeating=*/false))
+	{
+		return;
+	}
+	bEyesOpen = true;
+	ApplySleepVisual();
+}
+
+void ANiceInkCharacter::ServerAttackShake_Implementation()
+{
+	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		GM->HandleShakeAttack(this);
+	}
+}
+
+void ANiceInkCharacter::ClientApplyShake_Implementation(const FString& AttackerName, float Seconds, float AmpCm)
+{
+	if (DreamTrace)
+	{
+		DreamTrace->ApplyShake(AttackerName, Seconds, AmpCm);
+	}
+}
+
+void ANiceInkCharacter::ClientShakeAck_Implementation(bool bBought)
+{
+	ShakeAckFlashUntil = GetWorld() ? GetWorld()->GetTimeSeconds() + 1.2f : 0.0f;
+	bLastShakeAckBought = bBought;
+	NiAudio::Play(this, bBought ? ENiSound::UiClick : ENiSound::AccuseWrong, bBought ? 0.7f : 0.4f);
+}
+
 void ANiceInkCharacter::ServerSpray_Implementation(EInkEvidenceType Origin, float AimYawWorld)
 {
+	if (!GNiceInkSprayEnabled)
+	{
+		return; // v4.0 定案 #51：噴射移出核心循環——伺服器拒收（改裝客戶端也進不來）
+	}
 	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
 	const APlayerState* PS = GetPlayerState();
 	if (!GS || !PS || GS->CurrentPhase != ENiceInkPhase::Drawing ||
@@ -3158,6 +3226,10 @@ void ANiceInkCharacter::ApplySleepVisual()
 	if (!bAsleep && DreamMaze)
 	{
 		DreamMaze->StopMaze();
+	}
+	if (!bAsleep && DreamTrace)
+	{
+		DreamTrace->StopTrace();
 	}
 
 	// 睡姿網格：sumo 無烘焙睡姿（我-12 改 runtime ragdoll 快照）；

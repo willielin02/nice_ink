@@ -517,34 +517,24 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	PendingDialKillerId = INDEX_NONE;
 	PendingDialVictim = nullptr;
 
+	// 搖晃攻擊冷卻不跨回合
+	LastShakeTimeByPlayer.Reset();
+
 	if (ANiceInkCharacter* Victim = GetVictimCharacter())
 	{
 		Victim->MulticastSetRoundIndex(GS->CurrentRound);
 		Victim->ServerSetAsleep(true, GetVictimLieTransform());
 
-		// 醉夢迷宮：難度檔＝罰酒杯數（酒越深夢越深）；種子每回合新開；
-		// 陷阱＝其他玩家（洗牌後與陷阱格一一對應）。只發受害者——其餘玩家一無所知。
+		// 醉夢描圖（v4.0 定案 #49；迷宮退役）：難度檔＝罰酒杯數（酒越深夢越深＝
+		// 路線更長更彎帶更窄）；種子每回合新開。只發受害者——作畫者看不到夢的進度。
 		const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
 		const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
-		const FDreamMazeParams MazeParams = MazeParamsPerCup.Num() > 0
-			? MazeParamsPerCup[FMath::Clamp(Cups, 0, MazeParamsPerCup.Num() - 1)]
-			: FDreamMazeGen::DefaultParamsForCup(Cups);
+		const FDreamTraceParams TraceParams = TraceParamsPerCup.Num() > 0
+			? TraceParamsPerCup[FMath::Clamp(Cups, 0, TraceParamsPerCup.Num() - 1)]
+			: FDreamTraceGen::DefaultParamsForCup(Cups);
 
-		TArray<int32> ArtistIds;
-		for (APlayerState* PS : GS->PlayerArray)
-		{
-			if (PS && PS->GetPlayerId() != VictimPlayerId)
-			{
-				ArtistIds.Add(PS->GetPlayerId());
-			}
-		}
-		for (int32 i = ArtistIds.Num() - 1; i > 0; --i)
-		{
-			ArtistIds.Swap(i, FMath::RandRange(0, i));
-		}
-
-		const int32 MazeSeed = FMath::RandRange(1, MAX_int32 - 1);
-		Victim->ClientStartMaze(MazeSeed, MazeParams, ArtistIds);
+		const int32 TraceSeed = FMath::RandRange(1, MAX_int32 - 1);
+		Victim->ClientStartTrace(TraceSeed, TraceParams);
 	}
 
 	GS->SetPhase(ENiceInkPhase::Seating, SeatingSeconds);
@@ -930,6 +920,49 @@ void ANiceInkGameMode::DebugRoboSpray(float AimYawWorld, uint8 OriginType)
 	}), 0.1f, false);
 }
 
+// --- 醉夢描圖：搖晃攻擊路由（v4.0 定案 #50；attacker↔server↔victim 三點、零第三方資訊） ---
+
+void ANiceInkGameMode::HandleShakeAttack(ANiceInkCharacter* Attacker)
+{
+	const ANiceInkGameState* GS = NIState();
+	ANiceInkPlayerState* PS = Attacker ? Attacker->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	ANiceInkCharacter* Victim = GetVictimCharacter();
+	if (!GS || !PS || !Victim || GS->CurrentPhase != ENiceInkPhase::Drawing ||
+		PS->GetPlayerId() == GS->VictimPlayerId)
+	{
+		return; // 非法請求靜默丟棄（相位外/受害者自搖）
+	}
+	// 注意：受害者「已無聲睜眼」不拒收——拒收＝告訴攻擊者他醒了（有錢又過冷卻
+	// 卻被拒＝唯一解釋），無聲甦醒零提示會被打穿。照收照扣、夢端自然無效
+	//（描圖元件睜眼即停）＝砸空是攻擊者自擔的賭；bAsleep 為假只在相位錯亂時
+	// 出現（Drawing 中受害者恆沉睡旗標），當防禦拒收即可。
+	if (!Victim->bAsleep)
+	{
+		Attacker->ClientShakeAck(false);
+		return;
+	}
+	const float Now = GetWorld()->GetTimeSeconds();
+	if (const float* Last = LastShakeTimeByPlayer.Find(PS->GetPlayerId()))
+	{
+		if (Now - *Last < ShakeAttackCooldownSec)
+		{
+			Attacker->ClientShakeAck(false);
+			return;
+		}
+	}
+	if (PS->Cash < ShakeAttackCost)
+	{
+		Attacker->ClientShakeAck(false);
+		return;
+	}
+
+	PS->Cash -= ShakeAttackCost;
+	LastShakeTimeByPlayer.Add(PS->GetPlayerId(), Now);
+	Victim->ClientApplyShake(PS->GetPlayerName(), ShakeAttackSeconds, ShakeAttackAmpCm);
+	Attacker->ClientShakeAck(true);
+	PersistCharacter(Attacker); // 錢包立即入檔（雷射同款語意）
+}
+
 // --- 醉夢迷宮：轉盤路由（victim↔server↔killer 三點；零 multicast、零第三方資訊） ---
 
 void ANiceInkGameMode::HandleMazeTrapHit(ANiceInkCharacter* Victim, int32 KillerPlayerId)
@@ -1004,6 +1037,40 @@ FString ANiceInkGameMode::DebugMazeStats(int32 NumSeeds, int32 Cup)
 	const FString Report = FDreamMazeGen::RunStats(Params, NumSeeds, /*TrapCount=*/4);
 	UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
 	return Report;
+}
+
+FString ANiceInkGameMode::DebugTraceStats(int32 NumSeeds, int32 Cup)
+{
+	const FDreamTraceParams Params = TraceParamsPerCup.IsValidIndex(FMath::Clamp(Cup, 0, TraceParamsPerCup.Num() - 1))
+		? TraceParamsPerCup[FMath::Clamp(Cup, 0, TraceParamsPerCup.Num() - 1)]
+		: FDreamTraceGen::DefaultParamsForCup(Cup);
+	const FString Report = FDreamTraceGen::RunStats(Params, NumSeeds);
+	UE_LOG(LogTemp, Display, TEXT("%s"), *Report);
+	return Report;
+}
+
+void ANiceInkGameMode::DebugRoboShake()
+{
+	// timer-deferred（RPC 逃出 python 執行 guard）：第一位非受害者玩家＝攻擊者，
+	// 走真實 HandleShakeAttack 路徑（扣款/冷卻/受害者 Client RPC 全真）
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		const ANiceInkGameState* GS = NIState();
+		if (!GS)
+		{
+			return;
+		}
+		for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+		{
+			const APlayerState* PS = It->GetPlayerState();
+			if (PS && PS->GetPlayerId() != GS->VictimPlayerId)
+			{
+				HandleShakeAttack(*It);
+				return;
+			}
+		}
+	}), 0.1f, false);
 }
 
 // --- 翻身提案（2026-07-15 user 定案）---

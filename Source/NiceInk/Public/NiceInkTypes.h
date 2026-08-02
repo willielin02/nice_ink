@@ -10,6 +10,12 @@ class UTexture2D;
 // 保留可用（robo 踹飛中斷測試靠它）。要恢復＝改回 true。
 inline constexpr bool GNiceInkKickEnabled = false;
 
+// 2026-08-02 SPEC v4.0 定案 #51：噴射與拳腳移出核心循環＝未來更新內容——
+// 「核心循環完全不會有這些，第一版絕對不會有」（user 逐字）。噴射全鏈封存
+// （Q 輸入／ServerSpray 伺服器拒收／HUD 技能列）；程式保留非刪除，
+// 未來更新回歸＝兩閘改回 true。
+inline constexpr bool GNiceInkSprayEnabled = false;
+
 // SPEC v3.0 一場遊戲的相位。回合迴圈 = Seating → Drawing → Tour → Accusation → Resolution
 // → (Seating | Finale)。作畫階段無固定時長：受害者按 WASD 現身即收束（定案 #17）。
 UENUM(BlueprintType)

@@ -207,8 +207,8 @@ class Test:
                        f"vis={nk.is_visible() if nk else 'None'}")
             # 歸零盲瞄再睜眼（殘值不得上骨）
             self.victim_local.debug_robo_sleep_look(0.0, 0.0)
-            maze = self.victim_local.get_editor_property("DreamMaze")
-            maze.debug_trigger_exit()
+            trace = self.victim_local.get_editor_property("DreamTrace")
+            trace.debug_force_complete()  # v4.0 描圖取代迷宮
             self.advance("verify_wake")
         elif s == "verify_wake":
             if self.elapsed() < 1.5:

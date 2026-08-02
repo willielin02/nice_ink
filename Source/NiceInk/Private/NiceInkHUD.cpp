@@ -2,6 +2,7 @@
 
 #include "CanvasItem.h"
 #include "DreamMazeComponent.h"
+#include "DreamTraceComponent.h"
 #include "Engine/Canvas.h"
 #include "Engine/Engine.h"
 #include "Engine/Font.h"
@@ -361,7 +362,7 @@ void ANiceInkHUD::DrawHUD()
 		// 這行話補上「該怎麼辦」
 		DrawBottomHint(MyChar->GetDrawUnreachableSeconds() > 1.0f
 			? TEXT("out of reach — veiled skin needs a closer lean (RMB stand up)")
-			: TEXT("LMB draw   ·   SCROLL needle   ·   look up to watch his face   ·   RMB stand up"),
+			: TEXT("LMB draw   ·   SCROLL needle   ·   G shake his dream   ·   RMB stand up"),
 			MyChar->GetDrawUnreachableSeconds() > 1.0f ? NiHudColor::Amber : NiHudColor::PaperDim);
 		DrawPaletteStrip(MyChar); // 色票列＝「1-9,0 color」提示的可視化本體
 	}
@@ -372,7 +373,16 @@ void ANiceInkHUD::DrawHUD()
 	}
 	else if (bDrawingArtist)
 	{
-		DrawBottomHint(TEXT("F — propose to flip the body"), NiHudColor::PaperDim);
+		// 搖晃攻擊（v4.0 定案 #50；-$500＝ShakeAttackCost 佔位價，同步改）
+		DrawBottomHint(TEXT("F — propose to flip the body   ·   G — shake his dream (-$500)"), NiHudColor::PaperDim);
+	}
+
+	// 搖晃購買回執（只給攻擊者本人；不透漏夢內結果）
+	if (MyChar && GetWorld() && GetWorld()->GetTimeSeconds() < MyChar->ShakeAckFlashUntil)
+	{
+		DrawTok(MyChar->bLastShakeAckBought ? TEXT("DREAM SHAKEN  -$500") : TEXT("SHAKE REFUSED (cash / cooldown)"),
+			Canvas->ClipX * 0.5f, Canvas->ClipY * 0.22f, ETextTier::Title,
+			MyChar->bLastShakeAckBought ? NiHudColor::Amber : NiHudColor::Red, EHAlign::Center, true);
 	}
 
 	DrawInkCrosshair(GS, MyPS);
@@ -778,9 +788,34 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		DrawCupsRow(W * 0.5f, 56.0f * UiScale, 24.0f * UiScale, NIPS->PenaltyCups, EHAlign::Center);
 	}
 
-	// 醉夢圓形迷宮（SPEC v3.3）：走出外緣出口＝甦醒
+	// 醉夢描圖（SPEC v4.0 定案 #49）：沿線描完＝甦醒；描出線＝重來
+	UDreamTraceComponent* Trace = MyChar->DreamTrace;
 	UDreamMazeComponent* Maze = MyChar->DreamMaze;
-	if (Maze && Maze->IsMazeActive())
+	if (Trace && Trace->IsTraceActive())
+	{
+		const FVector2D PanelCenter(W * 0.5f, H * 0.46f);
+		const float PanelRadius = FMath::Min(W, H) * 0.30f;
+		Trace->DrawTracePanel(Canvas, PanelCenter, PanelRadius);
+
+		// 進度＋事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）
+		DrawTok(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f)),
+			PanelCenter.X, PanelCenter.Y + PanelRadius + 14.0f * UiScale, ETextTier::Body,
+			NiHudColor::PaperDim, EHAlign::Center, false);
+		if (Trace->IsShakeActive())
+		{
+			DrawTok(FString::Printf(TEXT("%s SHAKES YOUR DREAM !"), *Trace->GetShakeAttackerName().ToUpper()),
+				PanelCenter.X, PanelCenter.Y - PanelRadius - 44.0f * UiScale, ETextTier::Display,
+				NiHudColor::Red, EHAlign::Center, true);
+		}
+		else if (Trace->IsFailFlashing())
+		{
+			DrawTok(TEXT("SLIPPED — BACK TO THE START"),
+				PanelCenter.X, PanelCenter.Y - PanelRadius - 40.0f * UiScale, ETextTier::Title,
+				NiHudColor::Red, EHAlign::Center, true);
+		}
+		DrawBottomHint(TEXT("hold LMB — trace the line to wake"), NiHudColor::Lavender);
+	}
+	else if (Maze && Maze->IsMazeActive())
 	{
 		const FVector2D PanelCenter(W * 0.5f, H * 0.46f);
 		const float PanelRadius = FMath::Min(W, H) * 0.30f;
@@ -846,7 +881,9 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		Canvas->K2_DrawLine(FVector2D(BodyCX + 9.0f * B, BodyCY + 20.0f * B), FVector2D(BodyCX + 33.0f * B, BodyCY + 62.0f * B), 6.0f * B, BodyColor);  // 右腿
 	}
 
-	// 技能庫存（右下）：噴射（拳腳暫時移除——GNiceInkKickEnabled）
+	// 技能庫存（右下）：噴射（v4.0 定案 #51 噴射拳腳移出核心循環——雙閘全關＝
+	// 整列不畫；未來更新回歸時原地起用）
+	if (GNiceInkSprayEnabled || GNiceInkKickEnabled)
 	{
 		static const TCHAR* OriginNames[] = { TEXT("NOSE"), TEXT("CROTCH"), TEXT("BUTT") };
 		const int32 OriginIdx = FMath::Clamp(static_cast<int32>(MyChar->SelectedSprayOrigin), 0, 2);
@@ -1250,6 +1287,14 @@ void ANiceInkHUD::DrawDebugPanel(const ANiceInkGameState* GS, const ANiceInkPlay
 	Y += LineH;
 	DrawTok(TEXT("console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"),
 		M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+
+	// 描圖現場（v4.0）：受害者端即時 summary
+	if (MyChar && MyChar->DreamTrace && MyChar->DreamTrace->IsTraceActive())
+	{
+		Y += LineH * 1.2f;
+		DrawTok(MyChar->DreamTrace->GetDebugSummary(), M + 10.0f * UiScale, Y,
+			ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
+	}
 
 	// 迷宮現場（出口卡死診斷 2026-07-15）：受害者端即時 summary，兩行折顯
 	if (MyChar && MyChar->DreamMaze && MyChar->DreamMaze->IsMazeActive())

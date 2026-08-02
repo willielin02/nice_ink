@@ -7,9 +7,11 @@
 ## 專案是什麼
 
 派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
-（沉睡＝醉夢圓形迷宮小遊戲），其他人用麥克筆在他身上畫畫；醒來後巡禮指認作者，
+（沉睡＝**醉夢描圖小遊戲**：割糖餅式沿線描、描出線重來、描完甦醒；作畫者可花錢
+搖他的夢拖時間），其他人用刺青機在他身上畫畫；醒來後巡禮指認作者，
 猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。
-**設計的唯一權威是 `SPEC.md`**（v3.9）。上架衝刺（主選單/配對/大廳/音效/打包）的
+**設計的唯一權威是 `SPEC.md`**（v4.0——2026-08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋
+噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
 工作帳本與待使用者項在 `Docs/SHIP_PLAN.md`。
 
 ## 鐵律（違反任何一條都是嚴重事故）
@@ -162,7 +164,13 @@
   縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
   FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
-  `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：決定性生成＋受害者端模擬/導航/旋轉）。
+  `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅諧波閉圓決定性生成
+  （自交避讓 2.6×帶半寬鐵律）＋割線機制 2D 移植（v_max 追趕/皮繩/越線重來）＋
+  搖晃攻擊（G 鍵花錢 500/冷卻/受害者顯名/**睜眼照收照扣＝無聲甦醒零洩漏**）；
+  帳本=Docs/DREAM_TRACE_PLAN.md；robo_trace_test 21 檢查）、
+  `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：**v4.0 退役封存**——元件/RPC/
+  套件全保留永不啟動；噴射拳腳=GNiceInkSprayEnabled/GNiceInkKickEnabled 雙閘封存
+  ＝SPEC #51 未來更新）。
 - **前端與配對（2026-07-17 上架衝刺）**：`NiceInkMenuGameMode/PlayerController/HUD`
   （L_MainMenu canvas 主選單：名字/臉選擇/lan-online/建房/搜房列表/設定/授權頁）、
   `NiceInkGameInstance`（偏好持久化 NiceInk_Settings 槽＋斷線回選單）、
@@ -188,14 +196,18 @@
 - Blender 5.1：`"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --background <blend> --python <腳本>`；
   角色源正本＝`SourceAssets/sumo_character_master.blend`（char17 已退役；迭代檔 previews/masters/retopo
   已 gitignore 留本地）。
-- 下一批已知工作：噴射出口與褌的視覺（SPEC 待定 #11）、平台小號實測（待定 #12）、
-  開場動畫場景改寫（待定 #14）、RMB 瞄準切分追認（待定 #15）、鎖定畫布空間感
+- 下一批已知工作：~~噴射出口與褌的視覺（待定 #11）~~（v4.0 移未來更新籃）、
+  平台小號實測（待定 #12）、
+  開場動畫場景改寫（待定 #14）、~~RMB 瞄準切分（待定 #15）~~（v4.0 關閉）、鎖定畫布空間感
   ——眼位 20–25cm＋游標 A5 鉗位提案（待定 #16）、**內容動機＋投票經濟設計
   （2026-08-01~02 討論中未定案：秘密題目制＝待定 #17、巡禮投票經濟＝待定 #18、
   帳本=Docs/CONTENT_ECON_PLAN.md 含死案墓場；題庫生產管線（LLM 量產＋keep/kill
   裁決工具）待開工）**、EOS 憑證＋語音接入
   （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
-  已實作待 viewport 驗收：走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
+  已實作待 viewport 驗收：**醉夢描圖＋搖晃攻擊 v4.0（2026-08-02 user 定案後全權
+  委託實作；robo_trace_test 21/0＋feign/orbit/directdraw/stencilcursor 迴歸綠；
+  帳本=Docs/DREAM_TRACE_PLAN.md 含補位設計待追認清單）**、
+  走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
   **刺青作畫全制（2026-07-20~24，帳本=Docs/DIRECT_DRAW_PLAN.md 逐版全史：直接畫制
   →刺青機伸縮針→液線巡航手感→雙針制→打霧十一版（細針點排、冷墨底色、跨縫
   表面補丁）→**十二~十六版（07-24：欠取樣 aliasing 根治（暈開烘製鏈）→軟橢圓

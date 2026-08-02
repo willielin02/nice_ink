@@ -96,7 +96,7 @@ class Probe:
             if self.elapsed() < 1.5:
                 return
             self.victim = find_char(get_world("UEDPIE_0"), self.victim_pid)
-            self.victim.get_editor_property("DreamMaze").debug_trigger_exit()
+            self.victim.get_editor_property("DreamTrace").debug_force_complete()  # v4.0
             self.advance("rest_dump")
         elif s == "rest_dump":
             if self.elapsed() < 1.5:

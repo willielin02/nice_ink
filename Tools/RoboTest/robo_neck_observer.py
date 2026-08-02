@@ -158,8 +158,8 @@ class Test:
                 self.finish()
                 return
             self.victim_local = find_char(w, self.victim_pid)
-            maze = self.victim_local.get_editor_property("DreamMaze")
-            maze.debug_trigger_exit()  # 睜眼＝軌道啟用
+            trace = self.victim_local.get_editor_property("DreamTrace")
+            trace.debug_force_complete()  # 睜眼＝軌道啟用（v4.0 描圖取代迷宮）
             focus_editor()
             self.advance("shots")
         elif s == "shots":

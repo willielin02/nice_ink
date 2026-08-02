@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "DreamMaze.h"
+#include "DreamTrace.h"
 #include "Engine/NetSerialization.h"
 #include "GameFramework/Character.h"
 #include "InkTypes.h"
@@ -49,9 +50,13 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UInkCanvasComponent> InkCanvas;
 
-	// 醉夢圓形迷宮（SPEC v3.3 甦醒小遊戲）：受害者 client 本地模擬＋繪製
+	// 醉夢圓形迷宮（SPEC v3.3 甦醒小遊戲；v4.0 退役封存——描圖取代、元件保留不啟動）
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UDreamMazeComponent> DreamMaze;
+
+	// 醉夢描圖（SPEC v4.0 定案 #49 甦醒小遊戲）：受害者 client 本地模擬＋繪製
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
+	TObjectPtr<class UDreamTraceComponent> DreamTrace;
 
 	// 站姿／仰躺大字睡姿網格（同 UV 圖集，切換不影響墨水 RT）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink")
@@ -655,6 +660,33 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerMazeExited();
 
+	// --- 醉夢描圖 RPC（SPEC v4.0 定案 #49/#50）---
+	// 信任模型沿用迷宮：client 判定（越線/完成）、server 驗身分/相位（party game 取捨）。
+
+	// 回合開始（EnterSeating）：server 發種子＋難度檔，受害者端決定性重建圖形
+	UFUNCTION(Client, Reliable)
+	void ClientStartTrace(int32 Seed, const FDreamTraceParams& Params);
+
+	// 描完整條路線＝無聲甦醒（等同舊 ServerMazeExited 語意）
+	UFUNCTION(Server, Reliable)
+	void ServerTraceComplete();
+
+	// 搖晃攻擊（作畫者 → 伺服器）：花錢搖受害者夢中的圖（server 驗相位/現金/冷卻）
+	UFUNCTION(Server, Reliable)
+	void ServerAttackShake();
+
+	// 受害者端：套用搖晃（攻擊者顯名＝怒氣要有地址；其餘玩家一無所知）
+	UFUNCTION(Client, Reliable)
+	void ClientApplyShake(const FString& AttackerName, float Seconds, float AmpCm);
+
+	// 攻擊者端回執（買到/被拒的音效與 HUD 閃示；不透漏受害者夢內結果）
+	UFUNCTION(Client, Reliable)
+	void ClientShakeAck(bool bBought);
+
+	// HUD 讀取：最近一次搖晃購買回執的閃示時鐘
+	float ShakeAckFlashUntil = 0.0f;
+	bool bLastShakeAckBought = false;
+
 	// --- 兇手轉盤本地狀態（HUD 讀取；robo 可直寫 TrapDialAngleDeg） ---
 
 	UPROPERTY(BlueprintReadWrite, Transient, Category = "Nice Ink|Maze")
@@ -1214,6 +1246,7 @@ private:
 	void PollAccusation(APlayerController* PC);
 	void PollCounterplay(APlayerController* PC);
 	void PollFlip(APlayerController* PC);
+	void PollShakeAttack(APlayerController* PC);
 	void EnsureAvatarApplied();
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);

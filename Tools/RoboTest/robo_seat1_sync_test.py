@@ -144,7 +144,7 @@ class Test:
             # 鋪一筆讓現身有巡禮可進
             unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).debug_robo_stroke(
                 unreal.Vector2D(0.45, 0.45), unreal.Vector2D(0.50, 0.47), 2)
-            self.victim_local.get_editor_property("DreamMaze").debug_trigger_exit()
+            self.victim_local.get_editor_property("DreamTrace").debug_force_complete()  # v4.0
             self.advance("wake_orbit")
         elif s == "wake_orbit":
             if self.elapsed() < 2.0:
