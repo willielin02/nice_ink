@@ -298,17 +298,20 @@ FDreamTraceParams FDreamTraceGen::DefaultParamsForCup(int32 Cup)
 	P.TargetTraceSeconds = 60.0f;
 	switch (FMath::Clamp(Cup, 0, 2))
 	{
-	case 0: // 第一杯：簡單剪影＋帶=筆寬×2.0
+	// 池分派＝實測轉角量（總轉向角 deg＝「要打多少方向盤」；08-03 user 定性
+	// 「複雜度太低沒難度」後：平滑降檔保細節＋池按量測重排＋飯糰（360°=一個圓
+	// 的量）踢出池——表保留、可隨時撿回）
+	case 0: // 第一杯：500~1200°＋帶=筆寬×2.0
 		P.BandWidthNibMult = 2.0f;
-		P.BakedPool = { Idx_Onigiri, Idx_Fan, Idx_Fuji, Idx_Moon, Idx_Wave };
+		P.BakedPool = { Idx_Fuji, Idx_Lantern, Idx_Fan, Idx_Wave, Idx_Moon };
 		break;
-	case 1: // 第二杯：中等＋帶=筆寬×1.8
+	case 1: // 第二杯：1500~2300°＋帶=筆寬×1.8
 		P.BandWidthNibMult = 1.8f;
-		P.BakedPool = { Idx_Dango, Idx_Lantern, Idx_Koi, Idx_Octopus, Idx_Snake };
+		P.BakedPool = { Idx_Dango, Idx_Koi, Idx_Octopus, Idx_Snake };
 		break;
-	default: // 第三杯（生死局）：複雜標的＋帶=筆寬×1.6
+	default: // 第三杯（生死局）：2400°+＋帶=筆寬×1.6
 		P.BandWidthNibMult = 1.6f;
-		P.BakedPool = { Idx_Turtle, Idx_Sakura, Idx_Torii, Idx_Oni, Idx_Momiji, Idx_Castle };
+		P.BakedPool = { Idx_Torii, Idx_Castle, Idx_Turtle, Idx_Momiji, Idx_Oni, Idx_Sakura };
 		break;
 	}
 	// 名義換算（筆寬 0.3；發夢當下 GameMode 用受害者實際筆寬重算）

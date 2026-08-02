@@ -69,8 +69,9 @@ def resample_uniform(pts, closed, target_len, step):
     xs = np.interp(s_targets, cum, p[:, 0])
     ys = np.interp(s_targets, cum, p[:, 1])
     out = np.stack([xs, ys], 1)
-    # 輕度平滑（去光柵/貝茲取樣噪聲；~0.75cm 視窗）
-    k = 3
+    # 輕度平滑（去光柵/貝茲取樣噪聲；~0.25cm 視窗——只除噪不磨細節，
+    # 細節=轉向事件=難度的載體；user 定性「複雜度太低沒難度」後調降）
+    k = 1
     if len(out) > 2 * k + 1:
         kernel = np.ones(2 * k + 1) / (2 * k + 1)
         if closed:
@@ -153,6 +154,20 @@ def pursuit_sim(pts, closed, total_len, ahead=0.55, vmax=1.8, dt=1 / 30):
         if done:
             return maxdev, True
     return maxdev, False
+
+def total_turning_deg(pts, closed):
+    n = len(pts)
+    tot = 0.0
+    rng = range(n) if closed else range(1, n - 1)
+    for i in rng:
+        a, b, c = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+        v1, v2 = b - a, c - b
+        n1, n2 = np.linalg.norm(v1), np.linalg.norm(v2)
+        if n1 < 1e-9 or n2 < 1e-9:
+            continue
+        cosv = float(np.clip((v1 @ v2) / (n1 * n2), -1, 1))
+        tot += math.degrees(math.acos(cosv))
+    return tot
 
 def feature_count(pts, closed):
     """曲率特徵數：轉角密度峰（>25°/cm 視為一個特徵）粗估"""
@@ -257,7 +272,7 @@ def collect_interiors(polys, sil, diag):
         cc = c.mean(0)
         if all(np.linalg.norm(cc - o.mean(0)) > diag * 0.03 for o in out):
             out.append(c)
-    return out[:2]
+    return out[:4]
 
 results = []
 ev_by_file = {}
@@ -270,7 +285,12 @@ for fname in files:
         continue
     # 候選一（首選）＝全部閉合子路徑的布林聯集外輪廓＝圖案剪影本體
     #（單抽子路徑=拿到零件：船抽桅杆/櫻花抽單瓣——twemoji 首輪實錘）
-    cands = []
+    cands = []  # (u, closed, circ, src, rawlen)
+    def rawlen_of(pts, closed):
+        import numpy as _np
+        a = _np.array(pts)
+        seg = _np.linalg.norm(_np.diff(_np.vstack([a, a[:1]]) if closed else a, axis=0), axis=1)
+        return float(seg.sum())
     polys = []
     for pts, closed in subs:
         if closed and len(pts) >= 8:
@@ -296,10 +316,8 @@ for fname in files:
             # 內線候選（洞邊界＋內部色塊輪廓）→ 接駁成一筆（多內線→單內線→純剪影）
             interiors = collect_interiors(polys, biggest, diag)
             combos = []
-            if len(interiors) >= 2:
-                combos.append(interiors)
-            if len(interiors) >= 1:
-                combos.append(interiors[:1])
+            for n in range(len(interiors), 0, -1):
+                combos.append(interiors[:n])
             for combo in combos:
                 route, rclosed = ext.copy(), True
                 okbuild = True
@@ -311,10 +329,10 @@ for fname in files:
                 if okbuild:
                     u = resample_uniform(route, rclosed, TARGET_LEN, STEP)
                     if u is not None and len(u) >= 80:
-                        cands.append((u, rclosed, circleness(u), f'route{len(combo)}'))
+                        cands.append((u, rclosed, circleness(u), f'route{len(combo)}', rawlen_of(route, rclosed)))
             u = resample_uniform(ext, True, TARGET_LEN, STEP)
             if u is not None and len(u) >= 80:
-                cands.append((u, True, circleness(u), 'union'))
+                cands.append((u, True, circleness(u), 'union', rawlen_of(ext, True)))
         except Exception:
             pass
     # 候選二（備選）＝最大的單一子路徑（單體紋樣時聯集=同一條）
@@ -324,14 +342,14 @@ for fname in files:
         if u is None or len(u) < 80:
             continue
         circ = circleness(u) if closed else 1.0
-        cands.append((u, closed, circ, 'sub'))
+        cands.append((u, closed, circ, 'sub', rawlen_of(pts, closed)))
     if not cands:
         continue
     # 每檔評最好的一條（非圓、過閘、特徵數 2~9 為佳）
     # 評所有候選再按優先權選：①含內線路線過閘 ②純剪影過閘 ③退路（子路徑最佳）
     #（generic 比較會讓「特徵少的碎片」蓋掉剪影——首輪 torii 支柱事故的制度修）
     evaled = []
-    for u, closed, circ, src in cands:
+    for u, closed, circ, src, rawlen in cands:
         if closed and circ < 0.03:
             continue  # 外框正圓＝無聊
         msd = min_self_distance(u, closed, TARGET_LEN)
@@ -340,8 +358,8 @@ for fname in files:
         ok0 = bool(done and msd >= 2.6 * BANDS["cup0"] and dev < BANDS["cup0"])
         ok2 = bool(done and msd >= 2.6 * BANDS["cup2"] and dev < BANDS["cup2"])
         rec = dict(file=fname, closed=bool(closed), msd=round(msd, 2), dev=round(dev, 2),
-                   done=bool(done), feats=feats, circ=round(circ, 3), src=src,
-                   ok_cup0=ok0, ok_cup2=ok2)
+                   done=bool(done), feats=feats, turn=round(total_turning_deg(u, closed)),
+                   rawlen=round(rawlen, 1), circ=round(circ, 3), src=src, ok_cup0=ok0, ok_cup2=ok2)
         evaled.append((u, rec))
     ev_by_file[fname] = evaled
     best = None
@@ -414,36 +432,29 @@ export = []
 for fname_e, (name, mirror, band) in EXPORT.items():
     # 用該圖所屬杯的帶重新裁決候選（優先權：內線路線＞剪影＞子路徑）
     picked = None
-    for u, r in results:
-        if r["file"] != fname_e:
-            continue
-        cand_pool = ev_by_file.get(fname_e, [])
-        for uu, rr in cand_pool:
-            ok = rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band
-            if ok and rr["src"].startswith("route"):
-                picked = (uu, rr)
-                break
-        if picked is None:
-            for uu, rr in cand_pool:
-                ok = rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band
-                if ok and rr["src"] == "union":
-                    picked = (uu, rr)
-                    break
-        if picked is None:
-            for uu, rr in cand_pool:
-                if rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band:
-                    picked = (uu, rr)
-                    break
-        break
+    UNION_ONLY = bool(int(os.environ.get("UNION_ONLY", "0")))
+    cand_pool = ev_by_file.get(fname_e, [])
+    passing = [(uu, rr) for uu, rr in cand_pool
+               if rr["done"] and rr["msd"] >= 2.6 * band and rr["dev"] < band
+               and not (UNION_ONLY and rr["src"].startswith("route"))]
+    if passing:
+        # 尺寸守衛（原始 SVG 域弧長）：碎片的原始長度天生小——需 ≥ 全檔最大者
+        # 的 60%（108cm 域的外框比較=縮放抹平大小＝守衛倒置事故）
+        max_raw = max(rr.get("rawlen", 0) for uu, rr in passing)
+        big = [(uu, rr) for uu, rr in passing if rr.get("rawlen", 0) >= 0.6 * max_raw]
+        # 難度優先（user 定性「太簡單」）：過閘且夠大者取總轉角量最大
+        picked = max(big, key=lambda pr: pr[1].get("turn", 0))
     if picked is None:
         print(f"EXPORT MISS: {name} (band {band}) — no candidate passes", flush=True)
         continue
     u, r = picked
     export.append(dict(name=name, closed=r["closed"], mirror=mirror, band=band,
                        src=r["src"], msd=r["msd"], dev=r["dev"], feats=r["feats"],
+                       turn=r.get("turn", 0),
                        points=[[round(float(x), 3), round(float(y), 3)] for x, y in u]))
 if export:
-    with open(os.path.join(BASE, f"{PREFIX}_export.json"), "w", encoding="utf-8") as f:
+    suffix = "_union" if os.environ.get("UNION_ONLY") == "1" else ""
+    with open(os.path.join(BASE, f"{PREFIX}_export{suffix}.json"), "w", encoding="utf-8") as f:
         json.dump(export, f)
     print(f"exported {len(export)} motifs -> {PREFIX}_export.json", flush=True)
 
