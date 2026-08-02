@@ -198,10 +198,10 @@ class Test:
                        f"perim={d.get('perim')} band={d.get('band')}")
             self.check("t1 figure dense enough", d.get("pts", 0) >= 150, f"pts={d.get('pts')}")
             self.check("t1 progress starts zero", abs(d.get("prog", 9)) < 0.01 and d.get("fails") == 0.0, str(d))
-            # 固定種子 42 → cup0 池[(42/7)%5=1]＝Lantern＝烘焙表索引 6（閉合；
-            # 08-03 難度重排池序）——選圖函數/表序/池序改了要重對
-            self.check("t1 forced seed picks Lantern (deterministic baked motif)",
-                       d.get("motif") == 6.0 and d.get("closed") == 1.0,
+            # 固定種子 42 → cup0 池[(42/7)%5=1]＝Fan＝烘焙表索引 1（閉合；
+            # 08-02 per-cup 帶重裁後表序=EXPORT 杯序）——選圖函數或表序改了要重對
+            self.check("t1 forced seed picks Fan (deterministic baked motif)",
+                       d.get("motif") == 1.0 and d.get("closed") == 1.0,
                        f"motif={d.get('motif')} closed={d.get('closed')}")
             self.advance("t2_stats")
         elif s == "t2_stats":
