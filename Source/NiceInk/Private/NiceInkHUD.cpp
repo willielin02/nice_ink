@@ -793,10 +793,10 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	UDreamMazeComponent* Maze = MyChar->DreamMaze;
 	if (Trace && Trace->IsTraceActive())
 	{
-		// 畫面歸針制（08-02 手感同源三定律）：針釘螢幕正中、圖在下面滑——
-		// 放大率/游標增益與割線視圖恆等，全螢幕即是夢（無縮小盤）
-		const FVector2D PanelCenter(W * 0.5f, H * 0.5f);
-		Trace->DrawTracePanel(Canvas, PanelCenter, FMath::Min(W, H) * 0.5f);
+		// 整圖入鏡（08-02 user 裁決：圖案是夢裡唯一的參考系——速度=完成時間與
+		// 針速/帶寬比，皆縮放不變；畫面歸針/像素倍率同源已退役）
+		const FVector2D PanelCenter(W * 0.5f, H * 0.47f);
+		Trace->DrawTracePanel(Canvas, PanelCenter, FMath::Min(W, H) * 0.40f);
 
 		// 進度＋事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）
 		DrawTok(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f)),

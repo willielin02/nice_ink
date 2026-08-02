@@ -355,13 +355,11 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		CursorPanel = NeedlePanel;
 	}
 
-	// 游標鉗位：畫面歸針制下游標繞著針活動——鉗在針周（可見窗半高量級）防跑飛；
+	// 游標鉗位：盤面邏輯域（整圖入鏡＝圖案範圍＋餘裕）防跑飛；
 	// 皮繩鉗＝游標最多跑在針前皮繩長
-	const FVector2D FromNeedle = CursorPanel - NeedlePanel;
-	if (FromNeedle.Size() > 12.0f)
-	{
-		CursorPanel = NeedlePanel + FromNeedle.GetSafeNormal() * 12.0f;
-	}
+	const float Bound = Figure.MaxAbsR + 4.0f;
+	CursorPanel.X = FMath::Clamp(CursorPanel.X, -Bound, Bound);
+	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, -Bound, Bound);
 	const float LeashCm = FMath::Max(C->TattooChaseLeashCm, 0.5f);
 	const FVector2D ToCursor = CursorPanel - NeedlePanel;
 	if (bPenDown && ToCursor.Size() > LeashCm)
@@ -456,19 +454,17 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& Cent
 		return;
 	}
 
-	// 放大率同源（定律①）：px/cm＝割線視圖公式——引擎維持垂直 FOV（fovaxis 實錘：
-	// halfV=atan(tan(FOV/2)×9/16) 恆定），可見高度=2×眼距×tan(halfV)。
-	// 同一公分在螢幕上和貼膚割線一樣大＝1.8cm/s 的視覺速度恆等。
-	const ANiceInkCharacter* C = OwnerChar();
-	const float HalfVRad = FMath::Atan(
-		FMath::Tan(FMath::DegreesToRadians((C ? C->LeanLockedFov : 36.0f) * 0.5f)) * (9.0f / 16.0f));
-	const float Scale = (Canvas->ClipY * 0.5f) /
-		FMath::Max(NominalDreamEyeDistCm * FMath::Tan(HalfVRad), 1.0f);
+	// 整圖入鏡（08-02 user 裁決）：夢裡沒有絕對參考物——圖案自己就是唯一參考系。
+	// 「速度」只有兩個有意義的定義：完成時間（線長÷針速=60s）與針速/帶寬比
+	//（每秒 ~1.5 個帶寬＝割線「每秒幾個筆寬」的同構讀感）——兩者都縮放不變；
+	// 手感（游標增益/帶寬）全在公分域＝縮放不變。先前「px/cm 對齊割線視圖」
+	// 拿螢幕像素當參考系＝把割線視圖才有的實物參考搬進沒有參考物的夢＝錯誤
+	// 座標系（整圖大於螢幕八倍、圖案辨識度歸零——user 抓「這是什麼圖案」實錘）。
+	const float Scale = (RadiusPx * 0.86f) / FMath::Max(Figure.MaxAbsR + Params.BandHalfWidthCm + 1.5f, 1.0f);
 
-	// 畫面歸針（定律②）：針釘在 CenterPx（螢幕中心）、圖形相對針平移
 	const FVector2D OffsetCm = ShakeOffsetCm();
-	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm - NeedlePanel) * Scale; };
-	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm + OffsetCm - NeedlePanel) * Scale; };
+	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + Cm * Scale; };
+	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm + OffsetCm) * Scale; };
 
 	// 螢幕外裁剪（整張圖遠大於視窗——canvas 不裁、自己裁）
 	const float CullMargin = 80.0f;
