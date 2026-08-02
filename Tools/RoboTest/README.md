@@ -29,8 +29,9 @@
 ## 醉夢描圖套件（2026-08-02 SPEC v4.0——迷宮退役、描圖取代）
 
 - `robo_trace_test.py`＝甦醒小遊戲 v4.0 常駐套件（**22 檢查**）：t1 開局發夢
-  （統一 60s×v_max=線長 108/帶寬/點密度＋**DebugForcedTraceSeed=42＝櫻花**
-  的選圖決定性）、t2 生成統計三檔×200 種子（自距 ≥2.6×帶半寬＋重試率＋
+  （統一 60s×v_max=線長 108；帶半寬=筆寬 0.30＝發夢當下從受害者
+  TattooNibDiameterCm 導出；**DebugForcedTraceSeed=42＝cup0 池[1]=Fan＝烘焙表
+  索引 2** 的選圖決定性——烘焙表序/池組成改動要重對）、t2 生成統計三檔×200 種子（自距 ≥2.6×帶半寬＋重試率＋
   **blobFallback=0**＝模板自己站得住＋**autoDevViol=0**＝pursuit 可描性模擬
   全樣本帶內＋圖案池覆蓋）、t3 夢不複製（server/observer 端元件 inactive）、
   t4 自動沿線描（真實追趕/判定路徑、速度=v_max、零失敗）、t5 搖晃攻擊
@@ -39,10 +40,10 @@
   環域距離）、t7 描完→bEyesOpen→現身進巡禮（108cm≈60 遊戲秒、牆鐘上限 150s）、
   t8 噴射封存（零投射物、charges 恆 0）。結果檔 Saved/robo_trace_result.txt。
 - `robo_trace_shots.py`＝描圖三態截圖自查（seat0 停靠視口；**DebugForcedTrace-
-  Seed=98＝富士山（開放）**＝開放一筆畫鏈的整合驗證順帶外觀）：描圖中/搖晃中
-  /失敗紅框。血價：失敗閃首版用頂點 alpha 蓋整盤＝不透明大紅餅（canvas 三角形
-  alpha 混合不可信）；花瓣谷曲率 0.89cm＝autopilot 前瞻 2cm 切內側必出帶
-  （模板曲率半徑 ≥2cm＋前瞻 0.9cm＝雙修）。
+  Seed=98＝cup0 池[4]=Wave（北齋浪）**）：描圖中/搖晃中/失敗紅框。血價：失敗閃
+  首版用頂點 alpha 蓋整盤＝不透明大紅餅（canvas 三角形 alpha 混合不可信）；
+  autopilot 前瞻是曲率的函數（2cm 前瞻在急彎切內側出帶；現值 0.7＝與離線
+  pursuit 閘同值）。
 - **迷宮套件退役**（v4.0）：`robo_maze_test.py`／`robo_maze_shots.py`／
   `robo_lightring_shots.py`／`robo_exit_seating_repro.py` 隨迷宮封存——照跑會卡
   wait（迷宮永不啟動）。**活套件的喚醒鉤子已全數換血**：

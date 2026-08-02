@@ -331,9 +331,9 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	if (AutopilotRemaining > 0.0f)
 	{
 		AutopilotRemaining -= DeltaTime;
-		// 曲率安全前瞻 0.9cm：模板谷曲率半徑 ≥2cm 下弦垂 ≈0.05cm；首版 2cm 前瞻
-		// 在花瓣谷（ρ≈0.9cm 的舊振幅）切內側出帶＝t4/t7 事故——前瞻是曲率的函數
-		const float Ahead = 0.9f;
+		// 曲率安全前瞻 0.7cm（帶半寬=筆寬 0.3 後餘裕重抓；與離線 pursuit 閘同值。
+		// 血價：前瞻是曲率的函數——2cm 前瞻在急彎切內側出帶=t4/t7 事故）
+		const float Ahead = 0.7f;
 		CursorPanel = RoutePointAtArc(CurS + Ahead) + Offset;
 		bPenDown = true;
 	}
@@ -442,7 +442,7 @@ FString UDreamTraceComponent::GetDebugSummary() const
 		NeedlePanel.X, NeedlePanel.Y, CursorPanel.X, CursorPanel.Y,
 		bCompleteSent ? 1 : 0, Figure.UsedSeed, Figure.Retries, Figure.Points.Num(),
 		P0.X, P0.Y, Params.BandHalfWidthCm, Params.PerimeterCm, Figure.MaxAbsR,
-		static_cast<int32>(Figure.Motif), Figure.bClosed ? 1 : 0);
+		Figure.MotifIndex, Figure.bClosed ? 1 : 0);
 }
 
 // --- 繪製 ---

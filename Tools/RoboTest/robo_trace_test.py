@@ -190,17 +190,18 @@ class Test:
             d = self.summary()
             log("SUMMARY | " + str(self.trace().call_method("GetDebugSummary", ())))
             self.check("t1 trace active on victim client", d.get("traceActive") == 1.0, str(d))
-            # cup0 難度檔（統一 60s×v_max 1.8＝線長 108、帶半寬 0.60——user 定案
-            # 時間不隨杯數；改 TattooDotHz/筆寬會連動此值＝契約要跟著重算）
-            self.check("t1 figure matches cup0 params (60s x vmax)",
-                       abs(d.get("perim", 0) - 108.0) < 1.0 and abs(d.get("band", 0) - 0.60) < 0.01,
+            # cup0 難度檔：統一 60s×v_max 1.8＝線長 108；帶半寬=筆寬 0.30（user
+            # 定案「筆寬兩倍當帶寬」＝發夢當下從受害者 TattooNibDiameterCm 導出
+            # ——改筆寬/TattooDotHz 會連動這兩個值＝契約要跟著重算）
+            self.check("t1 figure matches cup0 params (60s x vmax; band=nib)",
+                       abs(d.get("perim", 0) - 108.0) < 1.0 and abs(d.get("band", 0) - 0.30) < 0.01,
                        f"perim={d.get('perim')} band={d.get('band')}")
             self.check("t1 figure dense enough", d.get("pts", 0) >= 150, f"pts={d.get('pts')}")
             self.check("t1 progress starts zero", abs(d.get("prog", 9)) < 0.01 and d.get("fails") == 0.0, str(d))
-            # 固定種子 42 → cup0 圖案池[0]＝櫻花（motif=1、閉合）——一筆畫圖案制的
-            # 決定性契約（seed→圖案的選圖函數改了要重對）
-            self.check("t1 forced seed picks sakura (deterministic motif)",
-                       d.get("motif") == 1.0 and d.get("closed") == 1.0,
+            # 固定種子 42 → cup0 池[(42/7)%5=1]＝Fan＝烘焙表索引 2（閉合）——
+            # 烘焙圖案制的決定性契約（選圖函數或表序改了要重對）
+            self.check("t1 forced seed picks Fan (deterministic baked motif)",
+                       d.get("motif") == 2.0 and d.get("closed") == 1.0,
                        f"motif={d.get('motif')} closed={d.get('closed')}")
             self.advance("t2_stats")
         elif s == "t2_stats":

@@ -3,57 +3,43 @@
 #include "CoreMinimal.h"
 #include "DreamTrace.generated.h"
 
-// 醉夢描圖（SPEC v4.0 定案 #49；取代醉夢圓形迷宮）——一筆畫圖案的程序化生成。
-// 圖案＝常見日式刺青標的簡化成一筆畫（user 定案 08-02 二段）；設計程序＝
-// 先定「不受干擾平均完成時間」→ 依針速 v_max 反推線長（時間是設計輸入、
-// 長度是導出量）。一組＝一個難度檔；GameMode 依罰酒杯數換檔。
-UENUM(BlueprintType)
-enum class EDreamTraceMotif : uint8
-{
-	Blob,      // 諧波閉圓（保底家族；模板自交避讓失敗時的決定性退路）
-	Sakura,    // 櫻花五瓣（閉）
-	Gourd,     // 葫蘆（閉）
-	Fuji,      // 富士山（開）
-	Kiku8,     // 菊八重瓣（閉；瓣數壓在曲率半徑 ≥2cm 的可描域內）
-	Snake,     // 蛇行流水（開）
-	Wave,      // 波浪（開）
-	Koi,       // 鯉魚（閉）
-	Raimon,    // 雷紋／迴字紋（開）
-	Kiku10     // 菊十重瓣（閉；第三杯最細緻的花環）
-};
-
+// 醉夢描圖（SPEC v4.0 定案 #49；取代醉夢圓形迷宮）——一筆畫圖案。
+// 圖案來源（v4.0a 三段、user 裁決「圖要來自現成向量圖源」）＝Twemoji（CC BY 4.0）
+// 十六式日式標的，經 Tools/AssetPrep/TraceMotifs 管線（剪影聯集＋內輪廓接駁＋
+// 三道可描性閘）烘焙為 DreamTraceMotifData.h；手雕模板全數退役（程式雕美學
+// =鐵則違規的實錘）。設計程序＝先定「不受干擾平均完成時間」（統一 60s）→
+// 依針速 v_max 導出線長；帶寬＝筆寬×2（user 定案；帶半寬=筆寬、從筆寬導出）。
 USTRUCT(BlueprintType)
 struct NICEINK_API FDreamTraceParams
 {
 	GENERATED_BODY()
 
-	// 不受干擾的目標純描時間（s）——**設計輸入的第一位**（user 定案程序：先定
-	// 時間、再由針速導出線長）。>0 時 GameMode 於發夢當下用受害者的
-	// TattooMaxSpeedCmPerSec() 算 PerimeterCm＝T×v_max 後下發（=0 直接用 PerimeterCm）。
+	// 不受干擾的目標純描時間（s）——設計輸入的第一位。>0 時 GameMode 於發夢
+	// 當下用受害者的 TattooMaxSpeedCmPerSec() 算 PerimeterCm＝T×v_max 後下發
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0", ClampMax = "180"))
-	float TargetTraceSeconds = 25.0f;
+	float TargetTraceSeconds = 60.0f;
 
-	// 線長（cm；閉合圖形＝周長、開放一筆畫＝全長）。導出量——由 TargetTraceSeconds
-	// ×針速得出；欄位保留供 config 直接覆寫（TargetTraceSeconds=0 時生效）
+	// 線長（cm）。導出量（時間×針速）；欄位保留供 config 直接覆寫（Target=0 時生效）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "20", ClampMax = "300"))
-	float PerimeterCm = 45.0f;
+	float PerimeterCm = 108.0f;
 
-	// 本難度檔的圖案池（每回合由種子選一、鏡像/微擾變化）；空＝Blob 保底
+	// 路線帶半寬（cm）＝筆寬（user 定案「筆寬的兩倍當作帶寬」＝全寬 2×筆寬）。
+	// GameMode 發夢當下用受害者 TattooNibDiameterCm 覆寫＝筆寬旋鈕改動夢自動跟
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float BandHalfWidthCm = 0.3f;
+
+	// 本難度檔的圖案池（烘焙表索引 NiceInkTraceMotifs::EIdx；每回合由種子選一、
+	// 允許鏡像的圖隨種子翻）；空＝Blob 諧波閉圓保底
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace")
-	TArray<EDreamTraceMotif> MotifPool;
+	TArray<int32> BakedPool;
 
-	// 路線帶半寬（cm）：下針中針心離中線超過此值＝越線＝重來
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0.2", ClampMax = "2.0"))
-	float BandHalfWidthCm = 0.6f;
-
-	// 輪廓諧波域（割糖餅形狀的彎曲複雜度）：r(θ)=R0(1+Σ a_k cos(kθ+φ_k))
+	// Blob 保底家族參數（烘焙表不可用時的決定性退路）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "2", ClampMax = "12"))
 	int32 HarmonicMin = 2;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "2", ClampMax = "12"))
 	int32 HarmonicMax = 4;
 
-	// 半徑相對振幅總量（Σ|a_k|；<0.5 保證 r 恆正）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0.0", ClampMax = "0.45"))
 	float WobbleAmp = 0.16f;
 
@@ -68,13 +54,13 @@ struct NICEINK_API FDreamTraceFigure
 	// 均勻弧長重採樣的中線（cm、原點＝圖心、y 向下同 canvas）。
 	// bClosed：閉合＝首尾不重複、隱含 wrap；開放一筆畫＝Points[0] 起點、Last 終點
 	TArray<FVector2D> Points;
-	// 每點累積弧長（ArcS[0]=0；TotalLen＝全長）
 	TArray<float> ArcS;
 	float TotalLen = 0.0f;
 	bool bClosed = true;
-	EDreamTraceMotif Motif = EDreamTraceMotif::Blob;
-	float MaxAbsR = 0.0f;  // 佈局用（縮放進面板）
-	int32 UsedSeed = 0;    // 自交避讓重試後實際使用的種子（決定性）
+	int32 MotifIndex = INDEX_NONE; // 烘焙表索引；INDEX_NONE＝Blob 保底
+	bool bMirrored = false;
+	float MaxAbsR = 0.0f;
+	int32 UsedSeed = 0;
 	int32 Retries = 0;
 
 	bool IsValid() const { return Points.Num() >= 8 && TotalLen > 1.0f; }
@@ -82,13 +68,11 @@ struct NICEINK_API FDreamTraceFigure
 
 struct NICEINK_API FDreamTraceGen
 {
-	// 決定性生成：同 Seed＋Params ⇒ 同圖形。內建自交避讓（帶不得自碰＝投影窗
-	// 唯一性保證）：弧距 > 3cm 的兩點歐氏距離必須 ≥ 2.6×BandHalfWidth，違反則
-	// 以決定性衍生種子重試（最多 32 次；諧波振幅逐次收斂＝必然收斂到近圓）。
+	// 決定性生成：同 Seed＋Params ⇒ 同圖形（烘焙表選圖＋鏡像；表空/失效＝Blob）
 	static void Generate(const FDreamTraceParams& Params, int32 Seed, FDreamTraceFigure& Out);
 
 	static FDreamTraceParams DefaultParamsForCup(int32 Cup);
 
-	// 離線統計（調參儀器；SPEC 待定 #2 的描圖版）：周長/重試率/最小自距分布
+	// 離線統計（調參儀器）：自距/pursuit 可描性/池覆蓋
 	static FString RunStats(const FDreamTraceParams& Params, int32 NumSeeds);
 };

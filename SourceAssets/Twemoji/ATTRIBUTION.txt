@@ -1,0 +1,13 @@
+Twemoji (https://github.com/jdecked/twemoji)
+Copyright 2020 Twitter, Inc and other contributors
+Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+REQUIRED: game credits must include the attribution above before any release
+(same rule as SourceAssets/Sauna_localyany).
+
+Usage in Nice Ink: the 16 SVGs in this folder are the source artwork for the
+dream-trace minigame's one-stroke motif routes (SPEC v4.0a). They are converted
+to polyline trace routes by Tools/AssetPrep/TraceMotifs/ (silhouette union +
+interior-contour splicing + traceability gates) and baked into
+Source/NiceInk/Private/DreamTraceMotifData.h. The in-game routes are derived
+works of these graphics.
