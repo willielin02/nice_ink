@@ -26,9 +26,18 @@ class NICEINK_API UDreamTraceComponent : public UActorComponent
 public:
 	UDreamTraceComponent();
 
-	// 游標靈敏度（cm／滑鼠增量單位）——稿筆實測 0.37cm/單位量級的同域值
+	// 視覺/手感同源三定律（08-02 user 定案「視覺速度和手感都和割線筆一樣」）：
+	// ①放大率同源＝夢的 px/cm 用割線視圖公式（FOV 垂直半角×名義眼距）算——
+	//   同一公分在螢幕上一樣大、1.8cm/s 的針視覺速度與貼膚割線恆等；
+	// ②畫面歸針＝針釘在螢幕中心、圖在下面滑（割線的相機定律原樣進夢）；
+	// ③游標增益同源＝cm/滑鼠單位從 DrawAimSensitivity() 換算，非獨立旋鈕。
+	// 名義眼距（cm）＝割線鎖定的眼-膚距離帶（69~86）取中
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
-	float TraceCursorSensCm = 0.3f;
+	float NominalDreamEyeDistCm = 75.0f;
+
+	// 口味微調（乘在同源增益上；1.0=與割線恆等）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	float TraceCursorGain = 1.0f;
 
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 

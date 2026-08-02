@@ -193,6 +193,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedVictimSeat = -1;
 
+	// robo 測試：指定描圖種子（0＝隨機，正式行為）——圖案池由種子選圖，
+	// 固定種子＝固定圖案＝契約零 flake
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
+	int32 DebugForcedTraceSeed = 0;
+
 private:
 	FTimerHandle PhaseTimerHandle;
 	FTimerHandle AutoStartTimerHandle;

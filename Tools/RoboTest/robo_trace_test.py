@@ -69,7 +69,7 @@ def local_world_of(pid):
 def parse_summary(s):
     d = {}
     for k in ("traceActive", "pen", "curS", "prog", "total", "fails", "shake",
-              "sent", "seed", "retries", "pts", "band", "perim", "maxR"):
+              "sent", "seed", "retries", "pts", "band", "perim", "maxR", "motif", "closed"):
         m = re.search(r"\b" + k + r"=(-?[\d.]+)", s)
         if m:
             d[k] = float(m.group(1))
@@ -149,8 +149,11 @@ class Test:
         elif s == "wait_pie":
             server = get_world("UEDPIE_0")
             if server and unreal.GameplayStatics.get_game_mode(server):
-                unreal.GameplayStatics.get_game_mode(server).set_editor_property(
-                    "DebugForcedVictimSeat", 1)  # 遠端受害者＝RPC 走真網路
+                gm = unreal.GameplayStatics.get_game_mode(server)
+                gm.set_editor_property("DebugForcedVictimSeat", 1)  # 遠端受害者＝RPC 走真網路
+                # 固定種子＝固定圖案（42/7=6, 6%3=0 → cup0 池[0]=櫻花・閉合）——
+                # 圖案池隨機下 autopilot 契約零 flake
+                gm.set_editor_property("DebugForcedTraceSeed", 42)
                 self.advance("wait_drawing")
             elif self.elapsed() > 60.0:
                 log("FAIL: PIE never started")
@@ -187,12 +190,18 @@ class Test:
             d = self.summary()
             log("SUMMARY | " + str(self.trace().call_method("GetDebugSummary", ())))
             self.check("t1 trace active on victim client", d.get("traceActive") == 1.0, str(d))
-            # cup0 難度檔（DefaultParamsForCup(0)：周長 45、帶半寬 0.60）
-            self.check("t1 figure matches cup0 params",
-                       abs(d.get("perim", 0) - 45.0) < 0.5 and abs(d.get("band", 0) - 0.60) < 0.01,
+            # cup0 難度檔（統一 60s×v_max 1.8＝線長 108、帶半寬 0.60——user 定案
+            # 時間不隨杯數；改 TattooDotHz/筆寬會連動此值＝契約要跟著重算）
+            self.check("t1 figure matches cup0 params (60s x vmax)",
+                       abs(d.get("perim", 0) - 108.0) < 1.0 and abs(d.get("band", 0) - 0.60) < 0.01,
                        f"perim={d.get('perim')} band={d.get('band')}")
             self.check("t1 figure dense enough", d.get("pts", 0) >= 150, f"pts={d.get('pts')}")
             self.check("t1 progress starts zero", abs(d.get("prog", 9)) < 0.01 and d.get("fails") == 0.0, str(d))
+            # 固定種子 42 → cup0 圖案池[0]＝櫻花（motif=1、閉合）——一筆畫圖案制的
+            # 決定性契約（seed→圖案的選圖函數改了要重對）
+            self.check("t1 forced seed picks sakura (deterministic motif)",
+                       d.get("motif") == 1.0 and d.get("closed") == 1.0,
+                       f"motif={d.get('motif')} closed={d.get('closed')}")
             self.advance("t2_stats")
         elif s == "t2_stats":
             gm = self.server_gm()
@@ -202,11 +211,20 @@ class Test:
                 log(f"STATS cup{cup} | {rep}")
                 m = re.search(r"minSelfDist=([\d.]+) \(need ([\d.]+)\)", rep)
                 r = re.search(r"retriedFigs=(\d+)", rep)
+                b = re.search(r"blobFallback=(\d+)", rep)
+                v = re.search(r"autoDevViol=(\d+)", rep)
+                mo = re.search(r"motifs\[([^\]]*)\]", rep)
                 ok = m and float(m.group(1)) >= float(m.group(2))
-                # 重試率 sane：<40%（重試是機制不是病；太高＝諧波域和帶寬打架）
+                # 重試率 sane：<40%（重試是機制不是病；太高＝模板和帶寬打架）；
+                # 保底 Blob 退路零使用＝全部日式標的模板自己站得住；
+                # pursuit 可描性模擬零超帶＝每個樣本都描得完（曲率鐵閘）
                 ok = ok and r and int(r.group(1)) < 80
+                ok = ok and b and int(b.group(1)) == 0
+                ok = ok and v and int(v.group(1)) == 0
+                # 圖案池三員都出場（種子選圖的覆蓋）
+                ok = ok and mo and len([t for t in mo.group(1).split() if t]) >= 3
                 ok_all = ok_all and bool(ok)
-            self.check("t2 gen stats: self-distance & retry sane (3 cups x200)", ok_all)
+            self.check("t2 gen stats: self-dist/retry/no-fallback/pool coverage (3 cups x200)", ok_all)
             self.advance("t3_privacy")
         elif s == "t3_privacy":
             srv = parse_summary(str(self.server_victim().get_editor_property("DreamTrace")
@@ -232,6 +250,7 @@ class Test:
                        f"gained={gained:.2f}")
             self.check("t4 autopilot stays in band (no fails)", d.get("fails") == 0.0, str(d))
             self.cash0 = self.non_victim_cash_sum()
+            self.fails_at_shake = d.get("fails", 0)
             self.server_gm().call_method("DebugRoboShake", ())
             self.advance("t5_shake")
         elif s == "t5_shake":
@@ -242,7 +261,10 @@ class Test:
             self.check("t5 shake reaches victim dream", d.get("shake") == 1.0, str(d))
             self.check("t5 attacker paid 500", cash == self.cash0 - 500,
                        f"sum={cash} was={self.cash0}")
-            self.check("t5 pen-up during shake is safe (no fails)", d.get("fails") == 0.0, str(d))
+            # 抬針中搖晃＝安全（fails 相對搖晃前不增——用 delta 不用絕對值：
+            # 前段任何 fail 不得污染本契約）
+            self.check("t5 pen-up during shake is safe (no new fails)",
+                       d.get("fails", 0) == self.fails_at_shake, str(d))
             self.server_gm().call_method("DebugRoboShake", ())  # 冷卻內再砸
             self.advance("t5_cooldown")
         elif s == "t5_cooldown":
@@ -271,13 +293,14 @@ class Test:
                        abs(d.get("prog", 9)) < 0.5 and s_from_start < 0.5,
                        f"prog={d.get('prog')} sFromStart={s_from_start:.2f}")
             self.fails_before_run = d.get("fails", 0)
-            # 描完全程：45cm / 1.8cm/s ≈ 25s（+失敗重來的餘量）
-            self.trace().call_method("DebugAutopilot", (40.0,))
+            # 描完全程：108cm / 1.8cm/s ≈ 60 遊戲秒（統一 60s 定案；+重來餘量與
+            # 遊戲時間膨脹→autopilot 90 遊戲秒、牆鐘上限 150s）
+            self.trace().call_method("DebugAutopilot", (90.0,))
             self.advance("t7_complete")
         elif s == "t7_complete":
             d = self.summary()
             if d.get("sent") != 1.0:
-                if self.elapsed() > 45.0:
+                if self.elapsed() > 150.0:
                     self.check("t7 full trace completes", False, f"timeout | {d}")
                     self.finish()
                 return

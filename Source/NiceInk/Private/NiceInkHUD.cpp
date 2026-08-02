@@ -793,24 +793,25 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	UDreamMazeComponent* Maze = MyChar->DreamMaze;
 	if (Trace && Trace->IsTraceActive())
 	{
-		const FVector2D PanelCenter(W * 0.5f, H * 0.46f);
-		const float PanelRadius = FMath::Min(W, H) * 0.30f;
-		Trace->DrawTracePanel(Canvas, PanelCenter, PanelRadius);
+		// 畫面歸針制（08-02 手感同源三定律）：針釘螢幕正中、圖在下面滑——
+		// 放大率/游標增益與割線視圖恆等，全螢幕即是夢（無縮小盤）
+		const FVector2D PanelCenter(W * 0.5f, H * 0.5f);
+		Trace->DrawTracePanel(Canvas, PanelCenter, FMath::Min(W, H) * 0.5f);
 
 		// 進度＋事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）
 		DrawTok(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f)),
-			PanelCenter.X, PanelCenter.Y + PanelRadius + 14.0f * UiScale, ETextTier::Body,
+			W * 0.5f, H * 0.86f, ETextTier::Body,
 			NiHudColor::PaperDim, EHAlign::Center, false);
 		if (Trace->IsShakeActive())
 		{
 			DrawTok(FString::Printf(TEXT("%s SHAKES YOUR DREAM !"), *Trace->GetShakeAttackerName().ToUpper()),
-				PanelCenter.X, PanelCenter.Y - PanelRadius - 44.0f * UiScale, ETextTier::Display,
+				W * 0.5f, H * 0.16f, ETextTier::Display,
 				NiHudColor::Red, EHAlign::Center, true);
 		}
 		else if (Trace->IsFailFlashing())
 		{
 			DrawTok(TEXT("SLIPPED — BACK TO THE START"),
-				PanelCenter.X, PanelCenter.Y - PanelRadius - 40.0f * UiScale, ETextTier::Title,
+				W * 0.5f, H * 0.16f, ETextTier::Title,
 				NiHudColor::Red, EHAlign::Center, true);
 		}
 		DrawBottomHint(TEXT("hold LMB — trace the line to wake"), NiHudColor::Lavender);

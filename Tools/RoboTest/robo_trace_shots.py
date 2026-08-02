@@ -91,8 +91,11 @@ class Shots:
         elif s == "wait_pie":
             server = get_world("UEDPIE_0")
             if server and unreal.GameplayStatics.get_game_mode(server):
-                unreal.GameplayStatics.get_game_mode(server).set_editor_property(
-                    "DebugForcedVictimSeat", 0)  # 主機＝受害者＝停靠視口
+                gm = unreal.GameplayStatics.get_game_mode(server)
+                gm.set_editor_property("DebugForcedVictimSeat", 0)  # 主機＝受害者＝停靠視口
+                # 固定種子 98（98/7=14, 14%3=2 → cup0 池[2]＝富士山・開放）——
+                # 開放一筆畫的整合驗證（autopilot 沿開放路徑）＋圖案外觀自查
+                gm.set_editor_property("DebugForcedTraceSeed", 98)
                 self.advance("wait_drawing")
             elif self.elapsed() > 60.0:
                 log("FAIL: PIE never started")
@@ -113,6 +116,9 @@ class Shots:
         elif s == "shot_tracing":
             if self.elapsed() < 6.0:
                 return
+            # 開放路徑整合斷言（順帶）：autopilot 沿開放圖案有進度且零失敗
+            summary = str(self.trace().call_method("GetDebugSummary", ()))
+            log("OPEN-PATH MID | " + summary)
             shot(get_world("UEDPIE_0"), "trace_tracing")
             self.advance("shake")
         elif s == "shake":

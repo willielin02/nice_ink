@@ -526,14 +526,23 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 		Victim->ServerSetAsleep(true, GetVictimLieTransform());
 
 		// 醉夢描圖（v4.0 定案 #49；迷宮退役）：難度檔＝罰酒杯數（酒越深夢越深＝
-		// 路線更長更彎帶更窄）；種子每回合新開。只發受害者——作畫者看不到夢的進度。
+		// 時間更長帶更窄、圖案池更複雜）；種子每回合新開。只發受害者。
 		const ANiceInkPlayerState* VictimPS = FindNIPlayerState(VictimPlayerId);
 		const int32 Cups = VictimPS ? VictimPS->PenaltyCups : 0;
-		const FDreamTraceParams TraceParams = TraceParamsPerCup.Num() > 0
+		FDreamTraceParams TraceParams = TraceParamsPerCup.Num() > 0
 			? TraceParamsPerCup[FMath::Clamp(Cups, 0, TraceParamsPerCup.Num() - 1)]
 			: FDreamTraceGen::DefaultParamsForCup(Cups);
 
-		const int32 TraceSeed = FMath::RandRange(1, MAX_int32 - 1);
+		// user 定案設計程序（08-02 二段）：先定「不受干擾平均完成時間」→依針速
+		// 導出線長。發夢當下用受害者實際 v_max 換算＝改割線速度旋鈕時夢自動跟
+		if (TraceParams.TargetTraceSeconds > 0.0f)
+		{
+			TraceParams.PerimeterCm = TraceParams.TargetTraceSeconds * Victim->TattooMaxSpeedCmPerSec();
+		}
+
+		const int32 TraceSeed = DebugForcedTraceSeed > 0
+			? DebugForcedTraceSeed
+			: FMath::RandRange(1, MAX_int32 - 1);
 		Victim->ClientStartTrace(TraceSeed, TraceParams);
 	}
 

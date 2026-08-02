@@ -76,35 +76,6 @@ namespace
 				Col, Col, Col);
 		}
 	}
-
-	// 羽化裙（canvas 三角形零 AA——輪廓平滑一律靠自畫羽化裙）：
-	// 沿閉合折線外緣鋪一圈由實色漸到透明的裙 quad
-	void AddFeatherRing(TArray<FCanvasUVTri>& Out, const TArray<FVector2D>& Pts, float RadiusPx,
-		float SkirtPx, const FLinearColor& Col)
-	{
-		const FLinearColor Clear = Col.CopyWithNewOpacity(0.0f);
-		for (int32 i = 0; i < Pts.Num(); ++i)
-		{
-			const FVector2D& A = Pts[i];
-			const FVector2D& B = Pts[(i + 1) % Pts.Num()];
-			FVector2D Dir = B - A;
-			if (!Dir.Normalize())
-			{
-				continue;
-			}
-			const FVector2D N(-Dir.Y, Dir.X);
-			// 兩側各一條裙（帶狀幾何的左右輪廓）
-			for (float Side : { 1.0f, -1.0f })
-			{
-				const FVector2D A0 = A + N * (RadiusPx * Side);
-				const FVector2D B0 = B + N * (RadiusPx * Side);
-				const FVector2D A1 = A + N * ((RadiusPx + SkirtPx) * Side);
-				const FVector2D B1 = B + N * ((RadiusPx + SkirtPx) * Side);
-				AddTri(Out, A0, B0, B1, Col, Col, Clear);
-				AddTri(Out, A0, B1, A1, Col, Clear, Clear);
-			}
-		}
-	}
 }
 
 UDreamTraceComponent::UDreamTraceComponent()
@@ -221,14 +192,22 @@ FVector2D UDreamTraceComponent::RoutePointAtArc(float S) const
 	{
 		return FVector2D::ZeroVector;
 	}
-	float Wrapped = FMath::Fmod(S, Figure.TotalLen);
-	if (Wrapped < 0.0f)
+	float Wrapped;
+	if (Figure.bClosed)
 	{
-		Wrapped += Figure.TotalLen;
+		Wrapped = FMath::Fmod(S, Figure.TotalLen);
+		if (Wrapped < 0.0f)
+		{
+			Wrapped += Figure.TotalLen;
+		}
+	}
+	else
+	{
+		Wrapped = FMath::Clamp(S, 0.0f, Figure.TotalLen); // 開放一筆畫：起終點鉗位
 	}
 	// 均勻步長＝索引可直接估算
 	const float Step = Figure.TotalLen / Figure.Points.Num();
-	const int32 I = FMath::Clamp(static_cast<int32>(Wrapped / Step), 0, Figure.Points.Num() - 1);
+	const int32 I = FMath::Clamp(static_cast<int32>(Wrapped / Step), 0, Figure.Points.Num() - (Figure.bClosed ? 1 : 2));
 	const int32 J = (I + 1) % Figure.Points.Num();
 	const float S0 = Figure.ArcS[I];
 	float SegLen = (J == 0 ? Figure.TotalLen : Figure.ArcS[J]) - S0;
@@ -249,7 +228,10 @@ float UDreamTraceComponent::ProjectNeedle(const FVector2D& NeedleFig)
 
 	for (int32 d = -Window; d <= Window; ++d)
 	{
-		const int32 I = ((CurIdx + d) % N + N) % N;
+		// 閉合＝環上取窗；開放＝鉗在 [0, N-2]（最後一段止於終點）
+		const int32 I = Figure.bClosed
+			? ((CurIdx + d) % N + N) % N
+			: FMath::Clamp(CurIdx + d, 0, N - 2);
 		const int32 J = (I + 1) % N;
 		const FVector2D& A = Figure.Points[I];
 		const FVector2D& B = Figure.Points[J];
@@ -269,15 +251,18 @@ float UDreamTraceComponent::ProjectNeedle(const FVector2D& NeedleFig)
 		}
 	}
 
-	// 帶號進度累積：wrap 域的最短差（窗 ±3cm ≪ 周長，唯一）
+	// 帶號進度累積：閉合走 wrap 域最短差（窗 ±3cm ≪ 周長，唯一）；開放直接差
 	float DeltaS = BestS - CurS;
-	if (DeltaS > Figure.TotalLen * 0.5f)
+	if (Figure.bClosed)
 	{
-		DeltaS -= Figure.TotalLen;
-	}
-	else if (DeltaS < -Figure.TotalLen * 0.5f)
-	{
-		DeltaS += Figure.TotalLen;
+		if (DeltaS > Figure.TotalLen * 0.5f)
+		{
+			DeltaS -= Figure.TotalLen;
+		}
+		else if (DeltaS < -Figure.TotalLen * 0.5f)
+		{
+			DeltaS += Figure.TotalLen;
+		}
 	}
 	ProgressS += DeltaS;
 	CurIdx = BestI;
@@ -332,10 +317,12 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	const FVector2D Offset = ShakeOffsetCm();
 
 	// --- 輸入：滑鼠→游標（純積分）；LMB＝下針 ---
+	// 增益同源（定律③）：割線的角增益 × 名義眼距＝cm/單位——與貼膚割線同手感
+	const float SensCm = C->DrawAimSensitivity() * (PI / 180.0f) * NominalDreamEyeDistCm * TraceCursorGain;
 	float MX = 0.0f, MY = 0.0f;
 	PC->GetInputMouseDelta(MX, MY);
-	CursorPanel.X += MX * TraceCursorSensCm;
-	CursorPanel.Y -= MY * TraceCursorSensCm; // canvas y 向下
+	CursorPanel.X += MX * SensCm;
+	CursorPanel.Y -= MY * SensCm; // canvas y 向下
 
 	bPrevPenDown = bPenDown;
 	bPenDown = PC->IsInputKeyDown(EKeys::LeftMouseButton) || bDebugPaintHeld;
@@ -344,7 +331,9 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	if (AutopilotRemaining > 0.0f)
 	{
 		AutopilotRemaining -= DeltaTime;
-		const float Ahead = FMath::Min(C->TattooChaseLeashCm * 0.8f, 2.0f);
+		// 曲率安全前瞻 0.9cm：模板谷曲率半徑 ≥2cm 下弦垂 ≈0.05cm；首版 2cm 前瞻
+		// 在花瓣谷（ρ≈0.9cm 的舊振幅）切內側出帶＝t4/t7 事故——前瞻是曲率的函數
+		const float Ahead = 0.9f;
 		CursorPanel = RoutePointAtArc(CurS + Ahead) + Offset;
 		bPenDown = true;
 	}
@@ -366,10 +355,13 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		CursorPanel = NeedlePanel;
 	}
 
-	// 游標鉗位：盤面邏輯域（防跑飛）；皮繩鉗＝游標最多跑在針前皮繩長
-	const float Bound = Figure.MaxAbsR + 4.0f;
-	CursorPanel.X = FMath::Clamp(CursorPanel.X, -Bound, Bound);
-	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, -Bound, Bound);
+	// 游標鉗位：畫面歸針制下游標繞著針活動——鉗在針周（可見窗半高量級）防跑飛；
+	// 皮繩鉗＝游標最多跑在針前皮繩長
+	const FVector2D FromNeedle = CursorPanel - NeedlePanel;
+	if (FromNeedle.Size() > 12.0f)
+	{
+		CursorPanel = NeedlePanel + FromNeedle.GetSafeNormal() * 12.0f;
+	}
 	const float LeashCm = FMath::Max(C->TattooChaseLeashCm, 0.5f);
 	const FVector2D ToCursor = CursorPanel - NeedlePanel;
 	if (bPenDown && ToCursor.Size() > LeashCm)
@@ -404,8 +396,11 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 			InkFig.Add(NeedleFig);
 		}
 
-		// 描完＝閉合一整圈（帶號累積弧長；方向自由）
-		if (FMath::Abs(ProgressS) >= Figure.TotalLen - CompleteSlackCm)
+		// 描完：閉合＝繞完一整圈（帶號累積、方向自由）；開放＝走到終點
+		const bool bDone = Figure.bClosed
+			? FMath::Abs(ProgressS) >= Figure.TotalLen - CompleteSlackCm
+			: CurS >= Figure.TotalLen - CompleteSlackCm;
+		if (bDone)
 		{
 			bPendingComplete = true;
 		}
@@ -443,12 +438,13 @@ FString UDreamTraceComponent::GetDebugSummary() const
 	return FString::Printf(
 		TEXT("traceActive=%d pen=%d curS=%.2f prog=%.2f total=%.2f fails=%d shake=%d ")
 		TEXT("needle=(%.2f,%.2f) cursor=(%.2f,%.2f) sent=%d seed=%d retries=%d pts=%d ")
-		TEXT("p0=(%.3f,%.3f) band=%.2f perim=%.1f maxR=%.2f"),
+		TEXT("p0=(%.3f,%.3f) band=%.2f perim=%.1f maxR=%.2f motif=%d closed=%d"),
 		bActive ? 1 : 0, bPenDown ? 1 : 0, CurS, ProgressS, Figure.TotalLen,
 		FailCount, IsShakeActive() ? 1 : 0,
 		NeedlePanel.X, NeedlePanel.Y, CursorPanel.X, CursorPanel.Y,
 		bCompleteSent ? 1 : 0, Figure.UsedSeed, Figure.Retries, Figure.Points.Num(),
-		P0.X, P0.Y, Params.BandHalfWidthCm, Params.PerimeterCm, Figure.MaxAbsR);
+		P0.X, P0.Y, Params.BandHalfWidthCm, Params.PerimeterCm, Figure.MaxAbsR,
+		static_cast<int32>(Figure.Motif), Figure.bClosed ? 1 : 0);
 }
 
 // --- 繪製 ---
@@ -460,71 +456,150 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& Cent
 		return;
 	}
 
-	const float Scale = (RadiusPx * 0.86f) / FMath::Max(Figure.MaxAbsR + Params.BandHalfWidthCm + 1.5f, 1.0f);
+	// 放大率同源（定律①）：px/cm＝割線視圖公式——引擎維持垂直 FOV（fovaxis 實錘：
+	// halfV=atan(tan(FOV/2)×9/16) 恆定），可見高度=2×眼距×tan(halfV)。
+	// 同一公分在螢幕上和貼膚割線一樣大＝1.8cm/s 的視覺速度恆等。
+	const ANiceInkCharacter* C = OwnerChar();
+	const float HalfVRad = FMath::Atan(
+		FMath::Tan(FMath::DegreesToRadians((C ? C->LeanLockedFov : 36.0f) * 0.5f)) * (9.0f / 16.0f));
+	const float Scale = (Canvas->ClipY * 0.5f) /
+		FMath::Max(NominalDreamEyeDistCm * FMath::Tan(HalfVRad), 1.0f);
+
+	// 畫面歸針（定律②）：針釘在 CenterPx（螢幕中心）、圖形相對針平移
 	const FVector2D OffsetCm = ShakeOffsetCm();
-	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + Cm * Scale; };
-	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm + OffsetCm) * Scale; };
+	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm - NeedlePanel) * Scale; };
+	auto FigToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm + OffsetCm - NeedlePanel) * Scale; };
 
-	// 1) 底盤（近黑圓＋羽化緣）
+	// 螢幕外裁剪（整張圖遠大於視窗——canvas 不裁、自己裁）
+	const float CullMargin = 80.0f;
+	auto OnScreen = [&](const FVector2D& Px)
 	{
-		TArray<FCanvasUVTri> Tris;
-		AddDisc(Tris, CenterPx, RadiusPx, TraceDiscColor, 48);
-		Canvas->K2_DrawTriangle(nullptr, Tris);
-	}
+		return Px.X > -CullMargin && Px.X < Canvas->ClipX + CullMargin &&
+			Px.Y > -CullMargin && Px.Y < Canvas->ClipY + CullMargin;
+	};
 
-	// 2) 路線帶（圖形空間；閉合粗帶＝逐段 quad＋逐點圓盤——同色不透明疊蓋無縫）
+	// 2) 路線帶（圖形空間；粗帶＝逐段 quad＋逐點圓盤——同色不透明疊蓋無縫；
+	//    開放一筆畫不封口、兩端圓帽由端點圓盤天然提供）
 	//    渲染抽點：0.25cm 全點畫帶 quad 太密——隔點取樣（視覺連續由圓盤補）
 	{
 		const float BandPx = Params.BandHalfWidthCm * Scale;
 		TArray<FVector2D> Px;
-		Px.Reserve(Figure.Points.Num() / 2 + 1);
+		Px.Reserve(Figure.Points.Num() / 2 + 2);
 		for (int32 i = 0; i < Figure.Points.Num(); i += 2)
 		{
 			Px.Add(FigToPx(Figure.Points[i]));
 		}
+		if (!Figure.bClosed)
+		{
+			Px.Add(FigToPx(Figure.Points.Last())); // 終點必入列（抽點不可吃掉端帽）
+		}
+		const int32 SegN = Figure.bClosed ? Px.Num() : Px.Num() - 1;
+		auto SegVisible = [&](int32 i)
+		{
+			return OnScreen(Px[i]) || OnScreen(Px[(i + 1) % Px.Num()]);
+		};
 
 		TArray<FCanvasUVTri> Tris;
 		for (int32 i = 0; i < Px.Num(); ++i)
 		{
-			AddQuad(Tris, Px[i], Px[(i + 1) % Px.Num()], BandPx, TraceBandFill);
-			AddDisc(Tris, Px[i], BandPx, TraceBandFill, 8);
+			if (i < SegN && SegVisible(i))
+			{
+				AddQuad(Tris, Px[i], Px[(i + 1) % Px.Num()], BandPx, TraceBandFill);
+			}
+			if (OnScreen(Px[i]))
+			{
+				AddDisc(Tris, Px[i], BandPx, TraceBandFill, 8);
+			}
 		}
 		Canvas->K2_DrawTriangle(nullptr, Tris);
 
-		// 帶輪廓羽化裙（三角形零 AA——自畫 ~1.5px 漸層裙）
-		TArray<FCanvasUVTri> Skirt;
-		AddFeatherRing(Skirt, Px, BandPx, 1.5f, TraceBandFill);
-		Canvas->K2_DrawTriangle(nullptr, Skirt);
+		// 帶輪廓羽化裙（三角形零 AA——自畫 ~1.5px 漸層裙；逐段可見才鋪）
+		{
+			const FLinearColor Clear = TraceBandFill.CopyWithNewOpacity(0.0f);
+			TArray<FCanvasUVTri> Skirt;
+			for (int32 i = 0; i < SegN; ++i)
+			{
+				if (!SegVisible(i))
+				{
+					continue;
+				}
+				const FVector2D& A = Px[i];
+				const FVector2D& B = Px[(i + 1) % Px.Num()];
+				FVector2D Dir = B - A;
+				if (!Dir.Normalize())
+				{
+					continue;
+				}
+				const FVector2D N(-Dir.Y, Dir.X);
+				for (float Side : { 1.0f, -1.0f })
+				{
+					const FVector2D A0 = A + N * (BandPx * Side);
+					const FVector2D B0 = B + N * (BandPx * Side);
+					const FVector2D A1 = A + N * ((BandPx + 1.5f) * Side);
+					const FVector2D B1 = B + N * ((BandPx + 1.5f) * Side);
+					AddTri(Skirt, A0, B0, B1, TraceBandFill, TraceBandFill, Clear);
+					AddTri(Skirt, A0, B1, A1, TraceBandFill, Clear, Clear);
+				}
+			}
+			Canvas->K2_DrawTriangle(nullptr, Skirt);
+		}
 
 		// 中線提示（細、暗一階——「沿這條描」的讀點）
 		TArray<FCanvasUVTri> Mid;
 		for (int32 i = 0; i < Px.Num(); ++i)
 		{
-			AddQuad(Mid, Px[i], Px[(i + 1) % Px.Num()], 1.0f, TraceBandEdge);
-			AddDisc(Mid, Px[i], 1.0f, TraceBandEdge, 6);
+			if (i < SegN && SegVisible(i))
+			{
+				AddQuad(Mid, Px[i], Px[(i + 1) % Px.Num()], 1.0f, TraceBandEdge);
+			}
+			if (OnScreen(Px[i]))
+			{
+				AddDisc(Mid, Px[i], 1.0f, TraceBandEdge, 6);
+			}
 		}
 		Canvas->K2_DrawTriangle(nullptr, Mid);
 	}
 
-	// 3) 已描的線（圖形空間＝跟著圖搖；亮色、蓋在帶上）
+	// 3) 已描的線（圖形空間＝跟著圖搖；亮色、蓋在帶上；螢幕外裁剪）
 	if (InkFig.Num() >= 1)
 	{
 		TArray<FCanvasUVTri> Tris;
 		for (int32 i = 0; i + 1 < InkFig.Num(); ++i)
 		{
-			AddQuad(Tris, FigToPx(InkFig[i]), FigToPx(InkFig[i + 1]), 2.2f, TraceInkColor);
-			AddDisc(Tris, FigToPx(InkFig[i]), 2.2f, TraceInkColor, 8);
+			const FVector2D A = FigToPx(InkFig[i]);
+			const FVector2D B = FigToPx(InkFig[i + 1]);
+			if (!OnScreen(A) && !OnScreen(B))
+			{
+				continue;
+			}
+			AddQuad(Tris, A, B, 2.2f, TraceInkColor);
+			AddDisc(Tris, A, 2.2f, TraceInkColor, 8);
 		}
 		AddDisc(Tris, FigToPx(InkFig.Last()), 2.2f, TraceInkColor, 8);
 		Canvas->K2_DrawTriangle(nullptr, Tris);
 	}
 
-	// 4) 起點記號（金圈）
+	// 4) 起點記號（金圈）；開放一筆畫再加終點記號（實心金點——「描到這裡」）
 	{
 		TArray<FCanvasUVTri> Tris;
-		AddDisc(Tris, FigToPx(Figure.Points[0]), 6.0f, TraceStartColor, 12);
-		AddDisc(Tris, FigToPx(Figure.Points[0]), 3.2f, TraceDiscColor, 10);
-		Canvas->K2_DrawTriangle(nullptr, Tris);
+		const FVector2D StartPx = FigToPx(Figure.Points[0]);
+		if (OnScreen(StartPx))
+		{
+			AddDisc(Tris, StartPx, 6.0f, TraceStartColor, 12);
+			AddDisc(Tris, StartPx, 3.2f, TraceDiscColor, 10);
+		}
+		if (!Figure.bClosed)
+		{
+			const FVector2D EndPx = FigToPx(Figure.Points.Last());
+			if (OnScreen(EndPx))
+			{
+				AddDisc(Tris, EndPx, 5.0f, TraceStartColor, 12);
+			}
+		}
+		if (Tris.Num() > 0)
+		{
+			Canvas->K2_DrawTriangle(nullptr, Tris);
+		}
 	}
 
 	// 5) 針（盤面空間＝搖晃時螢幕上不動）＋游標十字
@@ -537,26 +612,26 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& Cent
 		Canvas->K2_DrawTriangle(nullptr, Tris);
 	}
 
-	// 6) 失敗紅閃（越線＝重來的當場回饋）：盤緣紅環＋帶染紅——不用頂點 alpha
-	// 蓋整盤（canvas 三角形的 alpha 混合路徑不可信＝首輪截圖自查抓到不透明
-	// 大紅餅蓋掉整張圖；不透明色向底色 lerp＝零混合依賴的淡出）
+	// 6) 失敗紅閃（越線＝重來的當場回饋）：螢幕邊框紅框——不用頂點 alpha 蓋盤
+	//（canvas 三角形 alpha 混合路徑不可信＝首輪截圖自查抓到不透明大紅餅；
+	// 不透明色向底色 lerp＝零混合依賴的淡出）
 	if (IsFailFlashing())
 	{
 		const float K = FMath::Clamp((FailFlashUntil - Now()) / FailFlashSec, 0.0f, 1.0f);
-		const FLinearColor RingCol = FMath::Lerp(TraceDiscColor, TraceFailColor, K * 0.9f);
+		const FLinearColor FrameCol = FMath::Lerp(TraceDiscColor, TraceFailColor, K * 0.9f);
+		const float W = Canvas->ClipX;
+		const float H = Canvas->ClipY;
+		const float T = 8.0f; // 框厚 px
 		TArray<FCanvasUVTri> Tris;
-		const int32 Segs = 48;
-		const float R0 = RadiusPx - 7.0f;
-		const float R1 = RadiusPx;
-		for (int32 i = 0; i < Segs; ++i)
+		auto AddRect = [&](const FVector2D& TL, const FVector2D& BR)
 		{
-			const float T0 = 2.0f * PI * i / Segs;
-			const float T1 = 2.0f * PI * (i + 1) / Segs;
-			const FVector2D D0(FMath::Cos(T0), FMath::Sin(T0));
-			const FVector2D D1(FMath::Cos(T1), FMath::Sin(T1));
-			AddTri(Tris, CenterPx + D0 * R0, CenterPx + D0 * R1, CenterPx + D1 * R1, RingCol, RingCol, RingCol);
-			AddTri(Tris, CenterPx + D0 * R0, CenterPx + D1 * R1, CenterPx + D1 * R0, RingCol, RingCol, RingCol);
-		}
+			AddTri(Tris, TL, FVector2D(BR.X, TL.Y), BR, FrameCol, FrameCol, FrameCol);
+			AddTri(Tris, TL, BR, FVector2D(TL.X, BR.Y), FrameCol, FrameCol, FrameCol);
+		};
+		AddRect(FVector2D(0, 0), FVector2D(W, T));
+		AddRect(FVector2D(0, H - T), FVector2D(W, H));
+		AddRect(FVector2D(0, T), FVector2D(T, H - T));
+		AddRect(FVector2D(W - T, T), FVector2D(W, H - T));
 		Canvas->K2_DrawTriangle(nullptr, Tris);
 	}
 }

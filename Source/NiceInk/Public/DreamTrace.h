@@ -3,18 +3,44 @@
 #include "CoreMinimal.h"
 #include "DreamTrace.generated.h"
 
-// 醉夢描圖（SPEC v4.0 定案 #49；取代醉夢圓形迷宮）——割糖餅圖形的程序化生成。
-// 一組＝一個難度檔；GameMode 依受害者罰酒杯數換檔（TraceParamsPerCup[0..2]，
-// 酒越深夢越深：路線更長、更彎、帶更窄）。
+// 醉夢描圖（SPEC v4.0 定案 #49；取代醉夢圓形迷宮）——一筆畫圖案的程序化生成。
+// 圖案＝常見日式刺青標的簡化成一筆畫（user 定案 08-02 二段）；設計程序＝
+// 先定「不受干擾平均完成時間」→ 依針速 v_max 反推線長（時間是設計輸入、
+// 長度是導出量）。一組＝一個難度檔；GameMode 依罰酒杯數換檔。
+UENUM(BlueprintType)
+enum class EDreamTraceMotif : uint8
+{
+	Blob,      // 諧波閉圓（保底家族；模板自交避讓失敗時的決定性退路）
+	Sakura,    // 櫻花五瓣（閉）
+	Gourd,     // 葫蘆（閉）
+	Fuji,      // 富士山（開）
+	Kiku8,     // 菊八重瓣（閉；瓣數壓在曲率半徑 ≥2cm 的可描域內）
+	Snake,     // 蛇行流水（開）
+	Wave,      // 波浪（開）
+	Koi,       // 鯉魚（閉）
+	Raimon,    // 雷紋／迴字紋（開）
+	Kiku10     // 菊十重瓣（閉；第三杯最細緻的花環）
+};
+
 USTRUCT(BlueprintType)
 struct NICEINK_API FDreamTraceParams
 {
 	GENERATED_BODY()
 
-	// 路線周長（cm；盤面公分＝與割線 v_max 同單位——回合時長的主旋鈕：
-	// 純描時間 ≈ 周長 ÷ v_max（1.8cm/s），加失敗/搖晃後即回合長度）
+	// 不受干擾的目標純描時間（s）——**設計輸入的第一位**（user 定案程序：先定
+	// 時間、再由針速導出線長）。>0 時 GameMode 於發夢當下用受害者的
+	// TattooMaxSpeedCmPerSec() 算 PerimeterCm＝T×v_max 後下發（=0 直接用 PerimeterCm）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0", ClampMax = "180"))
+	float TargetTraceSeconds = 25.0f;
+
+	// 線長（cm；閉合圖形＝周長、開放一筆畫＝全長）。導出量——由 TargetTraceSeconds
+	// ×針速得出；欄位保留供 config 直接覆寫（TargetTraceSeconds=0 時生效）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "20", ClampMax = "300"))
 	float PerimeterCm = 45.0f;
+
+	// 本難度檔的圖案池（每回合由種子選一、鏡像/微擾變化）；空＝Blob 保底
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace")
+	TArray<EDreamTraceMotif> MotifPool;
 
 	// 路線帶半寬（cm）：下針中針心離中線超過此值＝越線＝重來
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0.2", ClampMax = "2.0"))
@@ -39,11 +65,14 @@ struct NICEINK_API FDreamTraceParams
 // 生成結果（受害者 client 本地；RPC 只送 Seed＋Params＝決定性重建）
 struct NICEINK_API FDreamTraceFigure
 {
-	// 均勻弧長重採樣的閉合中線（cm、原點＝圖心、y 向下同 canvas；首尾不重複、隱含 wrap）
+	// 均勻弧長重採樣的中線（cm、原點＝圖心、y 向下同 canvas）。
+	// bClosed：閉合＝首尾不重複、隱含 wrap；開放一筆畫＝Points[0] 起點、Last 終點
 	TArray<FVector2D> Points;
-	// 每點累積弧長（ArcS[0]=0；TotalLen＝閉合全長）
+	// 每點累積弧長（ArcS[0]=0；TotalLen＝全長）
 	TArray<float> ArcS;
 	float TotalLen = 0.0f;
+	bool bClosed = true;
+	EDreamTraceMotif Motif = EDreamTraceMotif::Blob;
 	float MaxAbsR = 0.0f;  // 佈局用（縮放進面板）
 	int32 UsedSeed = 0;    // 自交避讓重試後實際使用的種子（決定性）
 	int32 Retries = 0;
