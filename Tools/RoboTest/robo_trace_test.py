@@ -200,8 +200,9 @@ class Test:
             self.check("t1 progress starts zero", abs(d.get("prog", 9)) < 0.01 and d.get("fails") == 0.0, str(d))
             # 固定種子 42 → cup0 池[(42/7)%5=1]＝Fan＝烘焙表索引 1（閉合；
             # 08-02 per-cup 帶重裁後表序=EXPORT 杯序）——選圖函數或表序改了要重對
+            # 08-03 八式定案表：Fan=Idx 0（seed42→pool0[6%3=0]）
             self.check("t1 forced seed picks Fan (deterministic baked motif)",
-                       d.get("motif") == 1.0 and d.get("closed") == 1.0,
+                       d.get("motif") == 0.0 and d.get("closed") == 1.0,
                        f"motif={d.get('motif')} closed={d.get('closed')}")
             self.advance("t2_stats")
         elif s == "t2_stats":
@@ -222,8 +223,9 @@ class Test:
                 ok = ok and r and int(r.group(1)) < 80
                 ok = ok and b and int(b.group(1)) == 0
                 ok = ok and v and int(v.group(1)) == 0
-                # 圖案池三員都出場（種子選圖的覆蓋）
-                ok = ok and mo and len([t for t in mo.group(1).split() if t]) >= 3
+                # 圖案池全員出場（種子選圖的覆蓋；08-03 八式定案：杯池 3/3/2）
+                pool_size = 3 if cup < 2 else 2
+                ok = ok and mo and len([t for t in mo.group(1).split() if t]) >= pool_size
                 ok_all = ok_all and bool(ok)
             self.check("t2 gen stats: self-dist/retry/no-fallback/pool coverage (3 cups x200)", ok_all)
             self.advance("t3_privacy")

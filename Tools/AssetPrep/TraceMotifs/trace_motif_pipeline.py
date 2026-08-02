@@ -17,6 +17,12 @@ PREFIX = sys.argv[1] if len(sys.argv) > 1 else "kamon"
 TARGET_LEN = 108.0
 STEP = 0.25
 BANDS = {"cup0": 0.30, "cup1": 0.30, "cup2": 0.30}  # user 定案：帶半寬=筆寬（全寬=2×筆寬）
+# 窄刺充氣（cm@108 域）：尖刺形剪影兩側走廊會重疊＝真機制障礙非誤殺；
+# 外擴讓刺變胖、讀感保留（折鶴喙/尾 msd 0.24→1.03 實錘）
+FATTEN = {"crane_origami.svg": 0.4}
+# per-file 形態閉合半徑（佔 diag 比例；預設 0.03）：閉合是「橋接不相觸零件」與
+# 「焊死細節」的同一把刀——龍的角/爪/鬃在 0.03 被焊成海馬、0.015 全保（08-03 掃描實錘）
+CLOSE_FRAC = {"dragon_1f409.svg": 0.015}
 
 def sample_subpaths(svgfile):
     """回傳 [(points Nx2 closed subpath), ...]（各自獨立連續段）"""
@@ -272,8 +278,10 @@ for fname in files:
     #（單抽子路徑=拿到零件：船抽桅杆/櫻花抽單瓣——twemoji 首輪實錘）
     cands = []
     polys = []
+    # 開放但填色的路徑（渲染器隱式閉合）也要進聯集：Polygon 自動閉環；
+    # 純線條退化成近零面積、被面積門檻自然排除（折鶴 17 面全開放＝首輪實錘）
     for pts, closed in subs:
-        if closed and len(pts) >= 8:
+        if len(pts) >= 8:
             try:
                 pg = Polygon(pts)
                 if pg.is_valid and pg.area > 0:
@@ -285,21 +293,39 @@ for fname in files:
             except Exception:
                 pass
     if polys:
+        # 背景板過濾：近矩形且覆蓋幾乎全域的多邊形=畫布底板不是圖
+        # （家紋 <rect>、game-icons 的 M0 0h512v512H0z 路徑——兩種都在這裡死）
+        gx0 = min(pg.bounds[0] for pg in polys); gy0 = min(pg.bounds[1] for pg in polys)
+        gx1 = max(pg.bounds[2] for pg in polys); gy1 = max(pg.bounds[3] for pg in polys)
+        gw, gh = max(gx1 - gx0, 1e-9), max(gy1 - gy0, 1e-9)
+        def is_backplate(pg):
+            x0, y0, x1, y1 = pg.bounds
+            covers = (x1 - x0) > 0.88 * gw and (y1 - y0) > 0.88 * gh
+            rectish = pg.area > 0.90 * (x1 - x0) * (y1 - y0)
+            return covers and rectish
+        kept = [pg for pg in polys if not is_backplate(pg)]
+        if kept:
+            polys = kept
+    if polys:
         try:
             # 形態學閉合：膨脹 3% 橋接不相觸零件（鳥居柱樑/串糰子）再收縮還原
             diag = max(max(pg.bounds[2] - pg.bounds[0], pg.bounds[3] - pg.bounds[1]) for pg in polys)
-            eps = diag * 0.03
+            eps = diag * CLOSE_FRAC.get(fname, 0.03)
             uni = unary_union([pg.buffer(eps) for pg in polys]).buffer(-eps)
             geoms = list(uni.geoms) if hasattr(uni, "geoms") else [uni]
             biggest = max(geoms, key=lambda g: g.area)
             ext = np.array(biggest.exterior.coords[:-1])
-            # 內線候選（洞邊界＋內部色塊輪廓）→ 接駁成一筆（多內線→單內線→純剪影）
-            interiors = collect_interiors(polys, biggest, diag)
+            fat = FATTEN.get(fname, 0.0)
+            if fat > 0:
+                u0 = resample_uniform(ext, True, TARGET_LEN, STEP)
+                if u0 is not None:
+                    pg2 = Polygon(u0).buffer(fat, join_style=1)
+                    if hasattr(pg2, "geoms"):
+                        pg2 = max(pg2.geoms, key=lambda g: g.area)
+                    ext = np.array(pg2.exterior.coords[:-1])
+            # 內線制 08-03 user 定案退役：「專注把外部輪廓做好」——龜殼內圈被讀成
+            # 「破一個洞」＝內線在剪影語言裡是噪聲。splice/collect 函式保留備查，不再產生候選。
             combos = []
-            if len(interiors) >= 2:
-                combos.append(interiors)
-            if len(interiors) >= 1:
-                combos.append(interiors[:1])
             for combo in combos:
                 route, rclosed = ext.copy(), True
                 okbuild = True
@@ -392,23 +418,17 @@ for sheet_i in range(0, len(passing), 24):
 
 # --- 匯出（烘焙用）：指定檔案的最終路線 ---
 # (name, mirror, band_half)：band=該圖所屬杯的帶半寬（筆寬×2.0/1.8/1.6÷2）
+# 08-03 user 終定案八式（正推三環淘選全史=帳本）；順序=烘焙表順序。
+# 分杯依 feats（轉角特徵數）由易到難：cup0 扇/雙浪/糰子、cup1 折鶴/蛇/龜、cup2 櫻/鳥居
 EXPORT = {
-    "onigiri_1f359.svg": ("Onigiri", False, 0.30),
     "fan_1faad.svg": ("Fan", True, 0.30),
-    "fuji_1f5fb.svg": ("Fuji", True, 0.30),
-    "moon_1f319.svg": ("Moon", True, 0.30),
-    "wave_1f30a.svg": ("Wave", True, 0.30),
-    "dango_1f361.svg": ("Dango", True, 0.27),
-    "lantern_1f3ee.svg": ("Lantern", False, 0.27),
-    "fish_1f41f.svg": ("Koi", True, 0.27),
-    "octopus_1f419.svg": ("Octopus", False, 0.27),
+    "wave_double_1.svg": ("Wave", True, 0.30),
+    "dango_1f361.svg": ("Dango", True, 0.30),
+    "crane_origami.svg": ("Crane", True, 0.27),
     "snake_1f40d.svg": ("Snake", True, 0.27),
-    "turtle_1f422.svg": ("Turtle", True, 0.24),
+    "turtle_1f422.svg": ("Turtle", True, 0.27),
     "sakura_1f338.svg": ("Sakura", False, 0.24),
     "torii_26e9.svg": ("Torii", False, 0.24),
-    "oni_1f479.svg": ("Oni", False, 0.24),
-    "maple_1f341.svg": ("Momiji", True, 0.24),
-    "castle_1f3ef.svg": ("Castle", False, 0.24),
 }
 export = []
 for fname_e, (name, mirror, band) in EXPORT.items():

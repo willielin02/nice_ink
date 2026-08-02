@@ -2,12 +2,21 @@ Twemoji (https://github.com/jdecked/twemoji)
 Copyright 2020 Twitter, Inc and other contributors
 Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
 
-REQUIRED: game credits must include the attribution above before any release
+"Origami - Crane" (https://commons.wikimedia.org/wiki/File:Origami_-_Crane.svg)
+Licensed under CC BY-SA 3.0: https://creativecommons.org/licenses/by-sa/3.0/
+NOTE: BY-SA — the derived trace route for the Crane motif must remain under the
+same license; keep this notice with any redistribution of that artwork.
+
+REQUIRED: game credits must include the attributions above before any release
 (same rule as SourceAssets/Sauna_localyany).
 
-Usage in Nice Ink: the 16 SVGs in this folder are the source artwork for the
-dream-trace minigame's one-stroke motif routes (SPEC v4.0a). They are converted
-to polyline trace routes by Tools/AssetPrep/TraceMotifs/ (silhouette union +
-interior-contour splicing + traceability gates) and baked into
+Usage in Nice Ink (08-03 final 8-motif pool): the dream-trace minigame's
+one-stroke motif routes (SPEC v4.0a) come from these vector sources —
+Twemoji: fan(1faad), wave(1f30a; the two-crest figure is the wave plus a
+same-source 0.6x copy), dango(1f361), snake(1f40d), turtle(1f422),
+sakura(1f338), torii(26e9); Wikimedia: origami crane (fattened +0.4cm to keep
+spike corridors traceable). They are converted to polyline trace routes by
+Tools/AssetPrep/TraceMotifs/ (silhouette union + traceability gates; interior
+contours retired 08-03) and baked into
 Source/NiceInk/Private/DreamTraceMotifData.h. The in-game routes are derived
 works of these graphics.

@@ -108,6 +108,30 @@
   "ok_cup2": true
  },
  {
+  "file": "fried_shrimp_1f364.svg",
+  "closed": true,
+  "msd": 1.78,
+  "dev": 0.12,
+  "done": true,
+  "feats": 4,
+  "circ": 0.373,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "fugu_1f421.svg",
+  "closed": true,
+  "msd": 2.11,
+  "dev": 0.11,
+  "done": true,
+  "feats": 14,
+  "circ": 0.211,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
   "file": "fuji_1f5fb.svg",
   "closed": true,
   "msd": 2.31,
@@ -116,6 +140,30 @@
   "feats": 6,
   "circ": 0.192,
   "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "kimono_1f458.svg",
+  "closed": true,
+  "msd": 1.43,
+  "dev": 0.11,
+  "done": true,
+  "feats": 13,
+  "circ": 0.265,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "kite_1fa81.svg",
+  "closed": true,
+  "msd": 0.83,
+  "dev": 0.13,
+  "done": true,
+  "feats": 29,
+  "circ": 0.406,
+  "src": "route2",
   "ok_cup0": true,
   "ok_cup2": true
  },
@@ -192,6 +240,18 @@
   "ok_cup2": true
  },
  {
+  "file": "naruto_swirl_1f365.svg",
+  "closed": true,
+  "msd": 2.82,
+  "dev": 0.08,
+  "done": true,
+  "feats": 21,
+  "circ": 0.045,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
   "file": "nazar_1f9ff.svg",
   "closed": true,
   "msd": 2.21,
@@ -240,6 +300,18 @@
   "ok_cup2": true
  },
  {
+  "file": "ramen_1f35c.svg",
+  "closed": true,
+  "msd": 1.09,
+  "dev": 0.11,
+  "done": true,
+  "feats": 14,
+  "circ": 0.281,
+  "src": "route1",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
   "file": "rooster_1f414.svg",
   "closed": true,
   "msd": 1.23,
@@ -248,6 +320,18 @@
   "feats": 17,
   "circ": 0.364,
   "src": "route1",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "sailboat_26f5.svg",
+  "closed": true,
+  "msd": 1.24,
+  "dev": 0.12,
+  "done": true,
+  "feats": 16,
+  "circ": 0.364,
+  "src": "union",
   "ok_cup0": true,
   "ok_cup2": true
  },
@@ -276,6 +360,18 @@
   "ok_cup2": true
  },
  {
+  "file": "shrimp_1f990.svg",
+  "closed": true,
+  "msd": 1.66,
+  "dev": 0.11,
+  "done": true,
+  "feats": 17,
+  "circ": 0.388,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
   "file": "snake_1f40d.svg",
   "closed": true,
   "msd": 0.84,
@@ -284,6 +380,30 @@
   "feats": 11,
   "circ": 0.338,
   "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "squid_1f991.svg",
+  "closed": true,
+  "msd": 1.52,
+  "dev": 0.12,
+  "done": true,
+  "feats": 17,
+  "circ": 0.249,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "sushi_1f363.svg",
+  "closed": true,
+  "msd": 0.88,
+  "dev": 0.11,
+  "done": true,
+  "feats": 10,
+  "circ": 0.446,
+  "src": "route2",
   "ok_cup0": true,
   "ok_cup2": true
  },
@@ -336,6 +456,18 @@
   "ok_cup2": true
  },
  {
+  "file": "tokyotower_1f5fc.svg",
+  "closed": true,
+  "msd": 0.99,
+  "dev": 0.11,
+  "done": true,
+  "feats": 25,
+  "circ": 0.464,
+  "src": "route1",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
   "file": "torii_26e9.svg",
   "closed": true,
   "msd": 2.06,
@@ -356,6 +488,18 @@
   "feats": 19,
   "circ": 0.399,
   "src": "route1",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "umbrella_2602.svg",
+  "closed": true,
+  "msd": 2.14,
+  "dev": 0.1,
+  "done": true,
+  "feats": 17,
+  "circ": 0.374,
+  "src": "union",
   "ok_cup0": true,
   "ok_cup2": true
  },

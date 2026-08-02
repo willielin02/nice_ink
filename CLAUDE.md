@@ -164,10 +164,15 @@
   縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
   FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
-  `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅諧波閉圓決定性生成
+  `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅式沿線描
   （自交避讓 2.6×帶半寬鐵律）＋割線機制 2D 移植（v_max 追趕/皮繩/越線重來）＋
   搖晃攻擊（G 鍵花錢 500/冷卻/受害者顯名/**睜眼照收照扣＝無聲甦醒零洩漏**）；
-  帳本=Docs/DREAM_TRACE_PLAN.md；robo_trace_test 21 檢查）、
+  **08-03 圖案池＝正推八式終定案**（user 逐輪裁決：扇/雙浪/糰子｜折鶴/蛇/龜｜
+  櫻/鳥居、分杯 3/3/2 帶寬×2.0/1.8/1.6；正推三環=相撲神事/和彫憧憬/酒宴、
+  內線制退役=純外框、龍/鯉/燈籠/軍配淘選戰報與鐵則全在帳本；源=Twemoji＋
+  Wikimedia 折鶴（**BY-SA、ATTRIBUTION 已更新**）；管線=背景板過濾/FATTEN 充氣/
+  CLOSE_FRAC/compose_parts 同源組合；**svg2paths2 不吃 <g transform>＝變換要烘進
+  d 字串**）；帳本=Docs/DREAM_TRACE_PLAN.md；robo_trace_test 22 檢查）、
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：**v4.0 退役封存**——元件/RPC/
   套件全保留永不啟動；噴射拳腳=GNiceInkSprayEnabled/GNiceInkKickEnabled 雙閘封存
   ＝SPEC #51 未來更新）。
@@ -206,6 +211,7 @@
   （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
   已實作待 viewport 驗收：**醉夢描圖＋搖晃攻擊 v4.0（2026-08-02 user 定案後全權
   委託實作；robo_trace_test 21/0＋feign/orbit/directdraw/stencilcursor 迴歸綠；
+  **08-03 圖案池正推八式終定案 SHIPPED**（trace 22/0＋feign 26/0＋orbit 24/0）；
   帳本=Docs/DREAM_TRACE_PLAN.md 含補位設計待追認清單）**、
   走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
   **刺青作畫全制（2026-07-20~24，帳本=Docs/DIRECT_DRAW_PLAN.md 逐版全史：直接畫制

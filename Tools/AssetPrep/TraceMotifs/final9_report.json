@@ -1,0 +1,110 @@
+[
+ {
+  "file": "crane_origami.svg",
+  "closed": true,
+  "msd": 1.03,
+  "dev": 0.11,
+  "done": true,
+  "feats": 10,
+  "circ": 0.344,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "dango_1f361.svg",
+  "closed": true,
+  "msd": 2.21,
+  "dev": 0.1,
+  "done": true,
+  "feats": 10,
+  "circ": 0.392,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "fan_1faad.svg",
+  "closed": true,
+  "msd": 2.31,
+  "dev": 0.1,
+  "done": true,
+  "feats": 6,
+  "circ": 0.226,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "sake_1f376.svg",
+  "closed": true,
+  "msd": 2.81,
+  "dev": 0.08,
+  "done": true,
+  "feats": 5,
+  "circ": 0.331,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "sakura_1f338.svg",
+  "closed": true,
+  "msd": 2.08,
+  "dev": 0.11,
+  "done": true,
+  "feats": 21,
+  "circ": 0.156,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "snake_1f40d.svg",
+  "closed": true,
+  "msd": 0.84,
+  "dev": 0.12,
+  "done": true,
+  "feats": 11,
+  "circ": 0.338,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "torii_26e9.svg",
+  "closed": true,
+  "msd": 2.06,
+  "dev": 0.11,
+  "done": true,
+  "feats": 24,
+  "circ": 0.32,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "turtle_1f422.svg",
+  "closed": true,
+  "msd": 1.69,
+  "dev": 0.11,
+  "done": true,
+  "feats": 15,
+  "circ": 0.267,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ },
+ {
+  "file": "wave_double_1.svg",
+  "closed": true,
+  "msd": 1.42,
+  "dev": 0.11,
+  "done": true,
+  "feats": 8,
+  "circ": 0.373,
+  "src": "union",
+  "ok_cup0": true,
+  "ok_cup2": true
+ }
+]
