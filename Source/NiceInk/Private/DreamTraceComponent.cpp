@@ -331,9 +331,9 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 	if (AutopilotRemaining > 0.0f)
 	{
 		AutopilotRemaining -= DeltaTime;
-		// 曲率安全前瞻 0.7cm（帶半寬=筆寬 0.3 後餘裕重抓；與離線 pursuit 閘同值。
-		// 血價：前瞻是曲率的函數——2cm 前瞻在急彎切內側出帶=t4/t7 事故）
-		const float Ahead = 0.7f;
+		// 曲率安全前瞻 0.55cm（帶=筆寬×1.6 最窄檔＝半寬 0.24 的餘裕；與離線
+		// pursuit 閘同值。血價：前瞻是曲率的函數——長前瞻在急彎切內側出帶）
+		const float Ahead = 0.55f;
 		CursorPanel = RoutePointAtArc(CurS + Ahead) + Offset;
 		bPenDown = true;
 	}

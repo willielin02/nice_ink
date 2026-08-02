@@ -173,7 +173,7 @@ namespace
 		return F.Points[I] + (F.Points[J] - F.Points[I]) * FMath::Clamp((Wrapped - S0) / SegLen, 0.0f, 1.0f);
 	}
 
-	// 離線可描性模擬（pursuit 閘）：前瞻 0.7cm＝元件 autopilot 同值
+	// 離線可描性模擬（pursuit 閘）：前瞻＝元件 autopilot 同值（現值 0.55）
 	float SimulateTraceMaxDev(const FDreamTraceFigure& F, float AheadCm, float VMax, float Dt)
 	{
 		const int32 N = F.Points.Num();
@@ -296,19 +296,23 @@ FDreamTraceParams FDreamTraceGen::DefaultParamsForCup(int32 Cup)
 	using namespace NiceInkTraceMotifs;
 	FDreamTraceParams P;
 	P.TargetTraceSeconds = 60.0f;
-	P.BandHalfWidthCm = 0.3f;
 	switch (FMath::Clamp(Cup, 0, 2))
 	{
-	case 0: // 第一杯：簡單剪影
+	case 0: // 第一杯：簡單剪影＋帶=筆寬×2.0
+		P.BandWidthNibMult = 2.0f;
 		P.BakedPool = { Idx_Onigiri, Idx_Fan, Idx_Fuji, Idx_Moon, Idx_Wave };
 		break;
-	case 1: // 第二杯：中等
+	case 1: // 第二杯：中等＋帶=筆寬×1.8
+		P.BandWidthNibMult = 1.8f;
 		P.BakedPool = { Idx_Dango, Idx_Lantern, Idx_Koi, Idx_Octopus, Idx_Snake };
 		break;
-	default: // 第三杯（生死局）：複雜標的
+	default: // 第三杯（生死局）：複雜標的＋帶=筆寬×1.6
+		P.BandWidthNibMult = 1.6f;
 		P.BakedPool = { Idx_Turtle, Idx_Sakura, Idx_Torii, Idx_Oni, Idx_Momiji, Idx_Castle };
 		break;
 	}
+	// 名義換算（筆寬 0.3；發夢當下 GameMode 用受害者實際筆寬重算）
+	P.BandHalfWidthCm = 0.3f * P.BandWidthNibMult * 0.5f;
 	P.PerimeterCm = P.TargetTraceSeconds * 1.8f;
 	return P;
 }
@@ -341,7 +345,7 @@ FString FDreamTraceGen::RunStats(const FDreamTraceParams& Params, int32 NumSeeds
 		MinPts = FMath::Min(MinPts, F.Points.Num());
 		MotifCount.FindOrAdd(F.MotifIndex)++;
 
-		const float Dev = SimulateTraceMaxDev(F, 0.7f, 1.8f, 1.0f / 60.0f);
+		const float Dev = SimulateTraceMaxDev(F, 0.55f, 1.8f, 1.0f / 60.0f); // 前瞻=元件 autopilot 同值（帶 1.6×最窄檔餘裕）
 		AutoDevMax = FMath::Max(AutoDevMax, Dev);
 		if (Dev > Params.BandHalfWidthCm)
 		{

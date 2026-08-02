@@ -23,8 +23,12 @@ struct NICEINK_API FDreamTraceParams
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "20", ClampMax = "300"))
 	float PerimeterCm = 108.0f;
 
-	// 路線帶半寬（cm）＝筆寬（user 定案「筆寬的兩倍當作帶寬」＝全寬 2×筆寬）。
-	// GameMode 發夢當下用受害者 TattooNibDiameterCm 覆寫＝筆寬旋鈕改動夢自動跟
+	// 帶全寬＝筆寬×此倍數（user 定案 08-02：2.0／1.8／1.6 隨杯數——酒越深帶越窄）。
+	// GameMode 發夢當下用受害者 TattooNibDiameterCm 換算 BandHalfWidthCm
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "1.0", ClampMax = "4.0"))
+	float BandWidthNibMult = 2.0f;
+
+	// 路線帶半寬（cm）＝筆寬×倍數÷2 的導出值（發夢當下計算；此欄為名義預設）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Trace", meta = (ClampMin = "0.1", ClampMax = "2.0"))
 	float BandHalfWidthCm = 0.3f;
 

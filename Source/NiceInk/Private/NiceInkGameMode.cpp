@@ -539,8 +539,8 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 		{
 			TraceParams.PerimeterCm = TraceParams.TargetTraceSeconds * Victim->TattooMaxSpeedCmPerSec();
 		}
-		// 帶寬＝筆寬×2（user 定案 08-02 三段；帶半寬=筆寬）——筆寬旋鈕改動夢自動跟
-		TraceParams.BandHalfWidthCm = Victim->TattooNibDiameterCm;
+		// 帶全寬＝筆寬×倍數（user 定案 08-02：2.0/1.8/1.6 隨杯數）——筆寬旋鈕改動夢自動跟
+		TraceParams.BandHalfWidthCm = Victim->TattooNibDiameterCm * TraceParams.BandWidthNibMult * 0.5f;
 
 		const int32 TraceSeed = DebugForcedTraceSeed > 0
 			? DebugForcedTraceSeed
