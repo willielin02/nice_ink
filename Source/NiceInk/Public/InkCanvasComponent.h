@@ -43,10 +43,11 @@ public:
 	int32 RenderTargetResolution = 4096;
 
 	// 固定麥克筆筆寬（UV 半徑）。SPEC v3.1：細筆尖——皮膚是跨場資源，細筆控制通膨。
-	// sumo 均勻密度圖集實測 0.617 px/mm @2048 → 0.000584 UV 半徑 ≈ 3.8mm 簽字筆
-	//（筆實體半徑 1.938mm 不變；char17 時代 0.898 px/mm → 0.00085）
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0005", ClampMax = "0.05"))
-	float MarkerUvRadius = 0.000584f;
+	// sumo 均勻密度圖集實測 0.617 px/mm @2048；08-02 user 定值筆寬 3.0mm（原 3.9mm
+	// /0.000584）→ 半徑 1.5mm × 0.617 ÷ 2048 = 0.000452 UV。
+	// 同步錨：Character.TattooNibDiameterCm（守恆式速度換算）必須跟著改。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.0003", ClampMax = "0.05"))
+	float MarkerUvRadius = 0.000452f;
 
 	// --- Shader＝細針點排針（07-23 十一版 user 規格：「超級小、細、密集、半透明
 	// 的點；弧形排針中間約 30% 不透明度、愈往外愈透明、最外層 5%」）：真打霧的
@@ -55,16 +56,16 @@ public:
 	// 視距死路）：密度夠=平滑灰面+細緻針點紋理，疊趟平滑變深。
 	// 墨進霧層（銳化不咬半透明——線層銳化以 0.5 為門檻，30% 的點會被整片擦掉）。---
 
-	// 排半寬（UV；1cm ⇒ 帶寬 2cm——07-24 十三版 user 定值「筆刷寬度=現在的 2/3」）
-	// ——與 Character.ShaderBrushRadiusCm（HUD 圈）同步
+	// 排半寬（UV；1cm ⇒ 帶寬 2cm——08-02 user 終值（1.5cm 試過一輪改回）；
+	// 與 Character.ShaderBrushRadiusCm（HUD 圈）同步
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "0.001", ClampMax = "0.02"))
 	float ShaderRowHalfWidthUv = 0.00301f;
 
 	// 每排針點數（49＝user 定值 49RM 真實排針規格；帶內槽距 ~0.4mm、點徑 1.3mm
 	// ⇒ 相鄰點重疊 ~3 倍＝墨在真皮層暈開互融——正常視距讀感=平滑灰色水洗面、
 	// 看不見單點；「點」只活在細噪質感層）
-	// 勞動量校準（user 定案「5 趟近實心」不破）：λ=(K×πr²)/(排距×帶寬)
-	// =49×π×0.065²/(0.2×2.0)≈1.63、ᾱ≈0.23 ⇒ 單趟 1-exp(-λᾱ) ≈ 31%
+	// 勞動量校準：λ=(K×πr²)/(排距×帶寬)
+	// =49×π×0.065²/(0.2×2.0)≈1.63
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink", meta = (ClampMin = "4", ClampMax = "128"))
 	int32 ShaderRowDotCount = 49;
 

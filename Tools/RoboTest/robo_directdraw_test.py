@@ -352,11 +352,12 @@ class Test:
             raw, d = summary(host)
             check("cruise engaged (stick beyond deadzone)", d.get("cruise") == 1, raw)
             vmax = d.get("vmaxCm", 0.0)
-            check("vmax follows conservation law k*d*f", 1.8 <= vmax <= 3.0, raw)
-            # 實線契約：最近兩針的皮膚距 ≤ k×筆寬×1.35（0.263cm）——超過=虛線=失敗
+            # 08-02 筆寬 3.9→3.0mm：v_max=0.5×0.30×12=1.8（帶=同比例縮放）
+            check("vmax follows conservation law k*d*f", 1.38 <= vmax <= 2.30, raw)
+            # 實線契約：最近兩針的皮膚距 ≤ k×筆寬×1.35（0.203cm）——超過=虛線=失敗
             #（間距與頻率無關：12Hz 只加快巡航速度、針距恆 k×筆寬）
             gap = d.get("dotGapCm", -1.0)
-            check("dot gap holds solid-line bound", 0.02 <= gap <= 0.28, f"gapCm={gap:.3f}")
+            check("dot gap holds solid-line bound", 0.02 <= gap <= 0.21, f"gapCm={gap:.3f}")
             # 節拍計量（牆鐘域、寬帶：重載 robo PIE 遊戲時間 ~7 成牆鐘）
             dn = d.get("dotN", 0.0) - self.cruise_dot0
             check("cruise dots paced by frequency", 15.0 <= dn <= 40.0, f"d_dotN={dn:.0f}")
@@ -364,11 +365,11 @@ class Test:
             # ——玩家體感的速度域（牆鐘除法會把編輯器變慢誤讀成針變慢，診斷輪實錘：
             # 牆鐘算 1.56、遊戲時間 2.26=97% v_max）
             tspd = d.get("tipSpd", -1.0)
-            check("cruise tip speed matches vmax (game-time)", 1.95 <= tspd <= 2.60,
-                  f"tipSpd={tspd:.2f} cm/s vs vmax 2.34 (hopSpd={d.get('hopSpd', -1):.2f} gain={d.get('gain', -1):.2f})")
+            check("cruise tip speed matches vmax (game-time)", 1.50 <= tspd <= 2.00,
+                  f"tipSpd={tspd:.2f} cm/s vs vmax 1.8 (hopSpd={d.get('hopSpd', -1):.2f} gain={d.get('gain', -1):.2f})")
             # 皮膚面恆速：aim 位移對應 ~vmax×t（角度域寬鬆帶：掠射/距離/時間膨脹）
             daz = abs(d.get("az", 0.0) - self.cruise_az0)
-            check("cruise speed capped (aim crawls)", 3.0 <= daz <= 14.0, f"dAz={daz:.2f}")
+            check("cruise speed capped (aim crawls)", 2.3 <= daz <= 14.0, f"dAz={daz:.2f}")
             check("pen tip still rides centre ray in cruise",
                   d.get("penValid") == 1 and 0.0 <= d.get("penRayErr", 99) < 3.0, raw)
             # 導引預測路徑（07-24 皮繩制：導引=針→游標的待走路徑、長度=追趕殘距
@@ -454,7 +455,7 @@ class Test:
             self.advance("stencil_follow_verify")
         elif s == "stencil_follow_verify":
             # 沿稿契約：無任何方向命令（無 PaintStick）——針自己沿稿線走。
-            # 稿線 ~4.8cm、v_max 2.34cm/s ⇒ ~2s 走完＝follow 態要在中途取樣
+            # 稿線 ~4.8cm、v_max 1.8cm/s ⇒ ~2.7s 走完＝follow 態要在中途取樣
             host = find_char(self.server(), self.host_pid)
             if self.elapsed() < 1.2:
                 return
@@ -473,7 +474,7 @@ class Test:
             daz = abs(d.get("az", 0.0) - self.follow_az0)
             check("follow walks along the stencil line", 2.0 <= daz <= 14.0, f"dAz={daz:.2f}")
             gap = d.get("dotGapCm", -1.0)
-            check("follow ink holds solid-line bound", 0.02 <= gap <= 0.28, f"gapCm={gap:.3f}")
+            check("follow ink holds solid-line bound", 0.02 <= gap <= 0.21, f"gapCm={gap:.3f}")
             dn = d.get("dotN", 0.0) - self.follow_dot0
             check("follow deposits ink dots", dn >= 12.0, f"d_dotN={dn:.0f}")
             host.call_method("DebugRoboPaintHold", (False,))
@@ -706,7 +707,7 @@ class Test:
             host = find_char(self.server(), self.host_pid)
             raw, d = summary(host)
             check("liner restored after toggle back",
-                  d.get("needleSel") == 0 and 1.8 <= d.get("vmaxCm", 0.0) <= 3.0, raw)
+                  d.get("needleSel") == 0 and 1.38 <= d.get("vmaxCm", 0.0) <= 2.30, raw)
             # 視覺證據：巡航段的實線（FP 特寫）＋受害者 MarkerRT 像素級匯出
             #（sweep 的散點 vs 巡航的連續線段——實線契約的眼見為憑）
             unreal.SystemLibrary.execute_console_command(

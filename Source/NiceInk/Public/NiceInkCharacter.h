@@ -198,10 +198,11 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.2", ClampMax = "0.7"))
 	float TattooSpacingK = 0.5f;
 
-	// 筆寬實體直徑 cm（＝MarkerUvRadius 0.000584 × 2048px ÷ 0.617px/mm≈3.9mm；
-	// 圖集重生／筆寬改動時同步——這是速率換算的錨，不是視覺旋鈕）
+	// 筆寬實體直徑 cm（＝MarkerUvRadius 0.000452 × 2048px ÷ 0.617px/mm≈3.0mm，
+	// 08-02 user 定值；圖集重生／筆寬改動時同步——這是速率換算的錨，不是視覺旋鈕。
+	// 細針=慢針：v_max=k×筆寬×f=0.5×0.30×12=1.8cm/s（原 2.34）——嫌慢只准動 f）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "2"))
-	float TattooNibDiameterCm = 0.39f;
+	float TattooNibDiameterCm = 0.30f;
 
 	// 皮繩長（cm，皮膚面距離）：游標最多跑在針前這麼遠，超出＝游標被鉗回。
 	// 短繩=貼手（針幾乎恆在螢幕中心）、長繩=平滑強但針尾隨感重
@@ -320,7 +321,7 @@ public:
 	float MistMinAimSpeedDegS = 3.0f;
 
 	// 排半寬 cm（HUD 範圍圈用；與 InkCanvas.ShaderRowHalfWidthUv 同步——帶寬 2cm，
-	// 十三版 user 定值 2/3 帶寬）
+	// 08-02 user 終值）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.5", ClampMax = "6"))
 	float ShaderBrushRadiusCm = 1.0f;
 

@@ -2312,7 +2312,8 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	}
 
 	// 滾輪切工具（07-23 雙針制；07-25 打稿制 user 定案三檔）：Stencil 麥克筆（預設，
-	// 打稿）→ Liner（割線）→ Shader（打霧）循環，上滾=下一件、下滾=上一件；
+	// 打稿）→ Liner（割線）→ Shader（打霧）循環，下滾=下一件、上滾=上一件
+	//（08-02 user 定案對齊主流慣例：Minecraft/FPS 換武器皆下滾前進）；
 	// 鎖定中滾輪閒置（轉盤=受害者迷宮情境）、數字鍵=調色盤。
 	// 換工具=抬針重開筆劃（渲染屬性是 per-stroke）；狀態跟選色同壽命；
 	// RepNeedle 上服=他端 3D 手持模型跟著換（麥克筆 vs 刺青機）。
@@ -2322,6 +2323,19 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		{
 			return;
 		}
+		// 切工具視野不跳（08-02 user 定案「以切換時視野在哪為準」）：aim 先歸位到
+		// 當前相機朝向——稿筆（凍結相機）與機器（畫面歸針）的參考系差全部收進
+		// 「游標歸中」（小、恆可預期），視野凍在原地。兩個方向都成立：稿筆→機器
+		// =相機續讀 aim（=舊凍結朝向）；機器→稿筆=凍結相機從 aim 重播種（=舊畫面）。
+		// robo 角度命令同 tick 在後（PollDrawAim 消化）照舊覆寫＝角度契約原樣。
+		const bool bFrozenCamNow = SelectedNeedle == EInkNeedle::Stencil && bDrawCamInit;
+		const float CamAzNow = bTattooChaseActive ? TattooNeedleAz
+			: (bFrozenCamNow ? DrawCamAz : DrawAimAzLocal);
+		const float CamTiltNow = bTattooChaseActive ? TattooNeedleTilt
+			: (bFrozenCamNow ? DrawCamTilt : DrawAimTiltLocal);
+		DrawAimAzLocal = FMath::UnwindDegrees(CamAzNow);
+		DrawAimTiltLocal = FMath::Clamp(CamTiltNow, DrawTiltMinDeg, DrawTiltMaxDeg);
+		bMistPrevAimValid = false; // 歸位是傳送不是手速——不進霧針移動閘量測
 		SelectedNeedle = NewNeedle;
 		StopPaintingLocal();
 		bDrawCursorRelatch = true; // 切到稿筆＝游標從當前 aim 命中點再生（機器檔不消化）
@@ -2349,7 +2363,7 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		};
 		static constexpr EInkNeedle Order[ToolCount] =
 			{ EInkNeedle::Stencil, EInkNeedle::Liner, EInkNeedle::Shader };
-		const int32 Next = (CycleOrder(SelectedNeedle) + (bScrollUp ? 1 : ToolCount - 1)) % ToolCount;
+		const int32 Next = (CycleOrder(SelectedNeedle) + (bScrollUp ? ToolCount - 1 : 1)) % ToolCount;
 		SetNeedleLocal(Order[Next]);
 		NiAudio::Play(this, ENiSound::UiClick, 0.5f);
 	}
@@ -3453,7 +3467,7 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		TEXT("gain=%.2f hopSpd=%.2f tipSpd=%.2f rawAz=%.1f needleSel=%d mistSpd=%.0f flow=%d follow=%d ")
 		TEXT("maskRow=%d maskOn=%d ")
 		TEXT("curs=%d cursW=(%.2f,%.2f,%.2f) gazeAz=%.1f gazeTilt=%.1f ")
-		TEXT("cursOk=%d"),
+		TEXT("cursOk=%d camAz=%.2f camTilt=%.2f"),
 		bLeanLocked ? 1 : 0, EffectiveDrawAz(), EffectiveDrawTilt(),
 		FirstPersonCamera ? FirstPersonCamera->FieldOfView : -1.0f,
 		GhostedChars.Num(),
@@ -3481,7 +3495,10 @@ FString ANiceInkCharacter::DebugLeanSummary() const
 		bDrawTargetValid ? 1 : 0,
 		DrawTargetWorld.X, DrawTargetWorld.Y, DrawTargetWorld.Z,
 		DrawGazeAz, DrawGazeTilt,
-		bCursorDrawable ? 1 : 0);
+		bCursorDrawable ? 1 : 0,
+		// 相機朝向真值（切工具視野不跳契約的量測端；tilt=-pitch 同 AimRot 慣例）
+		FirstPersonCamera ? FirstPersonCamera->GetComponentRotation().Yaw : 0.0f,
+		FirstPersonCamera ? -FirstPersonCamera->GetComponentRotation().Pitch : 0.0f);
 }
 
 FString ANiceInkCharacter::DebugRoboCanvasResolve(float ScreenFracX, float ScreenFracY) const

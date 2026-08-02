@@ -16,6 +16,9 @@
 #               落後游標 ≤L）＋收筆補完後全量守恆（gain≥5；舊閘下=0＝慢畫整段
 #               無墨的回歸鎖、繩子丟帳也鎖在這條）
 #（08-02 曲線制 c9/c10 已隨功能整組刪除——user 定案；決策史見 DIRECT_DRAW_PLAN.md）
+#   c9 toolswitch 切工具視野不跳（08-02 user 定案「以切換時視野在哪為準」）：
+#               游標拉離中心後切 Liner → 相機朝向凍在原地（≤0.15°）＋aim 歸位
+#               到相機（游標歸中）；切回稿筆 → 相機仍不動、游標從中心命中點再生
 # 產出：Saved/robo_stencilcursor_result.txt
 import math
 import re
@@ -62,7 +65,7 @@ def find_char(w, pid):
 def parse_summary(s):
     d = {}
     for k in ("curs", "gazeAz", "gazeTilt", "rawAz", "dotN", "tilt", "az", "reach",
-              "cursOk"):
+              "cursOk", "camAz", "camTilt", "needleSel"):
         m = re.search(r"\b" + k + r"=(-?[\d.]+)", s)
         if m:
             d[k] = float(m.group(1))
@@ -292,6 +295,44 @@ class Probe:
             gz_err = abs((d.get("gazeAz", 999.0) - d.get("rawAz", 0.0) + 180.0) % 360.0 - 180.0)
             check("c6_relatch_aim_exact", az_err <= 0.25, f"dAz={az_err:.2f}")
             check("c6_relatch_gaze_snap", gz_err <= 0.25, f"dAz={gz_err:.2f}")
+            self.switch_n = 0
+            self.advance("toolswitch_arm")
+        elif s == "toolswitch_arm":
+            # c9 前置：游標拉離畫面中心 ~9°（6×3 單位 ×0.52°/單位；邊緣帶 16.5° 之內
+            # ＝不觸發推擠、相機全程凍結）——切換瞬間 cam≠aim 才量得到「誰跳」
+            if self.switch_n < 6:
+                self.host().call_method("DebugRoboMouse", (3.0, 0.0))
+                self.switch_n += 1
+                return
+            if self.elapsed() < 0.5:
+                return
+            d = self.summary()
+            self.cam_before = (d.get("camAz", 999.0), d.get("camTilt", 999.0))
+            off = abs((d.get("rawAz", 0.0) - d.get("camAz", 0.0) + 180.0) % 360.0 - 180.0)
+            check("c9_precond_cursor_offcenter", off >= 5.0, f"off={off:.2f}")
+            self.host().call_method("DebugRoboNeedle", (0,))
+            self.advance("toolswitch_liner")
+        elif s == "toolswitch_liner":
+            if self.elapsed() < 0.5:
+                return
+            d = self.summary()
+            cam_d = abs((d.get("camAz", 999.0) - self.cam_before[0] + 180.0) % 360.0 - 180.0) \
+                + abs(d.get("camTilt", 999.0) - self.cam_before[1])
+            aim_d = abs((d.get("rawAz", 999.0) - self.cam_before[0] + 180.0) % 360.0 - 180.0)
+            check("c9_switch_cam_frozen", cam_d <= 0.15, f"dCam={cam_d:.3f}")
+            check("c9_switch_cursor_centered", aim_d <= 0.3, f"dAim={aim_d:.2f}")
+            self.host().call_method("DebugRoboNeedle", (2,))
+            self.advance("toolswitch_back")
+        elif s == "toolswitch_back":
+            if self.elapsed() < 0.5:
+                return
+            d = self.summary()
+            cam_d = abs((d.get("camAz", 999.0) - self.cam_before[0] + 180.0) % 360.0 - 180.0) \
+                + abs(d.get("camTilt", 999.0) - self.cam_before[1])
+            check("c9_switchback_cam_frozen", cam_d <= 0.15, f"dCam={cam_d:.3f}")
+            check("c9_switchback_stencil_relatched",
+                  d.get("needleSel") == 2.0 and d.get("curs") == 1.0,
+                  f"needleSel={d.get('needleSel')} curs={d.get('curs')}")
             self.advance("wrap")
         elif s == "wrap":
             self.host().call_method("ServerExitLean", ())
