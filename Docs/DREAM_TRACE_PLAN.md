@@ -253,3 +253,12 @@
   ＝封存非刪除；未來要撿回從 git 史＋DREAM_MAZE_PLAN.md 起手。
 - 手感（描圖游標靈敏度 TraceCursorSensCm 0.3、搖晃振幅讀感、盤面配色）
   ＝user viewport 閘門，robo 只證幾何。
+
+## 08-04 方向舵制＝與割線完全同制（user 定案；帳本主文=DIRECT_DRAW_PLAN 08-04 節）
+
+- 描圖輸入改方向舵（滑鼠只給方向、針沿舵 v_max 直走、壓針起手原地）；十字
+  游標/皮繩/游標鉗全退役；加行進蟻虛線（16cm 同割線）＋FP 刺青筆貼圖
+  （T_UI_TattooPen 同 HUD 配方）。**「描圖與割線不准機制分岔」＝user 本輪鐵則**。
+- 結構改變記帳：發呆不再安全（按住 LMB 舵一直走、彎道要自己轉）＝技能從
+  「手描得穩」變「舵打得準」；失敗歸因鏈待 playtest 盯（rage 可歸咎鐵律）。
+- 驗證：robo_trace_test 22/0（autopilot/veer 改舵驅動、契約原樣）＋截圖自查。

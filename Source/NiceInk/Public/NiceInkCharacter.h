@@ -271,9 +271,15 @@ public:
 	float TattooGuideLookaheadCm = 16.0f;
 
 	// 導引顯示門檻（cm）——針落後游標超過此距離才畫行進蟻（皮繩制：導引=針→游標
-	// 的待走路徑；貼手時針就在游標上、虛線=噪音）
+	// 的待走路徑；貼手時針就在游標上、虛線=噪音）（08-04 方向舵制：導引改由
+	// 方向有效性閘門，本值閒置保留）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.05", ClampMax = "3"))
 	float TattooGuideShowCm = 0.25f;
+
+	// 方向舵轉向門檻（度，az/tilt 角度域）——滑鼠增量累積超過此量才更新行進方向
+	//（08-04 user 定案「滑鼠僅給予方向」；門檻防單像素抖動亂舵、也給方向解析度）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.05", ClampMax = "2"))
+	float TattooHeadingMinDeg = 0.3f;
 
 	// 導引取樣步長（cm）——沿皮膚曲面每步一個世界點（線=貼膚曲線；
 	// 0.75×21 步＝前瞻拉長後 trace 成本持平）
@@ -1020,8 +1026,13 @@ private:
 	float TattooNeedleAz = 0.0f;       // 針 aim（皮繩追趕者；LMB 按住期間＝姿勢/筆/墨
 	float TattooNeedleTilt = 45.0f;    // 的驅動源。手 aim=DrawAim*Local=游標與相機）
 	bool bTattooChaseActive = false;   // 本次按住的追趕鏈已初始化（起點=按下瞬間的手 aim）
-	float TattooChaseErrCm = 0.0f;     // 針落後意圖點的皮膚距估計（導引/summary）
+	float TattooChaseErrCm = 0.0f;     // 針落後意圖點的皮膚距估計（08-04 方向舵制恆 0，summary 保留）
 	bool bTattooCruising = false;      // 本 tick 針由追趕步進推進中（出墨閘）
+	// --- 方向舵（08-04 user 定案「滑鼠僅給予方向，不需要持續移動」）：按住 LMB 中
+	// 滑鼠增量只更新行進方向、針沿方向以 v_max 恆速走；壓針起手無方向=原地扎 ---
+	FVector2D TattooHeadingDir = FVector2D::ZeroVector;   // (az,tilt) 角度域單位向量
+	FVector2D TattooHeadingAccumDeg = FVector2D::ZeroVector;
+	bool bTattooHeadingValid = false;
 	// --- 上墨沿稿（07-25 打稿制）：Liner 落針點 SnapCm 內有稿線＝針吸附沿稿自動走
 	//（手勢歸打稿、慢工歸機器——玩家不再操縱方向；動滑鼠即取消回自由巡航）---
 	bool bStencilFollowActive = false;

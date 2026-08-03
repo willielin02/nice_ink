@@ -2,11 +2,13 @@
 
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
+#include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputCoreTypes.h"
 #include "NiceInkAudio.h"
 #include "NiceInkCharacter.h"
+#include "UObject/ConstructorHelpers.h"
 
 namespace
 {
@@ -82,6 +84,13 @@ UDreamTraceComponent::UDreamTraceComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	SetIsReplicatedByDefault(false); // 夢的進度不複製——作畫者看不到＝張力來源
+	// FP 刺青筆貼圖（08-04 user 定案「包括第一人稱下的刺青筆圖片」＝與割線同款）
+	static ConstructorHelpers::FObjectFinder<UTexture2D> PenTex(
+		TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
+	if (PenTex.Succeeded())
+	{
+		PenSprite = PenTex.Object;
+	}
 }
 
 ANiceInkCharacter* UDreamTraceComponent::OwnerChar() const
@@ -124,6 +133,9 @@ void UDreamTraceComponent::StartTrace(int32 Seed, const FDreamTraceParams& InPar
 	CursorPanel = NeedlePanel;
 	bPenDown = false;
 	bPrevPenDown = false;
+	HeadingDir = FVector2D::ZeroVector;
+	HeadingAccumCm = FVector2D::ZeroVector;
+	bHeadingValid = false;
 	CurIdx = 0;
 	CurS = 0.0f;
 	ProgressS = 0.0f;
@@ -292,6 +304,8 @@ void UDreamTraceComponent::FailReset()
 	InkFig.Reset();
 	NeedlePanel = Figure.Points[0] + ShakeOffsetCm(); // 針回起點（圖形空間的起點＋當下偏移）
 	CursorPanel = NeedlePanel;
+	bHeadingValid = false; // 清舵：不清=針從起點沿舊方向立刻再衝出帶（連環失敗）
+	HeadingAccumCm = FVector2D::ZeroVector;
 	CurIdx = 0;
 	CurS = 0.0f;
 	ProgressS = 0.0f;
@@ -331,66 +345,70 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 
 	const FVector2D Offset = ShakeOffsetCm();
 
-	// --- 輸入：滑鼠→游標（純積分）；LMB＝下針 ---
-	// 增益同源（定律③）：割線的角增益 × 名義眼距＝cm/單位——與貼膚割線同手感
+	// --- 輸入：方向舵（08-04 user 定案「描圖完全與割線筆一樣」）——滑鼠只給
+	// 方向、不驅動位置；按住 LMB＝針沿方向以 v_max 恆速走；壓針起手無方向＝
+	// 原地停（同割線 dotwork 語義）。增益同源：割線的角增益 × 名義眼距＝cm/單位
 	const float SensCm = C->DrawAimSensitivity() * (PI / 180.0f) * NominalDreamEyeDistCm * TraceCursorGain;
+	// 轉向門檻同源（割線 TattooHeadingMinDeg 的公分版：同一角度門檻 × 名義眼距）
+	const float HeadingMinCm = C->TattooHeadingMinDeg * (PI / 180.0f) * NominalDreamEyeDistCm * TraceCursorGain;
 	float MX = 0.0f, MY = 0.0f;
 	PC->GetInputMouseDelta(MX, MY);
-	CursorPanel.X += MX * SensCm;
-	CursorPanel.Y -= MY * SensCm; // canvas y 向下
+	HeadingAccumCm.X += MX * SensCm;
+	HeadingAccumCm.Y -= MY * SensCm; // canvas y 向下
+	if (HeadingAccumCm.Size() >= FMath::Max(HeadingMinCm, 0.01f))
+	{
+		HeadingDir = HeadingAccumCm.GetSafeNormal();
+		bHeadingValid = true;
+		HeadingAccumCm = FVector2D::ZeroVector;
+	}
 
 	bPrevPenDown = bPenDown;
 	bPenDown = PC->IsInputKeyDown(EKeys::LeftMouseButton) || bDebugPaintHeld;
 
-	// --- robo 除錯駕駛（消化在輸入之後＝覆寫游標/左鍵；走同一條追趕/判定路徑） ---
+	// 下針瞬間（真輸入）：清舵＝起手原地停（割線「壓針起手無方向」同語義）
+	if (bPenDown && !bPrevPenDown && AutopilotRemaining <= 0.0f && VeerRemaining <= 0.0f)
+	{
+		bHeadingValid = false;
+		HeadingAccumCm = FVector2D::ZeroVector;
+	}
+
+	// --- robo 除錯駕駛（消化在輸入之後＝覆寫舵/左鍵；走同一條前進/判定路徑） ---
 	if (AutopilotRemaining > 0.0f)
 	{
 		AutopilotRemaining -= DeltaTime;
 		// 曲率安全前瞻 0.55cm（帶=筆寬×1.6 最窄檔＝半寬 0.24 的餘裕；與離線
 		// pursuit 閘同值。血價：前瞻是曲率的函數——長前瞻在急彎切內側出帶）
 		const float Ahead = 0.55f;
-		CursorPanel = RoutePointAtArc(CurS + Ahead) + Offset;
+		const FVector2D To = RoutePointAtArc(CurS + Ahead) + Offset - NeedlePanel;
+		if (To.Size() > KINDA_SMALL_NUMBER)
+		{
+			HeadingDir = To.GetSafeNormal();
+			bHeadingValid = true;
+		}
 		bPenDown = true;
 	}
 	else if (VeerRemaining > 0.0f)
 	{
 		VeerRemaining -= DeltaTime;
-		// 垂直於路線方向硬拉出帶
+		// 垂直於路線方向硬轉舵出帶
 		const FVector2D A = RoutePointAtArc(CurS);
 		const FVector2D B = RoutePointAtArc(CurS + 0.5f);
 		FVector2D Dir = B - A;
 		Dir.Normalize();
-		CursorPanel = NeedlePanel + FVector2D(-Dir.Y, Dir.X) * 2.5f;
+		HeadingDir = FVector2D(-Dir.Y, Dir.X);
+		bHeadingValid = true;
 		bPenDown = true;
 	}
 
-	// 下針瞬間：游標收回針上（皮繩張力歸零起手＝割線「起點重合」語義的持針版）
-	if (bPenDown && !bPrevPenDown)
-	{
-		CursorPanel = NeedlePanel;
-	}
+	CursorPanel = NeedlePanel; // 游標退役（summary 相容欄位）
 
-	// 游標鉗位：盤面邏輯域（整圖入鏡＝圖案範圍＋餘裕）防跑飛——包圍盒域
-	//（半徑域對寬扁圖在窄軸放游標跑出畫面外）；皮繩鉗＝游標最多跑在針前皮繩長
-	CursorPanel.X = FMath::Clamp(CursorPanel.X, FigCenterCm.X - FigHalfCm.X - 4.0f, FigCenterCm.X + FigHalfCm.X + 4.0f);
-	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, FigCenterCm.Y - FigHalfCm.Y - 4.0f, FigCenterCm.Y + FigHalfCm.Y + 4.0f);
-	const float LeashCm = FMath::Max(C->TattooChaseLeashCm, 0.5f);
-	const FVector2D ToCursor = CursorPanel - NeedlePanel;
-	if (bPenDown && ToCursor.Size() > LeashCm)
-	{
-		CursorPanel = NeedlePanel + ToCursor.GetSafeNormal() * LeashCm;
-	}
-
-	// --- 針追趕（割線機制：機器擁有速度、手擁有路徑）＋越線判定 ---
+	// --- 針前進（方向舵：機器擁有速度、手擁有方向）＋越線判定 ---
 	if (bPenDown)
 	{
-		const float VMax = C->TattooMaxSpeedCmPerSec();
-		const FVector2D To = CursorPanel - NeedlePanel;
-		const float Dist = To.Size();
-		if (Dist > KINDA_SMALL_NUMBER)
+		if (bHeadingValid)
 		{
-			const float StepCm = FMath::Min(VMax * DeltaTime, Dist);
-			NeedlePanel += To.GetSafeNormal() * StepCm;
+			const float VMax = C->TattooMaxSpeedCmPerSec();
+			NeedlePanel += HeadingDir * VMax * FMath::Min(DeltaTime, 0.25f);
 		}
 
 		// 判定在圖形空間：圖被搖走＝針在圖上滑動
@@ -651,14 +669,55 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FBox2D& AvailPx
 		}
 	}
 
-	// 5) 針（盤面空間＝搖晃時螢幕上不動）＋游標十字
+	// 5) 針＋方向舵導引＋FP 刺青筆（08-04 user 定案「描圖完全與割線筆一樣，
+	//    包括第一人稱下的刺青筆圖片」：中心小方點＋行進蟻虛線＋T_UI_TattooPen
+	//    出針口樞軸右傾 30°；十字游標隨方向舵退役）
 	{
+		const float Ui = Canvas->ClipY / 1080.0f;
+		const FVector2D NeedlePx = PanelToPx(NeedlePanel);
 		TArray<FCanvasUVTri> Tris;
-		AddDisc(Tris, PanelToPx(NeedlePanel), 4.0f, TraceNeedleColor, 12);
-		const FVector2D Cur = PanelToPx(CursorPanel);
-		AddQuad(Tris, Cur + FVector2D(-6.0f, 0.0f), Cur + FVector2D(6.0f, 0.0f), 1.2f, TraceCursorColor);
-		AddQuad(Tris, Cur + FVector2D(0.0f, -6.0f), Cur + FVector2D(0.0f, 6.0f), 1.2f, TraceCursorColor);
+		// 行進蟻虛線：沿舵方向 16cm 前瞻（割線 TattooGuideLookaheadCm 同值同讀感）
+		if (bPenDown && bHeadingValid)
+		{
+			const float LookPx = 16.0f * Scale;
+			const float DashPx = 7.0f * Ui;
+			const float DashGapPx = 6.0f * Ui;
+			float S = 12.0f * Ui; // 起手留空避開針點
+			while (S < LookPx)
+			{
+				const float E = FMath::Min(S + DashPx, LookPx);
+				const FLinearColor DashCol(0.95f, 0.95f, 0.95f, 0.9f * (1.0f - 0.6f * S / LookPx));
+				AddQuad(Tris, NeedlePx + HeadingDir * S, NeedlePx + HeadingDir * E, 1.2f * Ui, DashCol);
+				S = E + DashGapPx;
+			}
+		}
+		// 針＝小方點（割線 FP 準星同款讀感）
+		const float B = 2.5f * FMath::Max(Ui, 0.5f);
+		AddQuad(Tris, NeedlePx + FVector2D(-B, 0.0f), NeedlePx + FVector2D(B, 0.0f), B, TraceNeedleColor);
+		// 針線：按住＝出針口→針尖補滿（伸）；待機＝短樁（收）
+		constexpr float PenTiltDeg = 30.0f;
+		constexpr float MuzU = 0.4716f, MuzV = 0.9080f; // 出針口在貼圖內的正規化座標（同 HUD）
+		const float TiltRad = FMath::DegreesToRadians(PenTiltDeg);
+		const FVector2D AxisUp(FMath::Sin(TiltRad), -FMath::Cos(TiltRad));
+		const float GapPx = (bPenDown ? 16.0f : 30.0f) * Ui;
+		const FVector2D Muz = NeedlePx + AxisUp * GapPx;
+		const FLinearColor NeedleSteel(0.78f, 0.80f, 0.84f, 1.0f);
+		if (bPenDown)
+		{
+			AddQuad(Tris, Muz, NeedlePx, 1.5f * Ui, NeedleSteel);
+		}
+		else
+		{
+			AddQuad(Tris, Muz, Muz - AxisUp * 12.0f * Ui, 1.5f * Ui, NeedleSteel);
+		}
 		Canvas->K2_DrawTriangle(nullptr, Tris);
+		if (PenSprite)
+		{
+			const float SpriteW = Canvas->ClipY * 0.48f;
+			Canvas->K2_DrawTexture(PenSprite, FVector2D(Muz.X - MuzU * SpriteW, Muz.Y - MuzV * SpriteW),
+				FVector2D(SpriteW, SpriteW), FVector2D::ZeroVector, FVector2D::UnitVector,
+				FLinearColor::White, BLEND_Translucent, PenTiltDeg, FVector2D(MuzU, MuzV));
+		}
 	}
 
 	// 6) 失敗紅閃（越線＝重來的當場回饋）：螢幕邊框紅框——不用頂點 alpha 蓋盤

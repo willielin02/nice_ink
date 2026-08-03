@@ -7,9 +7,11 @@
 
 class ANiceInkCharacter;
 class UCanvas;
+class UTexture2D;
 
 // 醉夢描圖（SPEC v4.0 定案 #49/#50）——受害者 client 端：
-// 割線針機制 2D 移植（滑鼠＝意圖點、針以 v_max 恆速追趕、皮繩鉗、按住左鍵下針）、
+// 割線針機制 2D 移植（08-04 方向舵制：滑鼠只給方向、針沿方向以 v_max 恆速走、
+// 按住左鍵下針；與割線筆同制含 FP 刺青筆貼圖/行進蟻虛線）、
 // 越線判定（下針中針心離中線 > 帶半寬＝失敗：線全洗、針回起點、同圖重描）、
 // 搖晃攻擊顯示與判定（圖形搖、針不搖＝圖下的針被相對位移；抬針＝安全）、
 // canvas 繪製。狀態不複製給任何他端（作畫者看不到夢的進度＝張力來源）。
@@ -89,11 +91,21 @@ private:
 	FVector2D FigCenterCm = FVector2D::ZeroVector;
 	FVector2D FigHalfCm = FVector2D(1.0f, 1.0f);
 
-	// 針與游標（盤面 cm 空間）
+	// 針（盤面 cm 空間）；CursorPanel＝方向舵制退役後恆=針（summary 相容）
 	FVector2D NeedlePanel = FVector2D::ZeroVector;
 	FVector2D CursorPanel = FVector2D::ZeroVector;
 	bool bPenDown = false;
 	bool bPrevPenDown = false;
+
+	// 方向舵（08-04 user 定案「描圖完全與割線筆一樣」）：滑鼠只給方向、針沿方向
+	// 以 v_max 恆速走；壓針起手無方向=原地停（同割線 dotwork 語義）
+	FVector2D HeadingDir = FVector2D::ZeroVector;
+	FVector2D HeadingAccumCm = FVector2D::ZeroVector;
+	bool bHeadingValid = false;
+
+	// 第一人稱刺青筆貼圖（同割線 FP viewmodel：T_UI_TattooPen、出針口樞軸右傾）
+	UPROPERTY()
+	TObjectPtr<UTexture2D> PenSprite = nullptr;
 
 	// 路線進度（圖形空間）：CurIdx＝目前最近段索引（投影窗中心）、
 	// ProgressS＝從起點沿線的帶號累積弧長（|ProgressS| ≥ TotalLen ＝ 描完）
