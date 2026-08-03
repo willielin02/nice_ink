@@ -56,7 +56,8 @@ public:
 	bool IsFailFlashing() const;
 
 	// HUD 委派繪製（圖形包圍盒貼合可用矩形＝整圖入鏡下的最大化；全 canvas 三角形直畫）
-	void DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, const FVector2D& HalfSizePx);
+	// AvoidPx＝姿勢面板矩形：撞到才退讓（bbox 級保守判定；16:9 置中圖案幾乎不會撞）
+	void DrawTracePanel(UCanvas* Canvas, const FBox2D& AvailPx, const FBox2D& AvoidPx);
 
 	// --- robo 除錯（只設 pending；RPC 發送一律發生在 TickComponent＝python guard 外） ---
 

@@ -461,7 +461,7 @@ FString UDreamTraceComponent::GetDebugSummary() const
 
 // --- 繪製 ---
 
-void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& CenterPx, const FVector2D& HalfSizePx)
+void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FBox2D& AvailPx, const FBox2D& AvoidPx)
 {
 	if (!bActive || !Canvas || !Figure.IsValid())
 	{
@@ -474,12 +474,46 @@ void UDreamTraceComponent::DrawTracePanel(UCanvas* Canvas, const FVector2D& Cent
 	// 手感（游標增益/帶寬）全在公分域＝縮放不變。先前「px/cm 對齊割線視圖」
 	// 拿螢幕像素當參考系＝把割線視圖才有的實物參考搬進沒有參考物的夢＝錯誤
 	// 座標系（整圖大於螢幕八倍、圖案辨識度歸零——user 抓「這是什麼圖案」實錘）。
-	// 縮放＝包圍盒貼合可用矩形（等比、取兩軸較小者）；餘裕 1.5cm 同時蓋住
-	// 搖晃位移上限（1.2cm 振幅 × 包絡 0.6 × wobble 峰 1.5 ≈ 1.08cm）。
-	const float PadCm = Params.BandHalfWidthCm + 1.5f;
-	const float Scale = FMath::Min(
-		HalfSizePx.X / FMath::Max(FigHalfCm.X + PadCm, 1.0f),
-		HalfSizePx.Y / FMath::Max(FigHalfCm.Y + PadCm, 1.0f));
+	// 縮放＝包圍盒貼合可用矩形（等比、取兩軸較小者）；餘裕 1.2cm 蓋住搖晃
+	// 位移上限（1.2cm 振幅 × 包絡 0.6 × wobble 峰 1.5 ≈ 1.08cm）。
+	const float PadCm = Params.BandHalfWidthCm + 1.2f;
+	auto FitInto = [&](const FBox2D& R, float& OutScale, FVector2D& OutCenter)
+	{
+		const FVector2D Half = R.GetExtent();
+		OutScale = FMath::Min(
+			Half.X / FMath::Max(FigHalfCm.X + PadCm, 1.0f),
+			Half.Y / FMath::Max(FigHalfCm.Y + PadCm, 1.0f));
+		OutCenter = R.GetCenter();
+	};
+	float Scale;
+	FVector2D CenterPx;
+	FitInto(AvailPx, Scale, CenterPx);
+	// 姿勢面板避讓：整圖入鏡＝路線不得被 HUD 蓋住——bbox 粗篩＋路線級細判
+	//（bbox 角落掃到面板邊條就整階退讓＝龜在 16:9 被誤傷 18%；帶+搖晃餘裕
+	// 用面板外擴 PadCm×Scale 蓋住），真撞才退回面板頂之上的安全矩形
+	{
+		const FVector2D ScreenHalf((FigHalfCm.X + PadCm) * Scale, (FigHalfCm.Y + PadCm) * Scale);
+		const FBox2D FigBox(CenterPx - ScreenHalf, CenterPx + ScreenHalf);
+		if (AvoidPx.bIsValid && FigBox.Intersect(AvoidPx))
+		{
+			const FBox2D Grown = AvoidPx.ExpandBy(PadCm * Scale);
+			bool bRouteHit = false;
+			for (const FVector2D& Pt : Figure.Points)
+			{
+				if (Grown.IsInside(CenterPx + (Pt - FigCenterCm) * Scale))
+				{
+					bRouteHit = true;
+					break;
+				}
+			}
+			if (bRouteHit)
+			{
+				FBox2D Safe = AvailPx;
+				Safe.Max.Y = FMath::Max(AvoidPx.Min.Y - 10.0f, AvailPx.Min.Y + 1.0f);
+				FitInto(Safe, Scale, CenterPx);
+			}
+		}
+	}
 
 	const FVector2D OffsetCm = ShakeOffsetCm();
 	auto PanelToPx = [&](const FVector2D& Cm) { return CenterPx + (Cm - FigCenterCm) * Scale; };

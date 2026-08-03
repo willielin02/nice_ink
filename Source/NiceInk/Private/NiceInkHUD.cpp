@@ -795,18 +795,18 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	{
 		// 整圖入鏡（08-02 user 裁決：圖案是夢裡唯一的參考系——速度=完成時間與
 		// 針速/帶寬比，皆縮放不變；畫面歸針/像素倍率同源已退役）。
-		// 可用矩形＝杯數列之下、姿勢面板頂之上、左右留邊——包圍盒貼合最大化
-		//（圓形面板＋MaxAbsR 半徑貼合對非圓圖案縮到三~五成＝「圖太小」病根）。
-		const float PanelTop = 95.0f * UiScale;             // 標題+杯數列（底 80）之下
-		const float PanelBottom = H - 256.0f * UiScale;     // 姿勢面板（頂 H-246）之上
-		const FVector2D PanelCenter(W * 0.5f, (PanelTop + PanelBottom) * 0.5f);
-		const FVector2D PanelHalfSize(W * 0.5f - 50.0f * UiScale, (PanelBottom - PanelTop) * 0.5f);
-		Trace->DrawTracePanel(Canvas, PanelCenter, PanelHalfSize);
+		// 可用矩形＝杯數列之下、底部提示行之上、左右留邊——包圍盒貼合最大化
+		//（圓形面板＋MaxAbsR 半徑貼合對非圓圖案縮到三~五成＝「圖太小」病根；
+		// 進度%併入提示行＝整條 H*0.86 保留帶還給圖）；姿勢面板＝撞到才讓位。
+		const FBox2D PanelAvail(
+			FVector2D(50.0f * UiScale, 95.0f * UiScale),
+			FVector2D(W - 50.0f * UiScale, H - 70.0f * UiScale));
+		const FBox2D PanelAvoid(
+			FVector2D(34.0f * UiScale, H - 246.0f * UiScale),
+			FVector2D(234.0f * UiScale, H - 34.0f * UiScale));
+		Trace->DrawTracePanel(Canvas, PanelAvail, PanelAvoid);
 
-		// 進度＋事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）
-		DrawTok(FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f)),
-			W * 0.5f, H * 0.86f, ETextTier::Body,
-			NiHudColor::PaperDim, EHAlign::Center, false);
+		// 事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）——蓋在圖上、瞬態
 		if (Trace->IsShakeActive())
 		{
 			DrawTok(FString::Printf(TEXT("%s SHAKES YOUR DREAM !"), *Trace->GetShakeAttackerName().ToUpper()),
@@ -819,7 +819,8 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 				W * 0.5f, H * 0.16f, ETextTier::Title,
 				NiHudColor::Red, EHAlign::Center, true);
 		}
-		DrawBottomHint(TEXT("hold LMB — trace the line to wake"), NiHudColor::Lavender);
+		DrawBottomHint(FString::Printf(TEXT("hold LMB — trace the line to wake · %d%%"),
+			FMath::RoundToInt(Trace->GetProgress01() * 100.0f)), NiHudColor::Lavender);
 	}
 	else if (Maze && Maze->IsMazeActive())
 	{
