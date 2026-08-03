@@ -1999,14 +1999,6 @@ int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
 	{
 		return 0;
 	}
-	const float DAz = FMath::FindDeltaAngleDegrees(TattooNeedleAz, TattooCursorAz);
-	const float DTilt = TattooCursorTilt - TattooNeedleTilt;
-	const float AngDist = FMath::Sqrt(DAz * DAz + DTilt * DTilt);
-	if (AngDist <= KINDA_SMALL_NUMBER)
-	{
-		return 0;
-	}
-	const FVector2D Dir(DAz / AngDist, DTilt / AngDist);
 	float Az = TattooNeedleAz;
 	float Tilt = TattooNeedleTilt;
 	float Est = TattooAngPerCmEst;
@@ -2017,17 +2009,36 @@ int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
 	}
 	OutPoints.Add(P);
 	const float Step = FMath::Max(TattooGuideStepCm, 0.1f);
-	// 長度=追趕殘距（08-04 二輪修：皮繩退役後殘距=針到游標的完整待走路徑，
-	// 虛線盡頭與游標十字重合；64 步上限=48cm 防極端長線吃 trace 成本）
-	const int32 N = FMath::Clamp(FMath::CeilToInt(TattooChaseErrCm / Step), 1, 64);
-	for (int32 i = 0; i < N; ++i)
+	// 逐步朝游標追（08-04 三修，與針的真實追法同構）：每步重算方向、剩餘角距
+	// 不足一步即停——一次性方向＋估計長度的舊版在斜面/曲面上估計失準＝虛線
+	// 多走一節、末端脫離游標十字（user 抓）。64 步上限=48cm 防極端長線吃 trace。
+	bool bReachedCursor = false;
+	for (int32 i = 0; i < 64; ++i)
 	{
+		const float DAz = FMath::FindDeltaAngleDegrees(Az, TattooCursorAz);
+		const float DTilt = TattooCursorTilt - Tilt;
+		const float AngD = FMath::Sqrt(DAz * DAz + DTilt * DTilt);
+		if (AngD <= Step * FMath::Max(Est, 0.02f))
+		{
+			bReachedCursor = true; // 剩不足一步＝到游標
+			break;
+		}
+		const FVector2D Dir(DAz / AngD, DTilt / AngD);
 		float MovedCm = 0.0f;
 		if (!CruiseStepOnSkin(Az, Tilt, Dir, Step, Est, P, MovedCm))
 		{
-			break; // 邊緣＝導引線誠實截斷
+			break; // 邊緣＝導引線誠實截斷（針會在這裡釘住；游標可指在剪影外）
 		}
 		OutPoints.Add(P);
+	}
+	// 終點釘在游標的真實命中點上＝虛線末端與十字重合（構造保證）
+	if (bReachedCursor)
+	{
+		FVector CurP;
+		if (TraceAimToTarget(FRotator(-TattooCursorTilt, TattooCursorAz, 0.0f).Vector(), CurP))
+		{
+			OutPoints.Add(CurP);
+		}
 	}
 	return OutPoints.Num();
 }
