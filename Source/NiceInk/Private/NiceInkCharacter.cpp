@@ -2857,12 +2857,22 @@ int32 ANiceInkCharacter::GetInkAuthorId() const
 
 void ANiceInkCharacter::ClientSyncPoseTransform_Implementation(const FTransform& NewTransform)
 {
-	if (HasAuthority())
+	if (!HasAuthority())
 	{
-		return; // 主機本人＝server 路徑已權威落地
+		// 主機本人＝server 路徑已權威落地，僅遠端要補 transform
+		SetActorTransform(NewTransform, false, nullptr, ETeleportType::TeleportPhysics);
+		GetCharacterMovement()->StopMovementImmediately();
 	}
-	SetActorTransform(NewTransform, false, nullptr, ETeleportType::TeleportPhysics);
-	GetCharacterMovement()->StopMovementImmediately();
+	// 控制器朝向同步（08-04 競態封死；user 抓「第一人稱與第三人稱反向」）：
+	// bUseControllerRotationYaw 平時=true，而關閉它的 bAsleep 複製與本 RPC 到達
+	// 順序不保證——RPC 先到＝下一個移動 tick 把身體 yaw 轉回「入睡前視角」且
+	// 永不修正（本人端身體朝向≠server＝甦醒相機整個世界讀感旋轉）。把同一個
+	// yaw 寫進控制器＝就算 yaw-follow 還開著，轉向目標也已是躺姿/座位朝向，
+	// 兩條路徑殊途同歸、與封包順序無關；主機受害者的現身回座同治。
+	if (AController* C = GetController())
+	{
+		C->SetControlRotation(FRotator(0.0f, NewTransform.Rotator().Yaw, 0.0f));
+	}
 }
 
 void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform)

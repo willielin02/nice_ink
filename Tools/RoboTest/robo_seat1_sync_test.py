@@ -141,6 +141,17 @@ class Test:
                 return
             self.victim_local = find_char(w, self.victim_pid)
             self.compare("asleep")
+            # 08-04 競態封死實錘：入睡後本人端「控制器 yaw」必須=躺姿 yaw——
+            # 沒同步的話 bUseControllerRotationYaw 在 bAsleep 複製晚到的幀會把
+            # 身體轉回入睡前視角（user 抓「第一人稱與第三人稱反向」的病根）
+            ctrl = self.victim_local.get_controller()
+            if ctrl:
+                cy = ctrl.get_control_rotation().yaw
+                ay = self.victim_local.get_actor_rotation().yaw
+                self.check("asleep: owner control yaw synced to lie yaw", dyaw(cy, ay) < 2.0,
+                           f"ctrl={cy:.1f} actor={ay:.1f}")
+            else:
+                self.check("asleep: owner control yaw synced to lie yaw", False, "no controller")
             # 鋪一筆讓現身有巡禮可進
             unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).debug_robo_stroke(
                 unreal.Vector2D(0.45, 0.45), unreal.Vector2D(0.50, 0.47), 2)
