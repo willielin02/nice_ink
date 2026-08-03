@@ -1201,6 +1201,23 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 				}
 			}
 
+			// 自由游標十字（08-04 二輪修：游標=可放很遠的目標點；虛線盡頭=十字）
+			if (!bStencilPen)
+			{
+				FVector CurW;
+				if (MyChar->GetTattooCursorHudWorld(CurW))
+				{
+					const FVector Pr = Project(CurW);
+					if (Pr.Z > 0.0f)
+					{
+						const float A = 6.0f * UiScale;
+						const FLinearColor CurCol(0.85f, 0.85f, 0.95f, 0.95f);
+						DrawLine(Pr.X - A, Pr.Y, Pr.X + A, Pr.Y, CurCol, 1.6f * UiScale);
+						DrawLine(Pr.X, Pr.Y - A, Pr.X, Pr.Y + A, CurCol, 1.6f * UiScale);
+					}
+				}
+			}
+
 			// FP 2D 筆（07-22「要 2D 感」二改：user 定案「筆尖要對齊落筆點＋筆身像
 			// 真人握筆右傾」）：貼圖以出針口為樞軸右傾 PEN_TILT、出針口錨在準星
 			// 沿筆軸外推一小段——待機=留間隙+針樁（收）、按住 LMB=針線補滿間隙且

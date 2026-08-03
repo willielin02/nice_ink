@@ -1341,6 +1341,8 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 		DrawAimTiltLocal = FMath::Clamp(PendingDebugDrawAim.Y, DrawTiltMinDeg, DrawTiltMaxDeg);
 		TattooNeedleAz = DrawAimAzLocal;
 		TattooNeedleTilt = DrawAimTiltLocal;
+		TattooCursorAz = DrawAimAzLocal;   // 游標同步 snap（傳送門不產生追趕位移）
+		TattooCursorTilt = DrawAimTiltLocal;
 		// robo 橋接鐵則（07-28 十一輪血價）：角度命令的語義=「射線指哪」——游標制下
 		// 游標從命令角的命中點再生（aim 不變＝命中點在射線上＝命令角逐字生效）、
 		// gaze 硬切＝robo 下相機/臉零延遲、既有角度契約全數原樣
@@ -1371,16 +1373,12 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	{
 		bDrawGazeInit = false;
 		bDrawCamInit = false;
-		// 方向舵（08-04 user 定案「滑鼠僅給予方向，不需要持續移動」）：按住 LMB 中
-		// 滑鼠增量只累積成行進方向、不驅動任何位置——aim 恆=針（畫面歸針原樣）。
-		// 門檻累積制：過 TattooHeadingMinDeg 才轉舵（防單像素抖動亂舵）
-		TattooHeadingAccumDeg += FVector2D(MouseX * Sens, -MouseY * Sens);
-		if (TattooHeadingAccumDeg.Size() >= TattooHeadingMinDeg)
-		{
-			TattooHeadingDir = TattooHeadingAccumDeg.GetSafeNormal();
-			bTattooHeadingValid = true;
-			TattooHeadingAccumDeg = FVector2D::ZeroVector;
-		}
+		// 自由游標（08-04 二輪修）：滑鼠純積分推游標——無皮繩、可放很遠；
+		// 「方向」=針→游標連線（位置=積分=穩定；瞬時位移=噪聲——一輪方向舵
+		// 的敏感/粗顆粒病根）。aim 恆=針（畫面歸針原樣）、游標=獨立意圖點。
+		TattooCursorAz = FMath::UnwindDegrees(TattooCursorAz + MouseX * Sens);
+		TattooCursorTilt = FMath::Clamp(TattooCursorTilt - MouseY * Sens,
+			DrawTiltMinDeg, DrawTiltMaxDeg);
 	}
 	else
 	{
@@ -1403,20 +1401,23 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 			bTattooChaseActive = true;
 			TattooNeedleAz = DrawAimAzLocal;   // 落針點=按下瞬間的 aim（起點重合）
 			TattooNeedleTilt = DrawAimTiltLocal;
+			TattooCursorAz = DrawAimAzLocal;   // 游標同點起手（輕點不動=dotwork）
+			TattooCursorTilt = DrawAimTiltLocal;
 			bStencilFollowTried = false;       // 沿稿吸附：每次壓針重新嘗試一次
-			bTattooHeadingValid = false;       // 方向舵：壓針起手無方向=原地扎（輕點=dotwork）
-			TattooHeadingAccumDeg = FVector2D::ZeroVector;
 		}
 		if (bStencilFollowActive && (FMath::Abs(MouseX) + FMath::Abs(MouseY)) > 6.0f)
 		{
-			bStencilFollowActive = false; // 玩家出手＝拿回方向（沿稿→方向舵；本 tick 滑鼠已進方向累積）
+			bStencilFollowActive = false; // 玩家出手＝拿回方向（沿稿→自由巡航；游標已被本 tick 滑鼠推走）
 		}
 		if (bDebugPaintStickActive)
 		{
-			// robo 方向命令＝直接設舵（方向舵制下語義字面化；(0,0) 由
-			// DebugRoboPaintStick 清舵=停針）
-			TattooHeadingDir = DebugPaintStickPx.GetSafeNormal();
-			bTattooHeadingValid = true;
+			// robo 方向命令：游標恆掛在針前方（無限走廊巡航——速度/針距契約同構）；
+			// (0,0) 由 DebugRoboPaintStick 收游標=停
+			const FVector2D Dn = DebugPaintStickPx.GetSafeNormal();
+			const float AheadDeg = TattooChaseLeashCm * FMath::Max(TattooAngPerCmEst, 0.02f);
+			TattooCursorAz = FMath::UnwindDegrees(TattooNeedleAz + Dn.X * AheadDeg);
+			TattooCursorTilt = FMath::Clamp(TattooNeedleTilt + Dn.Y * AheadDeg,
+				DrawTiltMinDeg, DrawTiltMaxDeg);
 		}
 		UpdateTattooCruise(DeltaSeconds);
 	}
@@ -1424,7 +1425,7 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	{
 		if (bTattooChaseActive)
 		{
-			// 放開左鍵：手 aim 收斂到針位（方向舵制下恆已相等，保留=防禦）
+			// 放開左鍵：手 aim 收斂到針位（巡航中 aim 恆=針，保留=防禦）
 			DrawAimAzLocal = TattooNeedleAz;
 			DrawAimTiltLocal = TattooNeedleTilt;
 		}
@@ -1433,8 +1434,6 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 		TattooChaseErrCm = 0.0f;
 		bStencilFollowActive = false;
 		bStencilFollowTried = false;
-		bTattooHeadingValid = false;
-		TattooHeadingAccumDeg = FVector2D::ZeroVector;
 	}
 
 	// One Euro：姿勢/筆/墨的驅動源＝濾波 aim（相機用生值——視角零延遲）。
@@ -1610,13 +1609,14 @@ void ANiceInkCharacter::UpdateStencilCursor(float MouseX, float MouseY, float Se
 
 void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 {
-	// 方向舵（08-04 user 定案「滑鼠僅給予方向，不需要持續移動」，取代 07-24
-	// 皮繩追趕）：針沿 TattooHeadingDir 以 v_max 恆速走、滑鼠不動＝沿方向持續走、
-	// 壓針起手無方向＝原地扎。速率上限量在「皮膚表面 3D 距離」不在角速度——
-	// 眼距隨部位變（69~86cm＋長針 85cm）、掠射面上小角=大皮膚位移；trace 回饋鉗讓
-	// 掠射面自動變慢（斜坡上扎針本來就慢）。P 跳段（拉出剪影/跨肢溝壑）＝收斂到
-	// 零步＝針釘在邊緣持續原地扎——feature：真刺青要跨過去必須抬針（放開左鍵），
-	// 順帶消滅跨肢誤連線整類髒輸出。速度債/外環增益與皮繩時代同構。
+	// 自由游標追趕（08-04 二輪修＝user 擊穿互斥誤診：「滑鼠給方向」的正確實作
+	// =「滑鼠給一個可以放很遠的目標點」）：Dir=針→游標、步長=min(v_max·dt·gain+債,
+	// 殘距)——手擁有路徑（游標位置）、機器擁有速度；**皮繩退役**＝游標甩遠=
+	// 持續走、游標貼針=貼手精描、游標橫移一點=方向細調（解析度隨距離放大）。
+	// 速率上限量在「皮膚表面 3D 距離」不在角速度——眼距隨部位變、掠射面上
+	// 小角=大皮膚位移；trace 回饋鉗讓掠射面自動變慢。P 跳段（拉出剪影/跨肢
+	// 溝壑）＝收斂到零步＝針釘在邊緣持續原地扎——真刺青要跨過去必須抬針，
+	// 順帶消滅跨肢誤連線。aim 恆=針（畫面歸針、相機/姿勢/複製全鏈）。
 	bTattooCruising = false;
 	// 沿稿吸附（07-25 打稿制）：壓針首 tick 找稿——SnapCm 內有稿線＝機器沿稿自動走
 	//（手勢歸打稿、慢工歸機器）；沒稿/吸附失敗＝整段自由巡航
@@ -1635,24 +1635,28 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 		// 相機/畫面照常屬於針；稿走完/失效＝停針原地扎（放開再壓＝從斷點續走）
 		DrawAimAzLocal = TattooNeedleAz;
 		DrawAimTiltLocal = TattooNeedleTilt;
+		TattooCursorAz = TattooNeedleAz;   // 游標收攏到針（沿稿結束不得衝向殘留游標）
+		TattooCursorTilt = TattooNeedleTilt;
 		TattooChaseErrCm = 0.0f;
 		FVector PNow;
 		if (!TraceAimToTarget(FRotator(-TattooNeedleTilt, TattooNeedleAz, 0.0f).Vector(), PNow) ||
 			!UpdateStencilFollow(DeltaSeconds, PNow))
 		{
 			bStencilFollowActive = false;
-			bTattooHeadingValid = false; // 沿稿結束=停針等新方向（不得用舊舵自走）
 		}
 		return;
 	}
-	// aim 恆=針（畫面歸針；意圖點/皮繩/貼手域全隨方向舵退役）
+	// aim 恆=針（畫面歸針）
 	DrawAimAzLocal = TattooNeedleAz;
 	DrawAimTiltLocal = TattooNeedleTilt;
-	TattooChaseErrCm = 0.0f;
 	const float EstDegPerCm = FMath::Max(TattooAngPerCmEst, 0.02f);
-	if (!bTattooHeadingValid)
+	float DAz = FMath::FindDeltaAngleDegrees(TattooNeedleAz, TattooCursorAz);
+	float DTilt = TattooCursorTilt - TattooNeedleTilt;
+	float AngDist = FMath::Sqrt(DAz * DAz + DTilt * DTilt);
+	TattooChaseErrCm = AngDist / EstDegPerCm;
+	if (TattooChaseErrCm <= TattooChaseStopCm)
 	{
-		TattooSpeedDebtCm = 0.0f; // 無方向=原地扎（輕點=單點=dotwork）
+		TattooSpeedDebtCm = 0.0f; // 游標在針上=停針意圖：清債（原地扎；輕點=單點=dotwork）
 		return;
 	}
 	const float BaseStepCm = TattooMaxSpeedCmPerSec() * FMath::Min(DeltaSeconds, 0.25f);
@@ -1662,14 +1666,30 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 	}
 	// 速度債（07-22 三修）：上幀短差本幀補；外環增益再補「步進折損→針的平滑
 	// 路徑縮短」的系統性折損（見 TattooSpeedGain 註）。
-	const float StepCm = BaseStepCm * TattooSpeedGain + TattooSpeedDebtCm;
-	const FVector2D Dir = TattooHeadingDir;
+	const float FullStepCm = BaseStepCm * TattooSpeedGain + TattooSpeedDebtCm;
+	if (TattooChaseErrCm < FullStepCm)
+	{
+		// 貼手域（殘距<一步）：針直接落在游標上——慢工精描=亦步亦趨；band 步進器
+		// 強迫走整步會繞點震盪（首驗 TP 實錘）。不記債不進增益視窗。
+		TattooNeedleAz = TattooCursorAz;
+		TattooNeedleTilt = TattooCursorTilt;
+		DrawAimAzLocal = TattooNeedleAz;
+		DrawAimTiltLocal = TattooNeedleTilt;
+		bTattooCruising = true;
+		TattooSpeedDebtCm = 0.0f;
+		TattooGainCmdAccum = 0.0f;
+		TattooGainActAccum = 0.0f;
+		TattooChaseErrCm = 0.0f;
+		return;
+	}
+	const float StepCm = FullStepCm;
+	const FVector2D Dir(DAz / AngDist, DTilt / AngDist);
 
 	FVector PNow;
 	if (!TraceAimToTarget(FRotator(-TattooNeedleTilt, TattooNeedleAz, 0.0f).Vector(), PNow))
 	{
-		// 針下皮膚失蹤（身體動了/落針在剪影邊）：無回饋可量，按估計角速沿舵慢移
-		const float SlideDeg = EstDegPerCm * BaseStepCm;
+		// 針下皮膚失蹤（身體動了/落針在剪影邊）：無回饋可量，按估計角速朝游標慢移
+		const float SlideDeg = FMath::Min(AngDist, EstDegPerCm * BaseStepCm);
 		TattooNeedleAz = FMath::UnwindDegrees(TattooNeedleAz + Dir.X * SlideDeg);
 		TattooNeedleTilt = FMath::Clamp(TattooNeedleTilt + Dir.Y * SlideDeg,
 			DrawTiltMinDeg, DrawTiltMaxDeg);
@@ -1716,9 +1736,12 @@ void ANiceInkCharacter::UpdateTattooCruise(float DeltaSeconds)
 		}
 	}
 
-	// 步進動了針＝aim 再同步（相機/姿勢/複製全鏈=針）
+	// 步進動了針＝aim 再同步（相機/姿勢/複製全鏈=針）＋殘距重算（導引/summary）
 	DrawAimAzLocal = TattooNeedleAz;
 	DrawAimTiltLocal = TattooNeedleTilt;
+	DAz = FMath::FindDeltaAngleDegrees(TattooNeedleAz, TattooCursorAz);
+	DTilt = TattooCursorTilt - TattooNeedleTilt;
+	TattooChaseErrCm = FMath::Sqrt(DAz * DAz + DTilt * DTilt) / EstDegPerCm;
 }
 
 namespace
@@ -1966,16 +1989,24 @@ bool ANiceInkCharacter::CruiseStepOnSkin(float& AzDeg, float& TiltDeg, const FVe
 
 int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
 {
-	// 導引預測路徑（08-04 方向舵制）：從針位沿行進方向模擬步進器——
-	//「維持目前方向會走的路」；本地複本（az/tilt/est/P）模擬、巡航狀態零污染；
+	// 導引預測路徑（08-04 二輪修）：從針位沿「針→游標」方向模擬步進器——
+	// 待走路徑、長度=追趕殘距（虛線盡頭=你指的目標點；皮繩退役後殘距可以很長
+	// =誠實預告整段）；本地複本（az/tilt/est/P）模擬、巡航狀態零污染；
 	// 線=貼膚曲線、停在剪影邊緣＝「針會在這裡釘住」在拉過去之前就預告。
 	OutPoints.Reset();
 	if (!bLeanLocked || !bPenTriggerLocal || SelectedNeedle != EInkNeedle::Liner ||
-		!bTattooChaseActive || !bTattooHeadingValid || bStencilFollowActive)
+		!bTattooChaseActive || bStencilFollowActive || TattooChaseErrCm <= TattooGuideShowCm)
 	{
 		return 0;
 	}
-	const FVector2D Dir = TattooHeadingDir;
+	const float DAz = FMath::FindDeltaAngleDegrees(TattooNeedleAz, TattooCursorAz);
+	const float DTilt = TattooCursorTilt - TattooNeedleTilt;
+	const float AngDist = FMath::Sqrt(DAz * DAz + DTilt * DTilt);
+	if (AngDist <= KINDA_SMALL_NUMBER)
+	{
+		return 0;
+	}
+	const FVector2D Dir(DAz / AngDist, DTilt / AngDist);
 	float Az = TattooNeedleAz;
 	float Tilt = TattooNeedleTilt;
 	float Est = TattooAngPerCmEst;
@@ -1986,10 +2017,9 @@ int32 ANiceInkCharacter::BuildTattooGuidePath(TArray<FVector>& OutPoints) const
 	}
 	OutPoints.Add(P);
 	const float Step = FMath::Max(TattooGuideStepCm, 0.1f);
-	// 前瞻恆 16cm（07-25 三修：皮繩制曾把導引鉗在追趕殘距 ≤2.5cm＝虛線短到近乎
-	// 不存在——「你在往哪開」的即時回饋是恆速針唯一的操縱儀表，砍它=盲開。
-	// 語義=「維持目前方向會走的路」（含浮雕跨越/剪影釘住預告），與拉桿時代同構）
-	const int32 N = FMath::Clamp(FMath::CeilToInt(TattooGuideLookaheadCm / Step), 1, 64);
+	// 長度=追趕殘距（08-04 二輪修：皮繩退役後殘距=針到游標的完整待走路徑，
+	// 虛線盡頭與游標十字重合；64 步上限=48cm 防極端長線吃 trace 成本）
+	const int32 N = FMath::Clamp(FMath::CeilToInt(TattooChaseErrCm / Step), 1, 64);
 	for (int32 i = 0; i < N; ++i)
 	{
 		float MovedCm = 0.0f;
@@ -2075,6 +2105,23 @@ bool ANiceInkCharacter::GetStencilCursorHudWorld(FVector& Out) const
 	return true;
 }
 
+bool ANiceInkCharacter::GetTattooCursorHudWorld(FVector& Out) const
+{
+	// 巡航中的自由游標＝針→游標待走路徑的終點（十字記號；虛線盡頭與它重合）
+	if (!bLeanLocked || !IsLocallyControlled() || SelectedNeedle != EInkNeedle::Liner ||
+		!bTattooChaseActive || TattooChaseErrCm <= TattooGuideShowCm)
+	{
+		return false;
+	}
+	if (!TraceAimToTarget(FRotator(-TattooCursorTilt, TattooCursorAz, 0.0f).Vector(), Out))
+	{
+		// 游標射線出剪影：浮在射線基準距離上（照樣可指——針會走到剪影邊釘住）
+		Out = GetAimRayOrigin() +
+			FRotator(-TattooCursorTilt, TattooCursorAz, 0.0f).Vector() * DrawCursorRefDistCm;
+	}
+	return true;
+}
+
 bool ANiceInkCharacter::GetStencilLazyTipHudWorld(FVector& Out) const
 {
 	// 拉繩墨尖（08-02）：只在本人稿筆繪製中有效——2D 筆錨到這裡=「筆尖在墨
@@ -2109,9 +2156,10 @@ void ANiceInkCharacter::DebugRoboPaintStick(float X, float Y)
 	bDebugPaintStickActive = DebugPaintStickPx.Size() > KINDA_SMALL_NUMBER;
 	if (!bDebugPaintStickActive)
 	{
-		// 解除命令＝清舵停針（方向舵制：舵不清=針沿舊方向永走，打破停針冪等契約）
-		bTattooHeadingValid = false;
-		TattooHeadingAccumDeg = FVector2D::ZeroVector;
+		// 解除命令＝模擬「手停」：游標收回針上（robo 沒有滑鼠可停；不收回=
+		// 殘餘游標距讓針多追＝打破停針冪等契約）
+		TattooCursorAz = TattooNeedleAz;
+		TattooCursorTilt = TattooNeedleTilt;
 		DrawAimAzLocal = TattooNeedleAz;
 		DrawAimTiltLocal = TattooNeedleTilt;
 	}

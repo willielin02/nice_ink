@@ -91,17 +91,11 @@ private:
 	FVector2D FigCenterCm = FVector2D::ZeroVector;
 	FVector2D FigHalfCm = FVector2D(1.0f, 1.0f);
 
-	// 針（盤面 cm 空間）；CursorPanel＝方向舵制退役後恆=針（summary 相容）
+	// 針與自由游標（盤面 cm 空間；08-04 二輪修＝無皮繩——游標可放很遠、針恆追）
 	FVector2D NeedlePanel = FVector2D::ZeroVector;
 	FVector2D CursorPanel = FVector2D::ZeroVector;
 	bool bPenDown = false;
 	bool bPrevPenDown = false;
-
-	// 方向舵（08-04 user 定案「描圖完全與割線筆一樣」）：滑鼠只給方向、針沿方向
-	// 以 v_max 恆速走；壓針起手無方向=原地停（同割線 dotwork 語義）
-	FVector2D HeadingDir = FVector2D::ZeroVector;
-	FVector2D HeadingAccumCm = FVector2D::ZeroVector;
-	bool bHeadingValid = false;
 
 	// 第一人稱刺青筆貼圖（同割線 FP viewmodel：T_UI_TattooPen、出針口樞軸右傾）
 	UPROPERTY()
