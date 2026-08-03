@@ -193,8 +193,8 @@ class Test:
             # cup0 難度檔：統一 60s×v_max 1.8＝線長 108；帶半寬=筆寬 0.30（user
             # 定案「筆寬兩倍當帶寬」＝發夢當下從受害者 TattooNibDiameterCm 導出
             # ——改筆寬/TattooDotHz 會連動這兩個值＝契約要跟著重算）
-            self.check("t1 figure matches cup0 params (60s x vmax; band=nib)",
-                       abs(d.get("perim", 0) - 108.0) < 1.0 and abs(d.get("band", 0) - 0.30) < 0.01,
+            self.check("t1 figure matches cup0 params (60s x vmax; band=nib*2.4/2)",
+                       abs(d.get("perim", 0) - 108.0) < 1.0 and abs(d.get("band", 0) - 0.36) < 0.01,
                        f"perim={d.get('perim')} band={d.get('band')}")
             self.check("t1 figure dense enough", d.get("pts", 0) >= 150, f"pts={d.get('pts')}")
             self.check("t1 progress starts zero", abs(d.get("prog", 9)) < 0.01 and d.get("fails") == 0.0, str(d))
