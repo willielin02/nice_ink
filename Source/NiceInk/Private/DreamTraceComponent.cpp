@@ -381,10 +381,9 @@ void UDreamTraceComponent::TickComponent(float DeltaTime, ELevelTick TickType, F
 		CursorPanel = NeedlePanel;
 	}
 
-	// 游標鉗位：盤面邏輯域（整圖入鏡＝圖案範圍＋餘裕）防跑飛——只有域鉗、
-	// 無皮繩（08-04 二輪修：皮繩=「持續移動」的真兇，退役）
-	CursorPanel.X = FMath::Clamp(CursorPanel.X, FigCenterCm.X - FigHalfCm.X - 4.0f, FigCenterCm.X + FigHalfCm.X + 4.0f);
-	CursorPanel.Y = FMath::Clamp(CursorPanel.Y, FigCenterCm.Y - FigHalfCm.Y - 4.0f, FigCenterCm.Y + FigHalfCm.Y + 4.0f);
+	// 游標無鉗（08-04 三輪修：bbox+4cm 域牆=08-02 皮繩時代的防跑飛殘留——皮繩
+	// 在時永遠碰不到、皮繩拆後變成割線沒有的牆=機制分岔，user 抓到拆除。
+	// 割線游標同樣無牆；甩出畫面外=虛線仍指向游標方向、拉回即歸）
 
 	// --- 針追趕（機器擁有速度、手擁有路徑；游標可在任意遠=針持續走到它為止）---
 	if (bPenDown)
