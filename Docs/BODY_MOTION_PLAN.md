@@ -82,5 +82,8 @@
 - 調參定案（穩態擺幅進鉗位內、衝擊照樣碰頂）：JiggleGain 1.7→1.25、
   JiggleDamping 0.20→0.32、JiggleChestHz 2.7→3.4（原值正中全速步頻 2.6Hz）、
   GaitWeightShiftCm 4.5→3.5。
-- 迴歸：directdraw／orbit／feign／trace／stencilcursor（本節隨結果補）。
+- 迴歸全綠（2026-08-04）：directdraw **71/72**（唯一 FAIL＝既知記帳 flake
+  「cruise tipSpd」同簽名 2.05/gain 1.01，與本改動無因果——步態/彈跳不碰巡航鏈）、
+  orbit **24/0**、feign **26/0**、trace **22/0**、stencilcursor **20/0**。
+  ini robo 行已拆、play 模式已切回 party。
 - **手感（步態節奏/彈跳浮誇度/首人稱體感）＝user viewport 總驗收，未過門。**
