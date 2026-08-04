@@ -173,15 +173,28 @@
 
 ## 摺り足步態＋軟肉彈跳儀器（2026-08-04）
 
-- `robo_gait_probe.py`＝骨骼站姿/摺り足/彈跳常駐探針（7 檢查）：c1 顯示換軌
-  （站立 Body 隱形/BowBody 可見）、c2 雙腳恆貼地（踝骨 Z ≤ rest+3cm——步態的
-  構造保證實測面）、c3 撐地腳世界釘住（慢腳速<體速一半、佔比 ≥75%＝交替滑步
-  簽名）、c4 沉腰屈膝（髖低 ≥5cm）、c5 彈跳激勵（走路肚彈簧峰 ≥0.4cm）、
+- `robo_gait_probe.py`＝骨骼站姿/摺り足/彈跳常駐探針（**10 檢查**；走法＝四段
+  身體相對方向：前走/右橫移/斜走/邊走邊轉 120°/s，每段先傳送回房中心）：
+  c1 顯示換軌（站立 Body 隱形/BowBody 可見）、c2 雙腳恆貼地（踝骨 Z ≤ rest+3cm
+  ——構造保證實測面）、c3 撐地腳世界釘住（慢腳速<體速一半、佔比 ≥70%；只評
+  前走段——雙軌守恆式在主軸成立）、c4 沉腰屈膝（髖低 ≥5cm）、c5 彈跳激勵
+  （肚彈簧等效位移峰 ≥0.4cm——旋轉耦合後骨位移歸零、量測面=LastSpringCm）、
   c6 停步收斂（3s 肚<0.3＋髖回位）、**c7 防飽和**（肚釘鉗位樣本佔比<50%——
-  「絕對速度阻尼等速拖尾 2ζv/ω 恆撞鉗位」與「驅動頻率撞彈簧共振」兩病的迴歸籠）
-  ＋側視截圖矩陣（DebugRoboSideView 相機、朝/背房間中心折返走連拍 gait_*.png）。
+  「絕對速度阻尼等速拖尾 2ζv/ω 恆撞鉗位」與「驅動頻率撞彈簧共振」兩病的迴歸籠）、
+  **c8 雙腳不越側帶**（全走法全樣本 |footX| ≥ 帶下限-2 容差＝穿膜構造保證面）、
+  **c9 膝恆外開**（|kneeX| ≥ 40 vs rest 58.7＝馬步外弓保留）、**c10 左右大腿
+  骨段間距**（≥30、rest≈67＝骨級穿膜代理）＋四向截圖矩陣（side_fwd/front_lat/
+  front_turn/back_settle——正面＝設 control yaw 面向南牆機位再橫移）。
   鉤子＝`DebugRoboWalk(dirX,dirY,secs)`（PollMove 消化＝與真鍵同入口）＋
-  `DebugRoboGaitStats()` 機讀摘要。結果檔 Saved/robo_gait_result.txt。
+  `DebugRoboGaitStats()` 機讀摘要＋`DebugRoboViewFrom(dx,dy,dz)` 任意方位觀察
+  相機。結果檔 Saved/robo_gait_result.txt。
+  **鏡位血價**：房中心+角色前方 230cm＝相機正好塞進座位角色體內（front 系全滅）
+  ——截圖一律南牆機位（40,-240,25）＋「讓角色面向鏡頭」拍正面。
+- `robo_headlight_probe.py`＝頭燈假光斷層診斷 A/B（2026-08-05）：同機位三張
+  ——skel（骨骼現行）/flat（HeadlightFloor=1 關頭燈）/statue（bSkeletalStandEnabled
+  =False 舊雕像）。判讀：斷層 flat 消失=著色（法線）病、flat 仍在=貼圖病；
+  statue 無=兩資產分歧。胸斷層戰役定罪鏈（真幾何+SM 管線抹軟法線+**5.7
+  Interchange 無視 FbxImportUI 選項**鐵坑）全文=Docs/BODY_MOTION_PLAN.md 四輪節。
 - 探針教訓三條：①新探針 boot 段必關 bThrottleCPUWhenNotForeground（背景節流
   假數據簽名＝多個 moving 樣本 phase/腳速**完全相同**＝巨量 dt 幀混疊）；
   ②道場 X 域 ~440cm——走路探針不准直走 >1.5s，一律「朝/背房間中心」由當下

@@ -135,15 +135,20 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   **08-01 出墨層修＝拆 Shader 遺留移動閘＋首針即點**（3°/s 閘=慢畫整段無墨、
   單擊無點——閘關 tick 路徑不記帳=永久丟棄；稿筆墨=P 無此閘要防的噪聲源、
   Shader 閘照舊；probe 補 c7 單擊守恆/c8 慢速域契約=14/0＋directdraw 72/72；
-  **08-04 骨骼身體常駐＋摺り足＋軟肉彈跳（user 三條委託、BUILT-自驗已提交
-  6b7b0b6）**＝站立/走路顯示全換 BowBody 骨骼（靜態 Body 退居真相載體恆隱形、
-  碰撞/UV 解算原樣；睡/鎖接管路徑不動；MID 晚綁防護讓路 ghost 旗標）＋摺り足
-  步態（步幅=速度/步頻守恆式=撐地腳世界釘住、雙腳 Z 恆貼地=構造保證、屈膝
-  沉腰/重心橫移/二骨腿 IK 膝外弓）＋五 Jiggle 骨世界空間彈簧（肚2.1/胸3.4/
-  臀3.2Hz、ζ0.32、gain1.25、鉗8cm；**阻尼必用相對速度**——絕對速度=等速拖尾
-  2ζv/ω 恆撞鉗位實錘；胸 2.7Hz 正中步頻共振同錘）；儀器=robo_gait_probe
-  7 契約＋DebugRoboWalk/GaitStats/SideView；gait 7/0＋五套迴歸綠；
-  帳本=Docs/BODY_MOTION_PLAN.md、手感待 viewport；
+  **08-04~05 骨骼身體常駐＋摺り足＋軟肉彈跳（user 委託+三輪打回迭代、四輪
+  SHIPPED 已提交 6b7b0b6..4047a95）**＝站立/走路顯示全換 BowBody 骨骼（靜態
+  Body 退居真相載體恆隱形、碰撞/UV 解算原樣；睡/鎖接管路徑不動；MID 晚綁防護
+  讓路 ghost 旗標）＋摺り足**雙軌制**（二輪 user 抓「腳統一朝左右擺+穿膜」：
+  速度分解前後/左右、各腳自己側軌道滑＋側帶鉗位=不越中線構造保證、膝極向
+  rest 導出=馬步外弓保留；步幅=速度/步頻守恆式=撐地腳釘住、雙腳恆貼地=構造
+  保證）＋五 Jiggle 骨世界彈簧（**阻尼必用相對速度**=等速拖尾實錘、驅動頻率
+  避彈簧共振；三輪權重手術=Jiggle_Belly 繞背 13%+褌背帶 42.5% 背側淡出=背不跳；
+  四輪**旋轉耦合**=平移不轉法線實錘、切向偏移換繞體內樞軸旋轉=明暗隨肉滾）
+  ＋**柔化法線轉印**（胸斷層四段定罪=真幾何+SM 靜態管線抹軟法線=雕像是美化
+  說謊者；**5.7 Interchange 無視 FbxImportUI 選項**鐵坑；sumo_soft_normals_bake
+  =著色對齊雕像讀感）；儀器=robo_gait_probe 10 契約（含 c8 不越帶/c9 膝外開/
+  c10 大腿間距）+robo_headlight_probe A/B+DebugRoboWalk/GaitStats/ViewFrom；
+  四輪全綠；帳本=Docs/BODY_MOTION_PLAN.md、手感待 viewport；
   二輪增益 0.4=誤修已還原（「太敏感」主詞是視野觸發非游標——體感形容詞先問
   主詞；StencilCursorGain 旋鈕留、預設 1.0）；三輪=**邊緣帶真兇雙修**（儀器
   robo_fovaxis_probe：引擎維持垂直 FOV、「水平半角 18°」只在 16:9 成立→半角
@@ -235,7 +240,8 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   ＋甦醒本人端朝向競態修（ClientSyncPoseTransform 補控制器 yaw；robo_wakefov_probe
   +seat1 斷言入庫）＋甦醒 FOV 調查=零變動實錘 72；
   帳本=Docs/DREAM_TRACE_PLAN.md 含補位設計待追認清單）**、
-  走路動畫（bWalkAnimEnabled）、音效組（MasterVolume）、
+  走路動畫（08-04 摺り足制實裝取代雕像搖擺=技術地圖 08-04~05 條、待 viewport）、
+  音效組（MasterVolume）、
   **刺青作畫全制（2026-07-20~24，帳本=Docs/DIRECT_DRAW_PLAN.md 逐版全史：直接畫制
   →刺青機伸縮針→液線巡航手感→雙針制→打霧十一版（細針點排、冷墨底色、跨縫
   表面補丁）→**十二~十六版（07-24：欠取樣 aliasing 根治（暈開烘製鏈）→軟橢圓
