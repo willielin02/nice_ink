@@ -382,6 +382,63 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "10"))
 	float WalkBobCm = 2.5f;
 
+	// --- 骨骼站姿＋摺り足步態（2026-08-04 user 委託：站立/走路全換骨骼身體）---
+	// 顯示＝BowBody（骨骼、軟肉可彈跳）；靜態 Body 退居真相載體（碰撞/UV 解算照舊、
+	// 站立時恆隱形）。摺り足＝力士滑步：雙腳 Z 恆貼地（構造保證不離地）、
+	// 撐地腳世界釘住（步幅=速度/步頻守恆式）、滑步腳沿地滑行；屈膝沉腰、骨盆近水平、
+	// 重心左右換腳。骨骼資產缺席時退回舊制雕像搖擺（機制照跑）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk")
+	bool bSkeletalStandEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "25"))
+	float GaitStanceDropCm = 10.0f;   // 移動時髖下沉（屈膝深度；速度斜坡帶入）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0.5", ClampMax = "8"))
+	float GaitStepsPerSecBase = 2.8f; // 起步步頻（每秒滑步數；力士碎步）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "1", ClampMax = "10"))
+	float GaitStepsPerSecMax = 5.2f;  // 全速步頻
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "10", ClampMax = "70"))
+	float GaitMaxStrideCm = 46.0f;    // 步幅上限（超出=輕微滑冰，防低步頻大跨步）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "12"))
+	float GaitWeightShiftCm = 3.5f;   // 重心橫移振幅（骨盆壓向撐地腳側；也是彈跳的主激勵）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "5"))
+	float GaitBobCm = 0.7f;           // 沉浮（摺り足紀律=近水平；微量供彈跳激勵）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "20"))
+	float GaitTorsoLeanDeg = 6.0f;    // 上身向行進方向前傾
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "25"))
+	float GaitArmSwingDeg = 7.0f;     // 手臂前後小擺（與同側腳反相）
+
+	// --- 軟肉彈跳（jiggle：胸×2/肚/臀×2 五骨阻尼彈簧＝世界空間錨點追趕）---
+	// 骨骼身體可見的所有狀態生效（站走/作畫姿/沉睡替身被翻身）；純視覺、各端本地模擬
+	//（姿勢輸入本來就同步，彈跳自己長出來——零複製）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle")
+	bool bJiggleEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0", ClampMax = "5"))
+	float JiggleGain = 1.25f;         // 浮誇倍率（1=物理位移原樣；穩態擺幅要留在鉗位內
+	                                  //  ——衝擊響應碰頂是要的、穩態頂死=「被吹住」病）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "1", ClampMax = "20"))
+	float JiggleMaxCm = 8.0f;         // 偏移鉗位（防穿模/防瞬移灌爆）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.02", ClampMax = "0.9"))
+	float JiggleDamping = 0.32f;      // 阻尼比 ζ（低=晃更多下；過低=步頻共振 Q 放大頂鉗位）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.5", ClampMax = "8"))
+	float JiggleBellyHz = 2.1f;       // 肚（最大質量=最慢；貼近步頻=晃最兇，層級刻意）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.5", ClampMax = "8"))
+	float JiggleChestHz = 3.4f;       // 胸（原 2.7 正中全速步頻 2.6Hz 共振＝恆頂鉗位實錘）
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.5", ClampMax = "8"))
+	float JiggleButtHz = 3.2f;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
@@ -790,6 +847,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboFeignSleep(bool bFeign);
 
+	// robo：模擬按住移動鍵朝世界方向走 Seconds 秒（本地 PollMove 消化——與真鍵同一入口）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboWalk(float WorldDirX, float WorldDirY, float Seconds);
+
+	// robo：步態/彈跳機讀摘要（腳貼地/撐地腳釘住/髖沉/五骨偏移——gait 探針斷言用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugRoboGaitStats() const;
+
+	// robo：第三人稱側視相機開關（步態截圖矩陣用；false=還原本體視角）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboSideView(bool bEnable);
+
 	// robo：直設作畫臉指向（本地作畫者下一 tick 消化；滑鼠不可注入）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboDrawAim(float AzDeg, float TiltDeg);
@@ -886,8 +955,40 @@ private:
 
 	// 程式化走路內部狀態（本地）
 	float WalkAnimPhase = 0.0f;
-	bool bWalkAnimApplied = false;
+	bool bWalkAnimApplied = false;      // 舊制雕像搖擺（骨骼資產缺席 fallback）用
+	bool bStandDoubleActive = false;    // 骨骼站姿顯示中（BowBody=站走顯示載體）
+	float GaitStanceAlpha = 0.0f;       // 屈膝深度混成（速度驅動線性斜坡）
+	FVector GaitSlideDirCS = FVector::YAxisVector; // 滑步方向（CS；平滑追隨速度向）
+	bool bGaitIdleWritten = false;      // 停步歸位姿勢已寫（不重複寫骨）
+	FVector GaitPrevFootW[2] = { FVector::ZeroVector, FVector::ZeroVector };
+	float GaitFootSpeed[2] = { 0.0f, 0.0f }; // 腳世界速度（探針「撐地腳釘住」斷言）
+	bool bGaitPrevFootValid = false;
 	void UpdateWalkAnim(float DeltaSeconds);
+	void UpdateLegacyStatueWalk(float DeltaSeconds); // 骨骼資產缺席的退路（舊制原樣）
+	void ApplyGaitPose(float DeltaSeconds, float Speed2D); // 摺り足擺骨（CS 全身組合＋腿 IK）
+
+	// 軟肉彈跳內部狀態（世界空間彈簧；各端本地）
+	struct FJiggleBoneState
+	{
+		FVector PosW = FVector::ZeroVector;          // 質點位置（世界）
+		FVector VelW = FVector::ZeroVector;
+		FVector LastAnchorW = FVector::ZeroVector;
+		FVector LastWrittenCS = FVector::ZeroVector; // 上次寫入骨位（判斷姿勢層是否重寫）
+		FVector LastOffsetCS = FVector::ZeroVector;  // 上次疊加偏移（還原基準用）
+		bool bValid = false;
+	};
+	FJiggleBoneState JiggleStates[5];
+	void UpdateJiggleBones(float DeltaSeconds);
+
+	// robo 走路注入/側視相機
+	FVector2D DebugWalkDirWorld = FVector2D::ZeroVector;
+	float DebugWalkEndTime = -1.0f;
+	UPROPERTY(Transient)
+	TObjectPtr<ACameraActor> DebugSideCam;
+
+	// ghost 材質佔用旗標（ApplyGhostView 設、ReapplyCanonicalMaterials 清）——
+	// 站姿的皮膚 MID 晚綁防護不得覆蓋 ghost 半透明
+	bool bGhostMaterialApplied = false;
 
 	// 作畫中（本地端）
 	bool bPainting = false;

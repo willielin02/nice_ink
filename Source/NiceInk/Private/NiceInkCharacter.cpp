@@ -466,6 +466,8 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 		ApplyBowPose();
 	}
 
+	UpdateJiggleBones(DeltaSeconds); // 所有端：軟肉彈跳（一切擺骨之後、讀骨消費者之前）
+
 	UpdatePenVisual(); // 所有端：筆焊死在右手（讀本 tick 最終骨骼——必在 ApplyBowPose 後）
 
 	// 伸縮脖：所有擺骨完成後解銜接曲面（顯式順序；lean-lock 事件驅動的擺骨
@@ -1043,6 +1045,23 @@ void ANiceInkCharacter::PollMove(APlayerController* PC)
 			ServerRequestEmerge();
 		}
 		return;
+	}
+
+	// robo 走路注入（DebugRoboWalk）：模擬按住方向鍵——與真鍵同一入口（輸入所有權慣例）
+	if (DebugWalkEndTime > 0.0f)
+	{
+		if (GetWorld()->GetTimeSeconds() < DebugWalkEndTime)
+		{
+			const FVector Dir(DebugWalkDirWorld.X, DebugWalkDirWorld.Y, 0.0f);
+			if (!Dir.IsNearlyZero())
+			{
+				AddMovementInput(Dir.GetSafeNormal(), 1.0f);
+			}
+		}
+		else
+		{
+			DebugWalkEndTime = -1.0f;
+		}
 	}
 
 	if (!bAnyMoveKey)
@@ -2273,6 +2292,7 @@ void ANiceInkCharacter::ApplyGhostView(bool bEnable)
 					M->SetMaterial(i, GhostMaterial);
 				}
 			}
+			C->bGhostMaterialApplied = true; // 站姿 MID 晚綁防護讓路（勿覆蓋半透明）
 		}
 		else
 		{
@@ -2284,6 +2304,7 @@ void ANiceInkCharacter::ApplyGhostView(bool bEnable)
 
 void ANiceInkCharacter::ReapplyCanonicalMaterials()
 {
+	bGhostMaterialApplied = false; // ghost 解除＝站姿 MID 防護恢復巡邏
 	// Body：MID 重建/重綁（臉貼圖、RT、眼罩、膚色全部回真相）
 	if (Body && InkCanvas)
 	{
@@ -3694,6 +3715,69 @@ void ANiceInkCharacter::DebugRoboFeignSleep(bool bFeign)
 	// 「模擬按住 Shift」輸入源：與真鍵 OR、由 PollSleepHead 的同一條 edge 消化
 	//（直設 feign 狀態會被下一 tick 的輸入輪詢反殺——owner 輪詢還原 robo 態的老陷阱）
 	bDebugFeignHeld = bFeign;
+}
+
+void ANiceInkCharacter::DebugRoboWalk(float WorldDirX, float WorldDirY, float Seconds)
+{
+	// 走 Seconds 秒（PollMove 每 tick 消化＝與真鍵同一條 AddMovementInput 路徑）
+	DebugWalkDirWorld = FVector2D(WorldDirX, WorldDirY);
+	DebugWalkEndTime = GetWorld() ? static_cast<float>(GetWorld()->GetTimeSeconds()) + Seconds : -1.0f;
+}
+
+FString ANiceInkCharacter::DebugRoboGaitStats() const
+{
+	// gait 探針機讀摘要。腳高=世界 Z 相對腳底地面（actor Z − 半膠囊 92）
+	float FootLz = -1.0f, FootRz = -1.0f;
+	float HipsH = -1.0f;
+	if (BowBody && BowBody->GetSkinnedAsset())
+	{
+		const float FloorZ = static_cast<float>(GetActorLocation().Z) - 92.0f;
+		FootLz = static_cast<float>(
+			BowBody->GetBoneTransformByName(TEXT("LeftFoot"), EBoneSpaces::WorldSpace).GetLocation().Z) - FloorZ;
+		FootRz = static_cast<float>(
+			BowBody->GetBoneTransformByName(TEXT("RightFoot"), EBoneSpaces::WorldSpace).GetLocation().Z) - FloorZ;
+		HipsH = static_cast<float>(
+			BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace).GetLocation().Z) - FloorZ;
+	}
+	return FString::Printf(
+		TEXT("bodyVis=%d bowVis=%d stand=%d speed=%.1f stance=%.2f phase=%.2f ")
+		TEXT("footLz=%.1f footRz=%.1f footLspd=%.1f footRspd=%.1f hipsH=%.1f ")
+		TEXT("jBelly=%.2f jChL=%.2f jChR=%.2f jBuL=%.2f jBuR=%.2f"),
+		Body && Body->IsVisible() ? 1 : 0,
+		BowBody && BowBody->IsVisible() ? 1 : 0,
+		bStandDoubleActive ? 1 : 0,
+		GetVelocity().Size2D(), GaitStanceAlpha, WalkAnimPhase,
+		FootLz, FootRz, GaitFootSpeed[0], GaitFootSpeed[1], HipsH,
+		JiggleStates[0].LastOffsetCS.Size(), JiggleStates[1].LastOffsetCS.Size(),
+		JiggleStates[2].LastOffsetCS.Size(), JiggleStates[3].LastOffsetCS.Size(),
+		JiggleStates[4].LastOffsetCS.Size());
+}
+
+void ANiceInkCharacter::DebugRoboSideView(bool bEnable)
+{
+	// 側視第三人稱相機（截圖矩陣用；固定機位——探針在鏡框內走小段路）
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC)
+	{
+		return;
+	}
+	if (bEnable)
+	{
+		if (!DebugSideCam)
+		{
+			FActorSpawnParameters SP;
+			SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+			DebugSideCam = GetWorld()->SpawnActor<ACameraActor>(SP);
+		}
+		const FVector Focus = GetActorLocation() + FVector(0.0f, 0.0f, -30.0f);
+		const FVector CamLoc = ClampToRoom(GetActorLocation() + FVector(40.0f, -240.0f, 20.0f));
+		DebugSideCam->SetActorLocationAndRotation(CamLoc, (Focus - CamLoc).Rotation());
+		PC->SetViewTargetWithBlend(DebugSideCam, 0.0f);
+	}
+	else
+	{
+		PC->SetViewTargetWithBlend(this, 0.0f);
+	}
 }
 
 bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal)
@@ -5678,13 +5762,105 @@ void ANiceInkCharacter::ServerRequestStartMatch_Implementation()
 
 void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 {
-	// 站立移動時 Body 疊步伐；睡姿/貼臉鎖定（Body 隱藏或被睡姿接管）一律不碰。
-	if (!Body)
+	// 站立顯示與步態（2026-08-04 骨骼常駐改制）：站立/走路顯示=BowBody 骨骼身體
+	//（摺り足＋軟肉彈跳的載體）；靜態 Body 退居真相載體（碰撞/UV 解算照舊、恆隱形）。
+	// 睡姿（UpdateSleepBodyDouble）與作畫姿（ApplyBowPose）各自接管顯示——這裡讓位。
+	if (!Body || !BowBody)
 	{
 		return;
 	}
-	const bool bEligible = bWalkAnimEnabled && !bAsleep && !bLeanLocked && Body->IsVisible();
-	const float Speed2D = bEligible ? GetVelocity().Size2D() : 0.0f;
+	const bool bEligible = !bAsleep && !bLeanLocked;
+	if (!bEligible)
+	{
+		bStandDoubleActive = false; // 睡/鎖接管；回站時重新活化（含殘留重置）
+		bGaitIdleWritten = false;
+		bGaitPrevFootValid = false;
+		return;
+	}
+	if (!bSkeletalStandEnabled || !EnsureBowBodyAsset())
+	{
+		UpdateLegacyStatueWalk(DeltaSeconds); // 骨骼資產缺席：舊制雕像搖擺（機制照跑）
+		return;
+	}
+
+	if (!bStandDoubleActive)
+	{
+		bStandDoubleActive = true;
+		bGaitIdleWritten = false;
+		bGaitPrevFootValid = false;
+		WalkAnimPhase = 0.0f;
+		GaitStanceAlpha = 0.0f;
+		// 前一個使用者（睡姿替身/作畫姿）的殘留清乾淨；相對變換回站姿基準
+		ResetBowBodyBones();
+		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
+		BowBody->SetOwnerNoSee(true); // 第一人稱不見自己身體（SPEC 視角規則）
+	}
+	// 冪等重申視形（ResetBowPose 等事件路徑會把 Body 還原可見——下一 tick 這裡收回）
+	if (Body->IsVisible())
+	{
+		Body->SetVisibility(false); // 碰撞保留：lean 起手/畫墨/噴射 UV 解算照打
+	}
+	if (!BowBody->IsVisible())
+	{
+		BowBody->SetVisibility(true);
+	}
+	// 皮膚 MID 晚綁防護：BowBody 首次載入時 Body 的 MID 可能尚未建（BeginPlay 順序），
+	// EnsurePoseableAsset 只在載入瞬間綁一次——這裡每 tick 廉價指標比對補綁。
+	// ghost 佔用中讓路（半透明是 ApplyGhostView 的地盤）。
+	if (!bGhostMaterialApplied && Body->GetDynamicMaterial())
+	{
+		if (const USkeletalMesh* Sk = Cast<USkeletalMesh>(BowBody->GetSkinnedAsset()))
+		{
+			const TArray<FSkeletalMaterial>& SkMats = Sk->GetMaterials();
+			for (int32 i = 0; i < SkMats.Num(); ++i)
+			{
+				if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")) &&
+					BowBody->GetMaterial(i) != Body->GetDynamicMaterial())
+				{
+					BowBody->SetMaterial(i, Body->GetDynamicMaterial());
+				}
+			}
+		}
+	}
+
+	const float Speed2D = bWalkAnimEnabled ? GetVelocity().Size2D() : 0.0f;
+
+	// 屈膝深度＝速度斜坡（0.17s 級進出蹲：快而不瞬跳——瞬跳=彈簧假激勵）
+	const float TargetStance = FMath::Clamp(Speed2D / 80.0f, 0.0f, 1.0f);
+	GaitStanceAlpha = FMath::FInterpConstantTo(GaitStanceAlpha, TargetStance, DeltaSeconds, 6.0f);
+
+	if (Speed2D < 20.0f && GaitStanceAlpha <= KINDA_SMALL_NUMBER)
+	{
+		WalkAnimPhase = 0.0f;
+		bGaitPrevFootValid = false;
+		GaitFootSpeed[0] = GaitFootSpeed[1] = 0.0f;
+		if (!bGaitIdleWritten)
+		{
+			bGaitIdleWritten = true;
+			ResetBowBodyBones(); // 站姿＝ref pose（與雕像版同一剪影；彈跳層隨後疊自己的偏移）
+		}
+		return;
+	}
+	bGaitIdleWritten = false;
+	ApplyGaitPose(DeltaSeconds, Speed2D);
+}
+
+void ANiceInkCharacter::UpdateLegacyStatueWalk(float DeltaSeconds)
+{
+	// 舊制雕像搖擺（07-17 原樣保留＝骨骼資產缺席的退路）：整具靜態 Body 疊
+	// 側傾三角波＋步點彈跳；停步硬還原。
+	if (bStandDoubleActive)
+	{
+		// 骨骼制中途失效（開關被關）：把顯示還給雕像
+		bStandDoubleActive = false;
+		BowBody->SetVisibility(false);
+		ResetBowBodyBones();
+	}
+	if (!Body->IsVisible())
+	{
+		Body->SetVisibility(true);
+	}
+	const float Speed2D = bWalkAnimEnabled ? GetVelocity().Size2D() : 0.0f;
 
 	if (Speed2D < 20.0f)
 	{
@@ -5693,12 +5869,7 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 			bWalkAnimApplied = false;
 			WalkAnimPhase = 0.0f;
 			// 停步＝硬還原站姿基準（美術語言：硬切）。
-			// 例外：睡姿已接管 Body 變換（lie/prone），還原會把睡姿蓋掉——
-			// 甦醒路徑自己會寫回站姿。lean 只藏不動 Body，照樣還原。
-			if (!bAsleep)
-			{
-				Body->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
-			}
+			Body->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
 		}
 		return;
 	}
@@ -5719,6 +5890,286 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 		BodyStandRelLoc + FVector(0.0f, 0.0f, BobZ),
 		(WaddleQ * FQuat(BodyStandRelRot)).Rotator());
 	bWalkAnimApplied = true;
+}
+
+void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
+{
+	// 摺り足步態（2026-08-04）：CS 全身組合＋解析二骨腿 IK。
+	// 核心守恆式：步幅=速度/步頻 ⇒ 撐地腳的本地後移速率恰=移動速度＝世界釘住；
+	// 滑步腳沿地面滑行（Z 恆=ref 地面高——「腳不離地」是構造保證不是動畫技巧）。
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	const int32 NumBones = Ref.GetNum();
+
+	// ref CS 組合（scale 鏈照 DrawPoseData.h 鐵坑：節點根骨 scale=100，不得再手動放大）
+	TArray<FTransform> CS;
+	CS.SetNum(NumBones);
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		const int32 Parent = Ref.GetParentIndex(i);
+		CS[i] = Ref.GetRefBonePose()[i] * (Parent != INDEX_NONE ? CS[Parent] : FTransform::Identity);
+	}
+	auto IdxOf = [&](const TCHAR* N) { return Ref.FindBoneIndex(FName(N)); };
+	const int32 HipsIdx = IdxOf(TEXT("Hips"));
+	const int32 SpineIdx = IdxOf(TEXT("Spine"));
+	if (HipsIdx == INDEX_NONE || SpineIdx == INDEX_NONE)
+	{
+		return;
+	}
+
+	// 步頻/步幅
+	const float MaxSpeed = GetCharacterMovement() ? FMath::Max(1.0f, GetCharacterMovement()->MaxWalkSpeed) : 250.0f;
+	const float SpeedRatio = FMath::Clamp(Speed2D / MaxSpeed, 0.0f, 1.0f);
+	const float StepsPerSec = FMath::Lerp(GaitStepsPerSecBase, GaitStepsPerSecMax, SpeedRatio);
+	const float Stride = FMath::Min(Speed2D / FMath::Max(StepsPerSec, 0.5f), GaitMaxStrideCm);
+	// 一週期=左右各滑一步（相位 0.5 錯開）
+	WalkAnimPhase = FMath::Fmod(WalkAnimPhase + DeltaSeconds * StepsPerSec * 0.5f, 1.0f);
+
+	// 滑步方向（CS）＝速度向量進元件空間；平滑追隨（免轉向瞬跳）
+	const FTransform CompT = BowBody->GetComponentTransform();
+	FVector WantDir = CompT.InverseTransformVectorNoScale(GetVelocity());
+	WantDir.Z = 0.0f;
+	if (WantDir.Normalize())
+	{
+		const float K = FMath::Clamp(DeltaSeconds * 10.0f, 0.0f, 1.0f);
+		GaitSlideDirCS = FMath::Lerp(GaitSlideDirCS, WantDir, K);
+		if (!GaitSlideDirCS.Normalize())
+		{
+			GaitSlideDirCS = WantDir;
+		}
+	}
+
+	// 骨盆：屈膝下沉＋重心橫移（壓向撐地腳側）＋微沉浮（單腳承重段微沉）
+	// 左腳撐地段=phase[0,0.5)（本地後移＝世界釘住）；CS +X=角色左側
+	const float Sin1 = FMath::Sin(2.0f * PI * WalkAnimPhase);      // +1=左撐地中點
+	const float Cos2 = FMath::Cos(4.0f * PI * WalkAnimPhase);      // 每步一谷
+	const float Drop = GaitStanceDropCm * GaitStanceAlpha;
+	const float Shift = GaitWeightShiftCm * GaitStanceAlpha * Sin1;
+	const float Bob = GaitBobCm * GaitStanceAlpha * 0.5f * (1.0f - Cos2);
+	const FVector PelvisOfs(Shift, 0.0f, -(Drop + Bob));
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		CS[i].SetLocation(CS[i].GetLocation() + PelvisOfs);
+	}
+
+	// 上身前傾（向行進方向；繞髖樞軸）——腿隨後被 IK 重釘，不受此轉影響
+	if (GaitTorsoLeanDeg > 0.0f)
+	{
+		const FVector LeanAxis = FVector::CrossProduct(FVector::UpVector, GaitSlideDirCS).GetSafeNormal();
+		if (!LeanAxis.IsNearlyZero())
+		{
+			// 正角=向 SlideDir 前傾（axis=Up×Dir，Rodrigues 驗算：+θ 把 +Z 轉向 Dir）
+			const FQuat LeanQ(LeanAxis, FMath::DegreesToRadians(GaitTorsoLeanDeg * GaitStanceAlpha));
+			RotSubtreeAboutPivotCS(Ref, CS, SpineIdx, LeanQ, CS[HipsIdx].GetLocation());
+		}
+	}
+
+	// 手臂小擺（與同側腳反相：左腳前滑時左臂後擺）
+	if (GaitArmSwingDeg > 0.0f)
+	{
+		const FVector SwingAxis = FVector::CrossProduct(FVector::UpVector, GaitSlideDirCS).GetSafeNormal();
+		const float SwingDeg = GaitArmSwingDeg * GaitStanceAlpha * Sin1;
+		const int32 ArmL = IdxOf(TEXT("LeftArm"));
+		const int32 ArmR = IdxOf(TEXT("RightArm"));
+		if (!SwingAxis.IsNearlyZero() && ArmL != INDEX_NONE && ArmR != INDEX_NONE)
+		{
+			RotSubtreeAboutPivotCS(Ref, CS, ArmL,
+				FQuat(SwingAxis, FMath::DegreesToRadians(SwingDeg)), CS[ArmL].GetLocation());
+			RotSubtreeAboutPivotCS(Ref, CS, ArmR,
+				FQuat(SwingAxis, FMath::DegreesToRadians(-SwingDeg)), CS[ArmR].GetLocation());
+		}
+	}
+
+	// 腿：解析二骨 IK（腳目標=ref 地面位置+滑步位移；三角波=撐地段線性後移）
+	struct FLegDef { const TCHAR* Up; const TCHAR* Low; const TCHAR* Foot; const TCHAR* Toe; float PhaseOfs; };
+	const FLegDef Legs[2] = {
+		{ TEXT("LeftUpLeg"), TEXT("LeftLeg"), TEXT("LeftFoot"), TEXT("LeftToeBase"), 0.0f },
+		{ TEXT("RightUpLeg"), TEXT("RightLeg"), TEXT("RightFoot"), TEXT("RightToeBase"), 0.5f },
+	};
+	// ref 腳位（未受骨盆位移污染的地面錨——重算一份純 ref CS 太貴，改用「扣回骨盆位移」）
+	for (const FLegDef& Leg : Legs)
+	{
+		const int32 UpIdx = IdxOf(Leg.Up);
+		const int32 LowIdx = IdxOf(Leg.Low);
+		const int32 FootIdx = IdxOf(Leg.Foot);
+		const int32 ToeIdx = IdxOf(Leg.Toe);
+		if (UpIdx == INDEX_NONE || LowIdx == INDEX_NONE || FootIdx == INDEX_NONE)
+		{
+			continue;
+		}
+		const FVector RefHip = CS[UpIdx].GetLocation();               // 已含骨盆位移（正確：髖跟骨盆走）
+		const FVector RefKnee = CS[LowIdx].GetLocation() - PelvisOfs; // 扣回=純 ref
+		const FVector RefFoot = CS[FootIdx].GetLocation() - PelvisOfs;
+		const FVector RefHipPure = RefHip - PelvisOfs;
+
+		const float P = FMath::Fmod(WalkAnimPhase + Leg.PhaseOfs, 1.0f);
+		const float Tri = 4.0f * FMath::Abs(P - 0.5f) - 1.0f;         // p=0→+1、p=0.5→-1（撐地段線性後移）
+		const FVector FootTarget = RefFoot + GaitSlideDirCS * (Tri * Stride * 0.5f); // Z=ref＝貼地（構造保證）
+
+		const float L1 = FVector::Dist(RefHipPure, RefKnee);
+		const float L2 = FVector::Dist(RefKnee, RefFoot);
+		FVector D = FootTarget - RefHip;
+		float DLen = D.Size();
+		const float MinLen = FMath::Abs(L1 - L2) + 0.5f;
+		const float MaxLen = (L1 + L2) - 0.5f;
+		DLen = FMath::Clamp(DLen, MinLen, MaxLen);
+		const FVector DHat = D.GetSafeNormal();
+
+		// 膝極向：行進向+外側混合，投影到 ⊥DHat 平面（ref 膝本就外弓——保外開讀感）
+		const float OutSign = (RefKnee.X >= RefHipPure.X) ? 1.0f : -1.0f;
+		FVector Pole = GaitSlideDirCS + FVector(OutSign * 0.7f, 0.0f, 0.0f);
+		Pole = (Pole - FVector::DotProduct(Pole, DHat) * DHat).GetSafeNormal();
+		if (Pole.IsNearlyZero())
+		{
+			Pole = (FVector::UpVector - FVector::DotProduct(FVector::UpVector, DHat) * DHat).GetSafeNormal();
+		}
+		const float A = (L1 * L1 - L2 * L2 + DLen * DLen) / (2.0f * DLen);
+		const float H = FMath::Sqrt(FMath::Max(L1 * L1 - A * A, 1.0f));
+		const FVector Knee = RefHip + DHat * A + Pole * H;
+		const FVector FootSolved = RefHip + DHat * DLen;
+
+		// 大腿/小腿：ref 段向→新段向的最小旋轉疊在 ref 骨向上（保留原扭轉）
+		const FQuat ThighDelta = FQuat::FindBetweenNormals(
+			(RefKnee - RefHipPure).GetSafeNormal(), (Knee - RefHip).GetSafeNormal());
+		const FQuat ShinDelta = FQuat::FindBetweenNormals(
+			(RefFoot - RefKnee).GetSafeNormal(), (FootSolved - Knee).GetSafeNormal());
+		CS[UpIdx].SetLocation(RefHip);
+		CS[UpIdx].SetRotation(ThighDelta * CS[UpIdx].GetRotation());
+		CS[LowIdx].SetLocation(Knee);
+		CS[LowIdx].SetRotation(ShinDelta * CS[LowIdx].GetRotation());
+		// 腳掌：位置=解出點、旋轉=ref（腳底貼平、趾向不變——滑步的「摺」讀感）
+		FTransform FootRefT = CS[FootIdx];
+		FootRefT.SetLocation(FootSolved);
+		CS[FootIdx] = FootRefT;
+		if (ToeIdx != INDEX_NONE)
+		{
+			// 趾骨：跟著腳掌的 ref 相對關係走
+			const FTransform ToeLocal = FTransform(Ref.GetRefBonePose()[ToeIdx]);
+			CS[ToeIdx] = ToeLocal * CS[FootIdx];
+		}
+	}
+
+	// 寫入（收斂迴圈：poseable 快取陷阱的既有解法；驗證骨含最深鏈尾）
+	static const TArray<FName> GaitVerifyBones = {
+		FName(TEXT("LeftFoot")), FName(TEXT("RightFoot")),
+		FName(TEXT("RightHand")), FName(TEXT("Head")) };
+	WriteBowPoseConverged(Ref, CS, GaitVerifyBones);
+
+	// 探針用腳世界速度（撐地腳釘住斷言的量測源）
+	const FVector FootWL = BowBody->GetBoneTransformByName(TEXT("LeftFoot"), EBoneSpaces::WorldSpace).GetLocation();
+	const FVector FootWR = BowBody->GetBoneTransformByName(TEXT("RightFoot"), EBoneSpaces::WorldSpace).GetLocation();
+	if (bGaitPrevFootValid && DeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		GaitFootSpeed[0] = static_cast<float>(FVector::Dist2D(FootWL, GaitPrevFootW[0])) / DeltaSeconds;
+		GaitFootSpeed[1] = static_cast<float>(FVector::Dist2D(FootWR, GaitPrevFootW[1])) / DeltaSeconds;
+	}
+	GaitPrevFootW[0] = FootWL;
+	GaitPrevFootW[1] = FootWR;
+	bGaitPrevFootValid = true;
+}
+
+void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
+{
+	// 軟肉彈跳（2026-08-04 user 委託）：胸×2/肚/臀×2 五骨＝世界空間阻尼彈簧追錨點。
+	// 錨點＝姿勢層本 tick 寫完的骨位（Tick 顯式順序：一切擺骨之後）；輸出＝骨位平移
+	// 偏移（葉骨、蒙皮權重承載）。走路步點、入鎖硬切、被翻身全是天然激勵源。
+	static const TCHAR* JiggleBoneNames[5] = {
+		TEXT("Jiggle_Belly"), TEXT("Jiggle_Chest_L"), TEXT("Jiggle_Chest_R"),
+		TEXT("Jiggle_Butt_L"), TEXT("Jiggle_Butt_R") };
+	if (!BowBody || !BowBody->GetSkinnedAsset() || !BowBody->IsVisible())
+	{
+		for (FJiggleBoneState& S : JiggleStates)
+		{
+			S.bValid = false; // 隱藏期不模擬；下一個使用者活化時 ResetBowBodyBones 清基準
+		}
+		return;
+	}
+	const FTransform CompT = BowBody->GetComponentTransform();
+	if (!bJiggleEnabled)
+	{
+		// 關閉瞬間把殘留偏移還原（不然肚子停在半空）
+		bool bRestored = false;
+		for (int32 B = 0; B < 5; ++B)
+		{
+			FJiggleBoneState& S = JiggleStates[B];
+			if (S.bValid && !S.LastOffsetCS.IsNearlyZero())
+			{
+				FTransform T = BowBody->GetBoneTransformByName(FName(JiggleBoneNames[B]), EBoneSpaces::ComponentSpace);
+				if (T.GetLocation().Equals(S.LastWrittenCS, 0.01f))
+				{
+					T.SetLocation(T.GetLocation() - S.LastOffsetCS);
+					BowBody->SetBoneTransformByName(FName(JiggleBoneNames[B]), T, EBoneSpaces::ComponentSpace);
+					bRestored = true;
+				}
+			}
+			S.bValid = false;
+		}
+		if (bRestored)
+		{
+			BowBody->RefreshBoneTransforms();
+		}
+		return;
+	}
+	const float FreqOf[5] = { JiggleBellyHz, JiggleChestHz, JiggleChestHz, JiggleButtHz, JiggleButtHz };
+	bool bWrote = false;
+	for (int32 B = 0; B < 5; ++B)
+	{
+		const FName Bone(JiggleBoneNames[B]);
+		FTransform T = BowBody->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace);
+		FJiggleBoneState& S = JiggleStates[B];
+		// 基準骨位：姿勢層本 tick 若重寫（讀值≠上次寫值）＝讀值就是新基準；
+		// 沒重寫（dirty 檢查跳過）＝上次寫值扣回偏移
+		FVector BaseCS = T.GetLocation();
+		if (S.bValid && BaseCS.Equals(S.LastWrittenCS, 0.01f))
+		{
+			BaseCS -= S.LastOffsetCS;
+		}
+		const FVector AnchorW = CompT.TransformPosition(BaseCS);
+		if (!S.bValid || FVector::DistSquared(AnchorW, S.LastAnchorW) > FMath::Square(100.0f))
+		{
+			// 初始/傳送尖峰（入座傳送、睡姿擺位）：彈簧直接貼齊，不把瞬移當激勵
+			S.PosW = AnchorW;
+			S.VelW = FVector::ZeroVector;
+			S.LastAnchorW = AnchorW;
+			S.bValid = true;
+		}
+		const float Dt = FMath::Min(DeltaSeconds, 0.1f);
+		// 錨點速度＝阻尼的參考系（首輪探針實錘：絕對速度阻尼在等速移動有穩態拖尾
+		// 2ζv/ω≈7.6cm＝恆撞鉗位「肚子被風吹住」；相對速度阻尼＝等速零偏移、
+		// 只有加速度激勵——步點/硬切/翻身才晃，這才是「跳動」）
+		const FVector AnchorVel = Dt > KINDA_SMALL_NUMBER
+			? (AnchorW - S.LastAnchorW) / Dt : FVector::ZeroVector;
+		S.LastAnchorW = AnchorW;
+
+		// 半隱式歐拉＋子步（ω·h 穩定域；h≤1/90s）
+		const float W = 2.0f * PI * FreqOf[B];
+		const int32 Steps = FMath::Clamp(FMath::CeilToInt(Dt * 90.0f), 1, 6);
+		const float StepH = Dt / Steps;
+		for (int32 I = 0; I < Steps; ++I)
+		{
+			const FVector Acc = (AnchorW - S.PosW) * (W * W) -
+				(S.VelW - AnchorVel) * (2.0f * JiggleDamping * W);
+			S.VelW += Acc * StepH;
+			S.PosW += S.VelW * StepH;
+		}
+
+		FVector OffsetW = (S.PosW - AnchorW) * JiggleGain;
+		OffsetW = OffsetW.GetClampedToMaxSize(JiggleMaxCm);
+		const FVector OffsetCS = CompT.InverseTransformVectorNoScale(OffsetW);
+		const FVector NewLoc = BaseCS + OffsetCS;
+		S.LastOffsetCS = OffsetCS;
+		S.LastWrittenCS = NewLoc;
+		if (!NewLoc.Equals(T.GetLocation(), 0.02f)) // 靜止收斂＝零寫入（省 refresh）
+		{
+			T.SetLocation(NewLoc);
+			BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
+			bWrote = true;
+		}
+	}
+	if (bWrote)
+	{
+		BowBody->RefreshBoneTransforms(); // 同 tick 下游讀骨（筆/伸縮脖）要拿到最終姿勢
+	}
 }
 
 float ANiceInkCharacter::EffectiveLookSensitivity() const
