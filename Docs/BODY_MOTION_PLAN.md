@@ -113,4 +113,23 @@ stats 補 footLx/footRx/kneeLx/kneeRx/thighGap；新鉤子 DebugRoboViewFrom。
 截圖一律南牆機位＋「讓角色面向鏡頭再橫移」拍正面。
 二輪迴歸全綠（directdraw 71/72 同 flake、orbit 24/0、feign 26/0、trace 22/0、
 stencil 20/0）。**手感待 user viewport。**
+
+## 三輪：背跳權重手術（2026-08-05，user 抓「移動時背部也會跳、不合理」）
+
+user 假設臀骨權重沒刷好——**審計洗清臀骨**（100% 臀帶+大腿上段、背腰零權重）、
+胸骨乾淨（100% 前側）；**真兇＝Jiggle_Belly 權重繞到背側**：身體 ~13% 質量在
+背側（後腰 107 個 w≥0.3 頂點、最高 z=1.26）＋**褌背帶 42.5%**（腰帶跟肚骨晃）。
+- 手術＝`Tools/AssetPrep/sumo_jiggle_belly_backfade.py`：SumoRetopo＋Fundoshi 的
+  Jiggle_Belly 權重乘 y 淡出（前半身 y≤0 全保留、y≥0.08 歸零、間線性過渡）；
+  權重歸零頂點回落 Spine/Hips（逐頂點正規化）。術後真背側 0.00%/0.00%。
+  褌臀骨權重（100% 背側=丁字帶蓋臀）＝正確不動。
+- 縫安全：NeckSeamData 烘焙環的肚骨權重全在前側（審計 zmaxBack=1.26 < 環 z1.29）
+  ——手術不觸環頂點、header 免重生。UV 版面不動（匯出密度 0.617 與現狀逐字同）。
+- 管線＝backfade → build_sumo_skeletal_fbx → headless SK-only 重匯入（骨樹不變＝
+  replace_existing 安全不刪 Skeleton；**mtime 必查**——首跑被 4 隻殭屍編輯器鎖死
+  無聲失敗，mtime 停在 7/17 抓包，清殭屍重跑才成功）。
+- 驗證：gait 10/0（新 SK）＋背面截圖無變形無權重坑＋orbit 24/0（伸縮脖相容）＋
+  feign 26/0＋directdraw 71/72（同 flake 三連）。
+- 鐵則：**彈跳骨的權重域＝彈跳的解剖域**——彈簧調得再對，權重刷過界就會晃錯
+  部位；查「XX 部位不該動卻在動」一律先跑權重審計腳本分區量測，不猜哪根骨。
 - **手感（步態節奏/彈跳浮誇度/首人稱體感）＝user viewport 總驗收，未過門。**
