@@ -3766,9 +3766,9 @@ FString ANiceInkCharacter::DebugRoboGaitStats() const
 		GetVelocity().Size2D(), GaitStanceAlpha, WalkAnimPhase,
 		FootLz, FootRz, GaitFootSpeed[0], GaitFootSpeed[1], HipsH,
 		FootLx, FootRx, KneeLx, KneeRx, ThighGap,
-		JiggleStates[0].LastOffsetCS.Size(), JiggleStates[1].LastOffsetCS.Size(),
-		JiggleStates[2].LastOffsetCS.Size(), JiggleStates[3].LastOffsetCS.Size(),
-		JiggleStates[4].LastOffsetCS.Size());
+		JiggleStates[0].LastSpringCm, JiggleStates[1].LastSpringCm,
+		JiggleStates[2].LastSpringCm, JiggleStates[3].LastSpringCm,
+		JiggleStates[4].LastSpringCm);
 }
 
 void ANiceInkCharacter::DebugRoboSideView(bool bEnable)
@@ -6127,17 +6127,19 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 	const FTransform CompT = BowBody->GetComponentTransform();
 	if (!bJiggleEnabled)
 	{
-		// 關閉瞬間把殘留偏移還原（不然肚子停在半空）
+		// 關閉瞬間把殘留偏移/旋轉還原（不然肚子停在半空/歪著）
 		bool bRestored = false;
 		for (int32 B = 0; B < 5; ++B)
 		{
 			FJiggleBoneState& S = JiggleStates[B];
-			if (S.bValid && !S.LastOffsetCS.IsNearlyZero())
+			if (S.bValid && (!S.LastOffsetCS.IsNearlyZero() ||
+				S.LastDeltaRotCS.AngularDistance(FQuat::Identity) > 0.003f))
 			{
 				FTransform T = BowBody->GetBoneTransformByName(FName(JiggleBoneNames[B]), EBoneSpaces::ComponentSpace);
 				if (T.GetLocation().Equals(S.LastWrittenCS, 0.01f))
 				{
 					T.SetLocation(T.GetLocation() - S.LastOffsetCS);
+					T.SetRotation(S.LastDeltaRotCS.Inverse() * T.GetRotation());
 					BowBody->SetBoneTransformByName(FName(JiggleBoneNames[B]), T, EBoneSpaces::ComponentSpace);
 					bRestored = true;
 				}
@@ -6151,18 +6153,37 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		return;
 	}
 	const float FreqOf[5] = { JiggleBellyHz, JiggleChestHz, JiggleChestHz, JiggleButtHz, JiggleButtHz };
+	// 旋轉耦合幾何（2026-08-05 user 抓「晃動時陰影更糟」：純平移不轉法線＝
+	// 形狀在動、明暗凍結＝肉在「滑」不在「滾」。修法＝偏移的切向分量換成
+	// 繞體內樞軸的旋轉——法線隨骨轉、明暗即時響應；徑向殘餘留平移。
+	// 樞軸/力臂按解剖硬編（rest CS 幾何=網格契約）：肚=繞脊椎（骨頭自帶 83cm
+	// 長軸、頭在脊椎）力臂 65；胸=繞胸壁內 18cm；臀=繞骨盆內 15cm）
+	struct FJiggleLever { FVector PivotOfsCS; float LeverCm; };
+	static const FJiggleLever Levers[5] = {
+		{ FVector(0.0f, 0.0f, 0.0f), 65.0f },      // Belly：樞軸=骨頭（脊椎）本身
+		{ FVector(-6.0f, -17.0f, 0.0f), 18.0f },   // Chest_L：胸壁方向（後偏內）
+		{ FVector(6.0f, -17.0f, 0.0f), 18.0f },    // Chest_R
+		{ FVector(0.0f, 15.0f, 0.0f), 15.0f },     // Butt_L：骨盆核（前向）
+		{ FVector(0.0f, 15.0f, 0.0f), 15.0f },     // Butt_R
+	};
+	constexpr float MaxRollRad = 0.44f; // 旋轉鉗位 ~25°（防小力臂大偏移翻筋斗）
 	bool bWrote = false;
 	for (int32 B = 0; B < 5; ++B)
 	{
 		const FName Bone(JiggleBoneNames[B]);
 		FTransform T = BowBody->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace);
 		FJiggleBoneState& S = JiggleStates[B];
-		// 基準骨位：姿勢層本 tick 若重寫（讀值≠上次寫值）＝讀值就是新基準；
-		// 沒重寫（dirty 檢查跳過）＝上次寫值扣回偏移
+		// 基準骨位/骨旋：姿勢層本 tick 若重寫（讀值≠上次寫值）＝讀值就是新基準；
+		// 沒重寫（dirty 檢查跳過）＝上次寫值扣回偏移（旋轉同理：左除回去）
 		FVector BaseCS = T.GetLocation();
+		FQuat BaseRot = T.GetRotation();
 		if (S.bValid && BaseCS.Equals(S.LastWrittenCS, 0.01f))
 		{
 			BaseCS -= S.LastOffsetCS;
+		}
+		if (S.bValid && BaseRot.AngularDistance(S.LastWrittenRotCS) < 0.001f)
+		{
+			BaseRot = S.LastDeltaRotCS.Inverse() * BaseRot;
 		}
 		const FVector AnchorW = CompT.TransformPosition(BaseCS);
 		if (!S.bValid || FVector::DistSquared(AnchorW, S.LastAnchorW) > FMath::Square(100.0f))
@@ -6196,12 +6217,41 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		FVector OffsetW = (S.PosW - AnchorW) * JiggleGain;
 		OffsetW = OffsetW.GetClampedToMaxSize(JiggleMaxCm);
 		const FVector OffsetCS = CompT.InverseTransformVectorNoScale(OffsetW);
-		const FVector NewLoc = BaseCS + OffsetCS;
-		S.LastOffsetCS = OffsetCS;
+		S.LastSpringCm = static_cast<float>(OffsetCS.Size());
+
+		// 偏移→旋轉耦合：樞軸=基準骨位+解剖偏移、力臂=樞軸→骨頭方向。
+		// 切向分量/力臂=轉角（軸=力臂×切向）；徑向分量（呼吸向）留平移。
+		const FJiggleLever& Lv = Levers[B];
+		const FVector PivotCS = BaseCS + Lv.PivotOfsCS;
+		// 肚：骨長軸=rest CS 實測（頭(0,-33,95)→尾(0,49,79)）硬編——不賭 FBX
+		// 匯入後的骨局部軸向（陷阱年鑑：每骨軸向重映射不可信）
+		const FVector LeverHat = Lv.PivotOfsCS.IsNearlyZero()
+			? FVector(0.0f, 0.983f, -0.183f)
+			: (-Lv.PivotOfsCS).GetSafeNormal();
+		const FVector Radial = FVector::DotProduct(OffsetCS, LeverHat) * LeverHat;
+		const FVector Tangent = OffsetCS - Radial;
+		FQuat DeltaQ = FQuat::Identity;
+		if (!Tangent.IsNearlyZero(0.001f))
+		{
+			const FVector Axis = FVector::CrossProduct(LeverHat, Tangent.GetSafeNormal()).GetSafeNormal();
+			if (!Axis.IsNearlyZero())
+			{
+				const float Ang = FMath::Min(Tangent.Size() / FMath::Max(Lv.LeverCm, 1.0f), MaxRollRad);
+				DeltaQ = FQuat(Axis, Ang);
+			}
+		}
+		// 骨頭沿旋轉繞樞軸走＋徑向平移（肚：樞軸=骨頭＝頭不動、只轉）
+		const FVector NewLoc = PivotCS + DeltaQ.RotateVector(BaseCS - PivotCS) + Radial;
+		const FQuat NewRot = DeltaQ * BaseRot;
+		S.LastOffsetCS = NewLoc - BaseCS;
 		S.LastWrittenCS = NewLoc;
-		if (!NewLoc.Equals(T.GetLocation(), 0.02f)) // 靜止收斂＝零寫入（省 refresh）
+		S.LastDeltaRotCS = DeltaQ;
+		S.LastWrittenRotCS = NewRot;
+		if (!NewLoc.Equals(T.GetLocation(), 0.02f) ||
+			NewRot.AngularDistance(T.GetRotation()) > 0.003f) // 靜止收斂＝零寫入
 		{
 			T.SetLocation(NewLoc);
+			T.SetRotation(NewRot);
 			BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
 			bWrote = true;
 		}

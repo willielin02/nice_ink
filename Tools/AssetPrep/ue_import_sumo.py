@@ -31,7 +31,10 @@ def sk_task(filename, dest_path, dest_name):
     skd = ui.skeletal_mesh_import_data
     skd.set_editor_property("import_morph_targets", False)
     skd.set_editor_property("vertex_color_import_option", unreal.VertexColorImportOption.REPLACE)
-    skd.set_editor_property("normal_import_method", unreal.FBXNormalImportMethod.FBXNIM_IMPORT_NORMALS)
+    # 法線=重算（08-05 定罪修正）：SM 匯入走 UE 預設重算平滑法線、SK 舊值
+    # IMPORT_NORMALS 吃 Blender split normals——兩資產法線不同源＝骨骼身體上場後
+    # 頭燈假光下乳暈硬環/胸口陰影斷層（user 實錘）。SK/SM 法線必須同源。
+    skd.set_editor_property("normal_import_method", unreal.FBXNormalImportMethod.FBXNIM_COMPUTE_NORMALS)
     task.options = ui
     return task
 

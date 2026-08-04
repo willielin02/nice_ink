@@ -987,7 +987,11 @@ private:
 		FVector VelW = FVector::ZeroVector;
 		FVector LastAnchorW = FVector::ZeroVector;
 		FVector LastWrittenCS = FVector::ZeroVector; // 上次寫入骨位（判斷姿勢層是否重寫）
-		FVector LastOffsetCS = FVector::ZeroVector;  // 上次疊加偏移（還原基準用）
+		FVector LastOffsetCS = FVector::ZeroVector;  // 上次疊加平移（還原基準用）
+		FQuat LastWrittenRotCS = FQuat::Identity;    // 上次寫入骨旋（同上，旋轉耦合用）
+		FQuat LastDeltaRotCS = FQuat::Identity;      // 上次疊加旋轉（還原基準用）
+		float LastSpringCm = 0.0f;                   // 彈簧等效位移（探針統計；肚骨改旋轉後
+		                                             //  骨位移≈0，量測面要看這個）
 		bool bValid = false;
 	};
 	FJiggleBoneState JiggleStates[5];
