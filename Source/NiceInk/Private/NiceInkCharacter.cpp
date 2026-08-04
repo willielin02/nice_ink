@@ -3726,9 +3726,12 @@ void ANiceInkCharacter::DebugRoboWalk(float WorldDirX, float WorldDirY, float Se
 
 FString ANiceInkCharacter::DebugRoboGaitStats() const
 {
-	// gait 探針機讀摘要。腳高=世界 Z 相對腳底地面（actor Z − 半膠囊 92）
+	// gait 探針機讀摘要。腳高=世界 Z 相對腳底地面（actor Z − 半膠囊 92）；
+	// footLx/kneeLx 等=CS 橫向座標（雙軌側帶/膝外開契約）；thighGap=左右大腿
+	// 骨段最小間距（穿膜的骨級代理量測）
 	float FootLz = -1.0f, FootRz = -1.0f;
 	float HipsH = -1.0f;
+	float FootLx = 0.0f, FootRx = 0.0f, KneeLx = 0.0f, KneeRx = 0.0f, ThighGap = -1.0f;
 	if (BowBody && BowBody->GetSkinnedAsset())
 	{
 		const float FloorZ = static_cast<float>(GetActorLocation().Z) - 92.0f;
@@ -3738,16 +3741,31 @@ FString ANiceInkCharacter::DebugRoboGaitStats() const
 			BowBody->GetBoneTransformByName(TEXT("RightFoot"), EBoneSpaces::WorldSpace).GetLocation().Z) - FloorZ;
 		HipsH = static_cast<float>(
 			BowBody->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::WorldSpace).GetLocation().Z) - FloorZ;
+		auto CSLoc = [&](const TCHAR* N)
+		{
+			return BowBody->GetBoneTransformByName(N, EBoneSpaces::ComponentSpace).GetLocation();
+		};
+		const FVector HL = CSLoc(TEXT("LeftUpLeg")), HR = CSLoc(TEXT("RightUpLeg"));
+		const FVector KL = CSLoc(TEXT("LeftLeg")), KR = CSLoc(TEXT("RightLeg"));
+		FootLx = static_cast<float>(CSLoc(TEXT("LeftFoot")).X);
+		FootRx = static_cast<float>(CSLoc(TEXT("RightFoot")).X);
+		KneeLx = static_cast<float>(KL.X);
+		KneeRx = static_cast<float>(KR.X);
+		FVector P1, P2;
+		FMath::SegmentDistToSegmentSafe(HL, KL, HR, KR, P1, P2);
+		ThighGap = static_cast<float>(FVector::Dist(P1, P2));
 	}
 	return FString::Printf(
 		TEXT("bodyVis=%d bowVis=%d stand=%d speed=%.1f stance=%.2f phase=%.2f ")
 		TEXT("footLz=%.1f footRz=%.1f footLspd=%.1f footRspd=%.1f hipsH=%.1f ")
+		TEXT("footLx=%.1f footRx=%.1f kneeLx=%.1f kneeRx=%.1f thighGap=%.1f ")
 		TEXT("jBelly=%.2f jChL=%.2f jChR=%.2f jBuL=%.2f jBuR=%.2f"),
 		Body && Body->IsVisible() ? 1 : 0,
 		BowBody && BowBody->IsVisible() ? 1 : 0,
 		bStandDoubleActive ? 1 : 0,
 		GetVelocity().Size2D(), GaitStanceAlpha, WalkAnimPhase,
 		FootLz, FootRz, GaitFootSpeed[0], GaitFootSpeed[1], HipsH,
+		FootLx, FootRx, KneeLx, KneeRx, ThighGap,
 		JiggleStates[0].LastOffsetCS.Size(), JiggleStates[1].LastOffsetCS.Size(),
 		JiggleStates[2].LastOffsetCS.Size(), JiggleStates[3].LastOffsetCS.Size(),
 		JiggleStates[4].LastOffsetCS.Size());
@@ -3756,28 +3774,34 @@ FString ANiceInkCharacter::DebugRoboGaitStats() const
 void ANiceInkCharacter::DebugRoboSideView(bool bEnable)
 {
 	// 側視第三人稱相機（截圖矩陣用；固定機位——探針在鏡框內走小段路）
-	APlayerController* PC = Cast<APlayerController>(GetController());
-	if (!PC)
-	{
-		return;
-	}
 	if (bEnable)
 	{
-		if (!DebugSideCam)
-		{
-			FActorSpawnParameters SP;
-			SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-			DebugSideCam = GetWorld()->SpawnActor<ACameraActor>(SP);
-		}
-		const FVector Focus = GetActorLocation() + FVector(0.0f, 0.0f, -30.0f);
-		const FVector CamLoc = ClampToRoom(GetActorLocation() + FVector(40.0f, -240.0f, 20.0f));
-		DebugSideCam->SetActorLocationAndRotation(CamLoc, (Focus - CamLoc).Rotation());
-		PC->SetViewTargetWithBlend(DebugSideCam, 0.0f);
+		DebugRoboViewFrom(40.0f, -240.0f, 20.0f);
 	}
-	else
+	else if (APlayerController* PC = Cast<APlayerController>(GetController()))
 	{
 		PC->SetViewTargetWithBlend(this, 0.0f);
 	}
+}
+
+void ANiceInkCharacter::DebugRoboViewFrom(float DX, float DY, float DZ)
+{
+	// 任意方位觀察相機：actor+世界偏移、看向 actor（正面/側面步態截圖矩陣用）
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !GetWorld())
+	{
+		return;
+	}
+	if (!DebugSideCam)
+	{
+		FActorSpawnParameters SP;
+		SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		DebugSideCam = GetWorld()->SpawnActor<ACameraActor>(SP);
+	}
+	const FVector Focus = GetActorLocation() + FVector(0.0f, 0.0f, -30.0f);
+	const FVector CamLoc = ClampToRoom(GetActorLocation() + FVector(DX, DY, DZ));
+	DebugSideCam->SetActorLocationAndRotation(CamLoc, (Focus - CamLoc).Rotation());
+	PC->SetViewTargetWithBlend(DebugSideCam, 0.0f);
 }
 
 bool ANiceInkCharacter::DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal)
@@ -5921,14 +5945,15 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 	const float MaxSpeed = GetCharacterMovement() ? FMath::Max(1.0f, GetCharacterMovement()->MaxWalkSpeed) : 250.0f;
 	const float SpeedRatio = FMath::Clamp(Speed2D / MaxSpeed, 0.0f, 1.0f);
 	const float StepsPerSec = FMath::Lerp(GaitStepsPerSecBase, GaitStepsPerSecMax, SpeedRatio);
-	const float Stride = FMath::Min(Speed2D / FMath::Max(StepsPerSec, 0.5f), GaitMaxStrideCm);
 	// 一週期=左右各滑一步（相位 0.5 錯開）
 	WalkAnimPhase = FMath::Fmod(WalkAnimPhase + DeltaSeconds * StepsPerSec * 0.5f, 1.0f);
 
-	// 滑步方向（CS）＝速度向量進元件空間；平滑追隨（免轉向瞬跳）
+	// 速度進元件空間。腿的滑步「不」沿速度向量（08-04 二輪 user 打回實錘：
+	// 橫移/轉身暫態時雙腳沿橫向齊掃＝越中線穿膜真兇）——腿走雙軌制（見下）。
+	// GaitSlideDirCS（平滑追隨的速度向）只給上身前傾/擺臂用。
 	const FTransform CompT = BowBody->GetComponentTransform();
-	FVector WantDir = CompT.InverseTransformVectorNoScale(GetVelocity());
-	WantDir.Z = 0.0f;
+	const FVector VelCS = CompT.InverseTransformVectorNoScale(GetVelocity());
+	FVector WantDir = FVector(VelCS.X, VelCS.Y, 0.0f);
 	if (WantDir.Normalize())
 	{
 		const float K = FMath::Clamp(DeltaSeconds * 10.0f, 0.0f, 1.0f);
@@ -5938,6 +5963,11 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 			GaitSlideDirCS = WantDir;
 		}
 	}
+	// 雙軌分量步幅（有號；守恆式各自成立）：前後=各腳在自己側軌道上滑、
+	// 左右=步幅張開/收攏（側帶鉗位後永不越中線）
+	const float InvSteps = 1.0f / FMath::Max(StepsPerSec, 0.5f);
+	const float FwdStride = FMath::Clamp(VelCS.Y * InvSteps, -GaitMaxStrideCm, GaitMaxStrideCm);
+	const float LatStride = FMath::Clamp(VelCS.X * InvSteps, -GaitMaxStrideCm, GaitMaxStrideCm);
 
 	// 骨盆：屈膝下沉＋重心橫移（壓向撐地腳側）＋微沉浮（單腳承重段微沉）
 	// 左腳撐地段=phase[0,0.5)（本地後移＝世界釘住）；CS +X=角色左側
@@ -6004,7 +6034,15 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 
 		const float P = FMath::Fmod(WalkAnimPhase + Leg.PhaseOfs, 1.0f);
 		const float Tri = 4.0f * FMath::Abs(P - 0.5f) - 1.0f;         // p=0→+1、p=0.5→-1（撐地段線性後移）
-		const FVector FootTarget = RefFoot + GaitSlideDirCS * (Tri * Stride * 0.5f); // Z=ref＝貼地（構造保證）
+		// 雙軌制腳目標：前後沿自己側軌道、左右張開/收攏；Z=ref＝貼地（構造保證）
+		FVector FootTarget = RefFoot;
+		FootTarget.Y += Tri * FwdStride * 0.5f;
+		FootTarget.X += Tri * LatStride * 0.5f;
+		// 側帶鉗位＝不越中線的構造保證（左腳恆左、右腳恆右；08-04 二輪穿膜終案）
+		const bool bLeftLeg = RefFoot.X >= 0.0f;
+		FootTarget.X = bLeftLeg
+			? FMath::Clamp(FootTarget.X, GaitLatBandMinCm, GaitLatBandMaxCm)
+			: FMath::Clamp(FootTarget.X, -GaitLatBandMaxCm, -GaitLatBandMinCm);
 
 		const float L1 = FVector::Dist(RefHipPure, RefKnee);
 		const float L2 = FVector::Dist(RefKnee, RefFoot);
@@ -6015,13 +6053,15 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 		DLen = FMath::Clamp(DLen, MinLen, MaxLen);
 		const FVector DHat = D.GetSafeNormal();
 
-		// 膝極向：行進向+外側混合，投影到 ⊥DHat 平面（ref 膝本就外弓——保外開讀感）
-		const float OutSign = (RefKnee.X >= RefHipPure.X) ? 1.0f : -1.0f;
-		FVector Pole = GaitSlideDirCS + FVector(OutSign * 0.7f, 0.0f, 0.0f);
-		Pole = (Pole - FVector::DotProduct(Pole, DHat) * DHat).GetSafeNormal();
+		// 膝極向＝rest 幾何導出（馬步外弓角全程保留；舊「行進向+外側」混合極向=
+		// 橫移時一側膝內塌的穿膜真兇——08-04 二輪定罪拆除）
+		const FVector RefAxis = (RefFoot - RefHipPure).GetSafeNormal();
+		const FVector KneeOff = RefKnee - RefHipPure;
+		const FVector PoleRef = (KneeOff - FVector::DotProduct(KneeOff, RefAxis) * RefAxis).GetSafeNormal();
+		FVector Pole = (PoleRef - FVector::DotProduct(PoleRef, DHat) * DHat).GetSafeNormal();
 		if (Pole.IsNearlyZero())
 		{
-			Pole = (FVector::UpVector - FVector::DotProduct(FVector::UpVector, DHat) * DHat).GetSafeNormal();
+			Pole = PoleRef;
 		}
 		const float A = (L1 * L1 - L2 * L2 + DLen * DLen) / (2.0f * DLen);
 		const float H = FMath::Sqrt(FMath::Max(L1 * L1 - A * A, 1.0f));

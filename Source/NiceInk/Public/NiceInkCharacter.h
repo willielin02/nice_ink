@@ -396,11 +396,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0.5", ClampMax = "8"))
 	float GaitStepsPerSecBase = 2.8f; // 起步步頻（每秒滑步數；力士碎步）
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "1", ClampMax = "10"))
-	float GaitStepsPerSecMax = 5.2f;  // 全速步頻
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "1", ClampMax = "12"))
+	float GaitStepsPerSecMax = 7.0f;  // 全速步頻（摺り足=小步快滑；碎步化 08-04 二輪）
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "10", ClampMax = "70"))
-	float GaitMaxStrideCm = 46.0f;    // 步幅上限（超出=輕微滑冰，防低步頻大跨步）
+	float GaitMaxStrideCm = 30.0f;    // 步幅上限（碎步；全速頂到上限=輕微滑冰的知情取捨）
+
+	// 雙軌側帶（08-04 二輪 user 打回「腳統一朝左右擺+穿膜」後的構造保證）：
+	// 左腳 X 恆鉗 [Min,Max]、右腳鏡像——兩腳在數學上不可能越中線或互相貼近，
+	// 與「腳不離地=Z 恆等於地面」同一等級的保證。ref 腳 X=±33.5。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "5", ClampMax = "40"))
+	float GaitLatBandMinCm = 20.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "30", ClampMax = "80"))
+	float GaitLatBandMaxCm = 52.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "12"))
 	float GaitWeightShiftCm = 3.5f;   // 重心橫移振幅（骨盆壓向撐地腳側；也是彈跳的主激勵）
@@ -858,6 +867,10 @@ public:
 	// robo：第三人稱側視相機開關（步態截圖矩陣用；false=還原本體視角）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSideView(bool bEnable);
+
+	// robo：任意方位觀察相機（actor+世界偏移、看向 actor）——正面/側面截圖矩陣用
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboViewFrom(float DX, float DY, float DZ);
 
 	// robo：直設作畫臉指向（本地作畫者下一 tick 消化；滑鼠不可注入）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
