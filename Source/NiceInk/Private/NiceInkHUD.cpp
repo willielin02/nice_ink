@@ -31,6 +31,12 @@ void ANiceInkHUD::BeginPlay()
 {
 	Super::BeginPlay();
 	EnsureUiAssets();
+
+	// BGM 喚起點：基底 HUD＝主選單與道場共同入口（MenuHUD 繼承本類）
+	if (UNiceInkGameInstance* Inst = UNiceInkGameInstance::Get(this))
+	{
+		Inst->EnsureBgmPlaying(GetWorld());
+	}
 }
 
 void ANiceInkHUD::EnsureUiAssets()
@@ -635,6 +641,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 		if (VolDelta != 0)
 		{
 			GI->MasterVolume = FMath::Clamp(GI->MasterVolume + VolDelta * 0.05f, 0.0f, 1.0f);
+			GI->UpdateBgmVolume();
 			GI->SaveSettings();
 		}
 		Y += Step + 24.0f * UiScale;

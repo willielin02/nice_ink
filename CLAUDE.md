@@ -199,12 +199,24 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：**v4.0 退役封存**——元件/RPC/
   套件全保留永不啟動；噴射拳腳=GNiceInkSprayEnabled/GNiceInkKickEnabled 雙閘封存
   ＝SPEC #51 未來更新）。
-- **前端與配對（2026-07-17 上架衝刺）**：`NiceInkMenuGameMode/PlayerController/HUD`
+- **前端與配對（2026-07-17 上架衝刺；08-05 EOS 上線）**：`NiceInkMenuGameMode/PlayerController/HUD`
   （L_MainMenu canvas 主選單：名字/臉選擇/lan-online/建房/搜房列表/設定/授權頁）、
-  `NiceInkGameInstance`（偏好持久化 NiceInk_Settings 槽＋斷線回選單）、
-  `NiceInkSessionSubsystem`（UI 狀態機＋?Name=?Avatar= 上服）、`NiceInkAudio`
-  （11 個合成音；**閉眼沉睡全域靜音＝感官規格、無任何甦醒音**）、
-  `NiceInkUiTokens.h`（HUD 調色盤共用）。打包＝RunUAT BuildCookRun（cook 白名單在
+  `NiceInkGameInstance`（偏好持久化 NiceInk_Settings 槽＋斷線回選單＋BGM 播放層＋
+  NiVoice 語音探針）、
+  `NiceInkSessionSubsystem`（UI 狀態機＋?Name=?Avatar= 上服＋**EOS 登入閂**：
+  persistentauth 靜默→失敗自接 accountportal 開瀏覽器——引擎 fallback 只掛
+  AutoLogin 路徑）、`NiceInkAudio`
+  （11 個合成音；**閉眼沉睡全域靜音＝感官規格、無任何甦醒音**；BGM/語音不經此
+  ＝照播照聽）、
+  `NiceInkUiTokens.h`（HUD 調色盤共用）。**連線層（08-05 SHIPPED 單機實測全通）＝
+  照抄 Meccha Chameleon 架構**：listen server over EOS P2P（NAT 失敗自動走 Epic
+  免費中繼）＋EOS lobby（建房即開 RTC 語音房、成員自動入房）＋Epic 帳號登入
+  （桌面原生 OSS 無 device-id 顯名＝編譯期關閉、Epic 帳號制是唯一穩路；scope
+  恆為 basic+friends+presence+offline_access、AuthScopeFlags 縮不掉→Portal EAS
+  三許可全開對齊＝唯一解；配方=Docs/EOS_SETUP.md）；LAN 照舊（選單切換、
+  IsOnlineServiceConfigured 全程式自動跟隨）；**ClientSecret 在 ini＝repo 必須
+  private**；待辦=雙機驗收/Steam 票證登入（正式終態）/品牌驗證/ProductUserId
+  存檔鍵+雲端刺青（帳本=SHIP_PLAN B3~B6）。打包＝RunUAT BuildCookRun（cook 白名單在
   DefaultGame.ini；**只被 C++ 字串路徑引用的資產要 AlwaysCook**）。
 - 場地＝`L_Dojo`（道場獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；07-30~31 場景修：
   兩門洞各四片拉門重排（軌距=板厚→任兩板零重疊=共面閃爍歸零）＋四張武道布掛軸
@@ -230,8 +242,9 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   ——眼位 20–25cm＋游標 A5 鉗位提案（待定 #16）、**內容動機＋投票經濟設計
   （2026-08-01~02 討論中未定案：秘密題目制＝待定 #17、巡禮投票經濟＝待定 #18、
   帳本=Docs/CONTENT_ECON_PLAN.md 含死案墓場；題庫生產管線（LLM 量產＋keep/kill
-  裁決工具）待開工）**、EOS 憑證＋語音接入
-  （步驟全在 Docs/EOS_SETUP.md）、上架待使用者項全清單見 Docs/SHIP_PLAN.md。
+  裁決工具）待開工）**、~~EOS 憑證＋語音接入~~（**08-05 SHIPPED 單機全通**；
+  剩雙機驗收＋Steam 登入切換＋品牌驗證＝SHIP_PLAN B4~B6）、
+  上架待使用者項全清單見 Docs/SHIP_PLAN.md。
   已實作待 viewport 驗收：**醉夢描圖＋搖晃攻擊 v4.0（2026-08-02 user 定案後全權
   委託實作；robo_trace_test 21/0＋feign/orbit/directdraw/stencilcursor 迴歸綠；
   **08-03 圖案池正推八式終定案 SHIPPED**（trace 22/0＋feign 26/0＋orbit 24/0）；

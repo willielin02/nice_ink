@@ -24,6 +24,10 @@
 			"Enabled": true
 		},
 		{
+			"Name": "EOSVoiceChat",
+			"Enabled": true
+		},
+		{
 			"Name": "VibeUE",
 			"Enabled": true
 		},

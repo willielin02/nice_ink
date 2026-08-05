@@ -1,10 +1,18 @@
 #include "NiceInkGameInstance.h"
 
+#include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
+#include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "IOnlineSubsystemEOS.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkSettingsSave.h"
+#include "OnlineSubsystem.h"
+#include "OnlineSubsystemUtils.h"
+#include "Sound/SoundBase.h"
+#include "TimerManager.h"
+#include "VoiceChat.h"
 
 namespace
 {
@@ -22,6 +30,68 @@ void UNiceInkGameInstance::Init()
 	{
 		GEngine->OnNetworkFailure().AddUObject(this, &UNiceInkGameInstance::HandleNetworkFailure);
 		GEngine->OnTravelFailure().AddUObject(this, &UNiceInkGameInstance::HandleTravelFailure);
+	}
+
+	FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &UNiceInkGameInstance::HandlePostLoadMapForVoice);
+}
+
+void UNiceInkGameInstance::HandlePostLoadMapForVoice(UWorld* World)
+{
+	// NULL/LAN（未配置 EOS）或單機＝零行為；語音出聲走 EOS SDK 自己的音訊裝置，
+	// 不經 UE 音訊系統——沉睡者全域靜音（NiceInkAudio）天然不會誤殺語音（SPEC：
+	// 遮的是視覺與情報音，聽覺開放）。
+	VoiceProbeTicksLeft = 0;
+	if (!World || World->GetNetMode() == NM_Standalone || IsRunningDedicatedServer())
+	{
+		return;
+	}
+	if (World->GetGameInstance() != this || !UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		return;
+	}
+	VoiceProbeTicksLeft = 10;
+	World->GetTimerManager().SetTimer(VoiceProbeTimer,
+		FTimerDelegate::CreateUObject(this, &UNiceInkGameInstance::ProbeVoiceChatOnce, World),
+		3.0f, /*bLoop=*/true);
+}
+
+void UNiceInkGameInstance::ProbeVoiceChatOnce(UWorld* World)
+{
+	--VoiceProbeTicksLeft;
+	IOnlineSubsystem* OSS = Online::GetSubsystem(World);
+	if (!OSS || OSS->GetSubsystemName() != FName(TEXT("EOS")))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiVoice: no EOS subsystem in world (service=%s)"),
+			OSS ? *OSS->GetSubsystemName().ToString() : TEXT("none"));
+		World->GetTimerManager().ClearTimer(VoiceProbeTimer);
+		return;
+	}
+	IOnlineSubsystemEOS* EOS = static_cast<IOnlineSubsystemEOS*>(OSS);
+	const ULocalPlayer* LP = GetFirstGamePlayer();
+	const FUniqueNetIdRepl NetId = LP ? LP->GetPreferredUniqueNetId() : FUniqueNetIdRepl();
+	IVoiceChatUser* Voice = NetId.IsValid() ? EOS->GetVoiceChatUserInterface(*NetId) : nullptr;
+	if (!Voice)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiVoice: no voice user yet (netId %s)"),
+			NetId.IsValid() ? TEXT("valid") : TEXT("invalid"));
+	}
+	else
+	{
+		const TArray<FString> Channels = Voice->GetChannels();
+		UE_LOG(LogTemp, Log, TEXT("NiVoice: loggedIn=%d player=%s channels=%d [%s]"),
+			Voice->IsLoggedIn() ? 1 : 0, *Voice->GetLoggedInPlayerName(),
+			Channels.Num(), *FString::Join(Channels, TEXT(", ")));
+		if (Channels.Num() > 0)
+		{
+			// 契約兌現：lobby RTC 自動入房成功——探針收工
+			World->GetTimerManager().ClearTimer(VoiceProbeTimer);
+			return;
+		}
+	}
+	if (VoiceProbeTicksLeft <= 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiVoice: not in any voice channel after 30s — lobby RTC auto-join did NOT happen; check Dev Portal Client Policy has Voice permission, or wire manual JoinChannel"));
+		World->GetTimerManager().ClearTimer(VoiceProbeTimer);
 	}
 }
 
@@ -83,6 +153,52 @@ void UNiceInkGameInstance::SaveSettings()
 	Save->MouseSensitivityScale = MouseSensitivityScale;
 	Save->MasterVolume = MasterVolume;
 	UGameplayStatics::SaveGameToSlot(Save, SettingsSlotName, 0);
+}
+
+float UNiceInkGameInstance::GetBgmVolume() const
+{
+	return FMath::Clamp(MasterVolume, 0.0f, 1.0f) * FMath::Clamp(BgmScale, 0.0f, 1.0f);
+}
+
+void UNiceInkGameInstance::EnsureBgmPlaying(UWorld* World)
+{
+	if (!World || IsRunningDedicatedServer())
+	{
+		return;
+	}
+	if (BgmComponent && BgmComponent->IsPlaying())
+	{
+		UpdateBgmVolume();
+		return;
+	}
+
+	USoundBase* Bgm = LoadObject<USoundBase>(nullptr, TEXT("/Game/Audio/bgm_sneaky_koto.bgm_sneaky_koto"));
+	if (!Bgm)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiBgm: asset load FAILED (/Game/Audio/bgm_sneaky_koto)"));
+		return;
+	}
+	// bPersistAcrossLevelTransition：元件掛在 audio device 而非 world，
+	// ServerTravel／OpenLevel 不中斷——「所有場景同一首」的載體
+	BgmComponent = UGameplayStatics::SpawnSound2D(World, Bgm, GetBgmVolume(), 1.0f, 0.0f, nullptr,
+		/*bPersistAcrossLevelTransition=*/true, /*bAutoDestroy=*/false);
+	UE_LOG(LogTemp, Log, TEXT("NiBgm: playing (vol %.2f, comp %s)"),
+		GetBgmVolume(), BgmComponent ? TEXT("ok") : TEXT("NULL"));
+}
+
+void UNiceInkGameInstance::UpdateBgmVolume()
+{
+	if (!BgmComponent)
+	{
+		return;
+	}
+	BgmComponent->SetVolumeMultiplier(GetBgmVolume());
+	// 音量歸零期間引擎可能把靜音迴圈整個停掉（virtualization 預設 Disabled）
+	// ——調回來時要重新起播，不能只設倍率
+	if (!BgmComponent->IsPlaying() && GetBgmVolume() > 0.005f)
+	{
+		BgmComponent->Play();
+	}
 }
 
 void UNiceInkGameInstance::ReturnToMainMenu(const FString& Reason)

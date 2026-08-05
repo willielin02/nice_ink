@@ -352,8 +352,13 @@ void UInkCanvasComponent::BeginStroke(int32 AuthorId, FLinearColor Color, FVecto
 
 	EndStroke(AuthorId);
 
-	// 落筆聲（每客戶端本地重放時各自播；閉眼沉睡者在音效層被全域靜音）
-	NiAudio::Play(this, ENiSound::StrokeStart, 0.7f);
+	// 落筆聲（每客戶端本地重放時各自播；閉眼沉睡者在音效層被全域靜音）。
+	// 稿筆無落筆 one-shot（08-05 user 裁決）：失去接觸閘會讓一次拖曳反覆收筆/
+	// 重開筆——per-BeginStroke 的音在稿筆上=急促連響；摩擦 loop 才是稿筆的聲音。
+	if (Needle != EInkNeedle::Stencil)
+	{
+		NiAudio::Play(this, ENiSound::StrokeStart, 0.7f);
+	}
 
 	UV = ClampUV(UV);
 	Color.A = 1.0f; // 麥克筆＝不透明墨水

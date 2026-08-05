@@ -469,6 +469,7 @@ void ANiceInkMenuHUD::DrawSettingsPage(float W, float H)
 	if (VolDelta != 0)
 	{
 		Inst->MasterVolume = FMath::Clamp(Inst->MasterVolume + VolDelta * 0.05f, 0.0f, 1.0f);
+		Inst->UpdateBgmVolume();
 		Inst->SaveSettings();
 	}
 	Y += Step + 30.0f * UiScale;

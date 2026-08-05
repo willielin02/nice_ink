@@ -2,6 +2,7 @@
 
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
+#include "Components/AudioComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "DreamMazeComponent.h"
@@ -22,6 +23,7 @@
 #include "InkCanvasComponent.h"
 #include "InkSprayProjectile.h"
 #include "InputCoreTypes.h"
+#include "Kismet/GameplayStatics.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "NeckStretchComponent.h"
@@ -33,6 +35,7 @@
 #include "NiceInkPlayerState.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkTypes.h"
+#include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
 
 namespace
@@ -439,6 +442,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
 	UpdateWalkAnim(DeltaSeconds);        // 所有端：站立移動的程式化步伐
+	UpdateMarkerSfx(DeltaSeconds);       // 稿筆摩擦聲（內部只服務本地端、失控時自停）
 
 	// 直接畫制：aim 驅動的作畫姿勢（所有端；姿態沒變不寫骨——ApplyBowPose 內建
 	// 髒檢查；他端在這裡做複製值的平滑追趕）
@@ -5784,6 +5788,84 @@ void ANiceInkCharacter::ServerRequestStartMatch_Implementation()
 	}
 }
 
+void ANiceInkCharacter::UpdateMarkerSfx(float DeltaSeconds)
+{
+	// 稿筆摩擦聲＝本地端專屬回饋面。失去本地控制（觀戰/換 pawn）時把殘響停乾淨
+	if (!IsLocallyControlled() || DeltaSeconds <= 0.0f)
+	{
+		if (MarkerLoopComp && MarkerLoopComp->IsPlaying())
+		{
+			MarkerLoopComp->Stop();
+		}
+		return;
+	}
+
+	// 閘=LMB 按住（bPenTriggerLocal）而非筆劃開著（bPainting）：失去接觸閘會讓
+	// 一次拖曳中筆劃反覆收/開——摩擦聲跟手走、不跟出墨狀態走（否則勻速畫被切成段）
+	const bool bActive = bLeanLocked && bPenTriggerLocal && SelectedNeedle == EInkNeedle::Stencil;
+
+	// 筆尖真實速度（cm/s）——吃 PenTipWorld＝與墨鏈同源（游標停=P 凍結=零速度）
+	float SpeedCmS = 0.0f;
+	if (bActive && bMarkerSfxHasLastTip)
+	{
+		SpeedCmS = static_cast<float>(FVector::Dist(PenTipWorld, MarkerSfxLastTip)) / DeltaSeconds;
+	}
+	MarkerSfxLastTip = PenTipWorld;
+	bMarkerSfxHasLastTip = bActive;
+
+	// EMA τ0.06s：起筆快速爬升、停手自然滑向靜音（停頓＝無聲，不是硬切）
+	const float Alpha = FMath::Clamp(DeltaSeconds / 0.06f, 0.0f, 1.0f);
+	MarkerSfxSpeedEmaCmS += (SpeedCmS - MarkerSfxSpeedEmaCmS) * Alpha;
+
+	const float Norm = FMath::Clamp(
+		MarkerSfxSpeedEmaCmS / FMath::Max(MarkerSfxRefSpeedCmS, 0.1f), 0.0f, 1.0f);
+	float Vol = bActive ? FMath::Sqrt(Norm) * MarkerSfxVolume : 0.0f;
+	if (const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this))
+	{
+		Vol *= FMath::Clamp(GI->MasterVolume, 0.0f, 1.0f);
+	}
+
+	if (Vol <= 0.004f)
+	{
+		if (MarkerLoopComp && MarkerLoopComp->IsPlaying())
+		{
+			if (bActive)
+			{
+				MarkerLoopComp->SetVolumeMultiplier(0.0f); // 筆劃中的停頓：壓音量不停播
+			}
+			else
+			{
+				MarkerLoopComp->Stop(); // 收筆即停
+			}
+		}
+		return;
+	}
+
+	if (!MarkerLoopComp)
+	{
+		USoundBase* LoopSound = LoadObject<USoundBase>(nullptr,
+			TEXT("/Game/Audio/marker_loop.marker_loop"));
+		if (!LoopSound)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("NiMarkerSfx: asset load FAILED (/Game/Audio/marker_loop)"));
+			return;
+		}
+		MarkerLoopComp = UGameplayStatics::SpawnSound2D(GetWorld(), LoopSound, Vol, 1.0f, 0.0f,
+			nullptr, /*bPersistAcrossLevelTransition=*/false, /*bAutoDestroy=*/false);
+		if (!MarkerLoopComp)
+		{
+			return;
+		}
+	}
+	if (!MarkerLoopComp->IsPlaying())
+	{
+		MarkerLoopComp->Play();
+	}
+	MarkerLoopComp->SetVolumeMultiplier(Vol);
+	// 快掃略尖、慢描略沉——摩擦聲的物理直覺（±10% 內＝不破壞素材質感）
+	MarkerLoopComp->SetPitchMultiplier(0.94f + 0.12f * Norm);
+}
+
 void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 {
 	// 站立顯示與步態（2026-08-04 骨骼常駐改制）：站立/走路顯示=BowBody 骨骼身體
@@ -6290,7 +6372,8 @@ void ANiceInkCharacter::NiHost()
 {
 	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
 	{
-		Sessions->HostSession(/*bLan=*/true);
+		// 跟隨已配置的服務：NULL=LAN 房、EOS=網路房（與主選單 bUseLan 同一條規則）
+		Sessions->HostSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured());
 	}
 }
 
@@ -6298,7 +6381,7 @@ void ANiceInkCharacter::NiJoin()
 {
 	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
 	{
-		Sessions->JoinFirstFoundSession(/*bLan=*/true);
+		Sessions->JoinFirstFoundSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured());
 	}
 }
 

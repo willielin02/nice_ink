@@ -92,6 +92,20 @@ private:
 	FDelegateHandle FindHandle;
 	FDelegateHandle JoinHandle;
 
+	// --- EOS 登入閂（2026-08-05）---
+	// EOS 下建房/搜房前要先有 Connect 登入；NULL/LAN 下 EnsureLoggedInThen 直通零行為。
+	// 登入制＝persistentauth（快取 token 靜默；首次/過期→引擎內建 fallback 開
+	// Account Portal 瀏覽器登入）。動作以 TFunction 暫存、登入成功後補跑。
+	FDelegateHandle LoginHandle;
+	bool bLoginInFlight = false;
+	bool bPortalRetryUsed = false; // 靜默失敗→開瀏覽器重試一次（引擎 fallback 只掛 AutoLogin 路徑，這裡自己接）
+	TFunction<void()> PendingAfterLogin;
+
+	void EnsureLoggedInThen(TFunction<void()> Then);
+	void OnLoginComplete(int32 LocalUserNum, bool bWasSuccessful, const FUniqueNetId& UserId, const FString& Error);
+	void HostSessionInternal(bool bLan);
+	void SearchSessionsInternal(bool bLan);
+
 	IOnlineSessionPtr GetSessionInterface() const;
 	void SetFailed(const FString& Why);
 

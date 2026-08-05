@@ -24,7 +24,8 @@ void ANiceInkMenuPlayerController::NiMenuHost()
 {
 	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
 	{
-		Sessions->HostSession(/*bLan=*/true);
+		// 跟隨已配置的服務：NULL=LAN 房、EOS=網路房（與主選單 bUseLan 同一條規則）
+		Sessions->HostSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured());
 	}
 }
 
@@ -32,6 +33,6 @@ void ANiceInkMenuPlayerController::NiMenuJoin()
 {
 	if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
 	{
-		Sessions->JoinFirstFoundSession(/*bLan=*/true);
+		Sessions->JoinFirstFoundSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured());
 	}
 }

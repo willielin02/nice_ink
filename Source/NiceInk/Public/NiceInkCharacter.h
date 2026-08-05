@@ -1026,6 +1026,22 @@ private:
 	float PointFlushTimer = 0.0f;
 	bool bEmergeRequested = false;
 
+	// --- 稿筆摩擦聲（08-05；本地端專屬）：marker_loop 速度調變 ---
+	// 真麥克筆手感規則：筆沒動就沒聲音（LMB 按住也一樣）、動快變大聲、停頓由
+	// EMA 自然滑向靜音。閘＝LMB 按住（非筆劃開著——失去接觸閘的收/開筆閃爍
+	// 不得切碎聲音）；稿筆無任何落筆 one-shot（08-05 user 裁決）。loop 只給本人。
+	UPROPERTY(Transient)
+	TObjectPtr<class UAudioComponent> MarkerLoopComp;
+	FVector MarkerSfxLastTip = FVector::ZeroVector;
+	bool bMarkerSfxHasLastTip = false;
+	float MarkerSfxSpeedEmaCmS = 0.0f;
+	// 此筆尖速度（cm/s）＝滿音量；速度→音量走 sqrt（慢工細描仍可聞）
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Audio", meta = (ClampMin = "1", ClampMax = "60"))
+	float MarkerSfxRefSpeedCmS = 8.0f;
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Audio", meta = (ClampMin = "0", ClampMax = "1"))
+	float MarkerSfxVolume = 0.7f;
+	void UpdateMarkerSfx(float DeltaSeconds);
+
 	// 伺服器端：此玩家目前畫在誰身上（Points/End RPC 的路由目標）
 	TWeakObjectPtr<ANiceInkCharacter> ServerPaintTarget;
 

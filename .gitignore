@@ -113,3 +113,6 @@ SourceAssets/**/*.blend1
 # Packaged build output (regenerable via RunUAT BuildCookRun)
 /Packaged/
 /PackagedShipping/
+
+# git-lfs 誤寫的字面 dev/null 勾子檔（垃圾，可手動刪）
+/dev/

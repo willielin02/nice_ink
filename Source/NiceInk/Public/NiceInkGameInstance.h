@@ -34,6 +34,21 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Settings")
 	void SaveSettings();
 
+	// --- BGM（全遊戲唯一一首、恆定循環）---
+	// 恆定不變＝零洩漏的構造保證：BGM 永不對任何遊戲狀態反應（相位／沉睡／甦醒
+	// 一律不理）。沉睡者的全域靜音規格滅的是「情報音」（筆劃聲＝情報）；恆定 BGM
+	// 無情報身分，照播。音量＝MasterVolume × BgmScale，混在語音之下（底噪級）。
+
+	// HUD BeginPlay 喚起（冪等）；跨關卡由 bPersistAcrossLevelTransition 存活
+	void EnsureBgmPlaying(UWorld* World);
+
+	// MasterVolume 改動後即時生效（音量列每次調整時呼叫）
+	void UpdateBgmVolume();
+
+	// 底噪級混音比（使用者口味域旋鈕）
+	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
+	float BgmScale = 0.30f;
+
 	// 名字合法域＝[A-Za-z0-9_-] 1..16 字——直接進 ?Name= travel option，不做 URL 編碼
 	static FString SanitizePlayerName(const FString& Raw);
 
@@ -49,6 +64,20 @@ public:
 	FString ConsumeDisconnectReason();
 
 private:
+	// --- EOS 語音探針（PostLoadMap 掛起；NULL/LAN 下零行為）---
+	// lobby 的 bUseLobbiesVoiceChatIfAvailable 契約＝成員進房自動入 RTC 語音房。
+	// 這裡不接管、只驗收：入房後每 3 秒讀登入/頻道狀態寫 log，入到頻道即收工；
+	// 30 秒沒入＝大聲警告（查 Dev Portal Client Policy 的 Voice 權限）。
+	void HandlePostLoadMapForVoice(class UWorld* World);
+	void ProbeVoiceChatOnce(class UWorld* World);
+	FTimerHandle VoiceProbeTimer;
+	int32 VoiceProbeTicksLeft = 0;
+
+	UPROPERTY(Transient)
+	TObjectPtr<class UAudioComponent> BgmComponent;
+
+	float GetBgmVolume() const;
+
 	FString PendingDisconnectReason;
 
 	void HandleNetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString);

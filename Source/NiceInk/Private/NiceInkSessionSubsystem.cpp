@@ -2,6 +2,7 @@
 
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
+#include "Interfaces/OnlineIdentityInterface.h"
 #include "Misc/ConfigCacheIni.h"
 #include "NiceInkGameInstance.h"
 #include "OnlineSessionSettings.h"
@@ -52,12 +53,86 @@ FString UNiceInkSessionSubsystem::BuildTravelOptions() const
 	return Options;
 }
 
+void UNiceInkSessionSubsystem::EnsureLoggedInThen(TFunction<void()> Then)
+{
+	IOnlineSubsystem* OSS = GetWorld() ? Online::GetSubsystem(GetWorld()) : nullptr;
+	IOnlineIdentityPtr Identity = OSS ? OSS->GetIdentityInterface() : nullptr;
+	if (!IsOnlineServiceConfigured() || !Identity.IsValid() ||
+		Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+	{
+		Then(); // NULL/LAN 或已登入＝直通
+		return;
+	}
+
+	PendingAfterLogin = MoveTemp(Then); // 疊按=最後一個動作贏（前一個尚未登入完成即被替換）
+	if (bLoginInFlight)
+	{
+		return;
+	}
+	bLoginInFlight = true;
+	bPortalRetryUsed = false;
+	LoginHandle = Identity->AddOnLoginCompleteDelegate_Handle(0,
+		FOnLoginCompleteDelegate::CreateUObject(this, &UNiceInkSessionSubsystem::OnLoginComplete));
+	FOnlineAccountCredentials Creds;
+	Creds.Type = TEXT("persistentauth"); // 快取靜默；首次/過期→引擎自動轉 Account Portal
+	Identity->Login(0, Creds);
+	UE_LOG(LogTemp, Log, TEXT("NiSession: EOS login started (persistentauth, portal fallback)"));
+}
+
+void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSuccessful,
+	const FUniqueNetId& UserId, const FString& Error)
+{
+	IOnlineSubsystem* OSS = GetWorld() ? Online::GetSubsystem(GetWorld()) : nullptr;
+	IOnlineIdentityPtr Identity = OSS ? OSS->GetIdentityInterface() : nullptr;
+	if (Identity.IsValid())
+	{
+		Identity->ClearOnLoginCompleteDelegate_Handle(0, LoginHandle);
+	}
+
+	// 首次/快取過期＝persistentauth 必 EOS_InvalidAuth → 開 Account Portal 瀏覽器登入重試一次
+	if (!bWasSuccessful && !bPortalRetryUsed && Identity.IsValid())
+	{
+		bPortalRetryUsed = true;
+		UE_LOG(LogTemp, Log, TEXT("NiSession: silent login failed (%s) -> opening Epic account portal"), *Error);
+		LoginHandle = Identity->AddOnLoginCompleteDelegate_Handle(0,
+			FOnLoginCompleteDelegate::CreateUObject(this, &UNiceInkSessionSubsystem::OnLoginComplete));
+		FOnlineAccountCredentials Creds;
+		Creds.Type = TEXT("accountportal");
+		Identity->Login(0, Creds);
+		return; // bLoginInFlight 維持、PendingAfterLogin 保留——portal 成功後補跑
+	}
+
+	bLoginInFlight = false;
+	TFunction<void()> Run = MoveTemp(PendingAfterLogin);
+	PendingAfterLogin = nullptr;
+
+	if (!bWasSuccessful)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiSession: EOS login FAILED: %s"), *Error);
+		SetFailed(TEXT("Epic sign-in failed — try again"));
+		return;
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiSession: EOS login OK (%s)"), *UserId.ToString());
+	if (Run)
+	{
+		Run();
+	}
+}
+
 void UNiceInkSessionSubsystem::HostSession(bool bLan)
 {
 	if (UiState == ENiSessionUiState::Hosting || UiState == ENiSessionUiState::Joining)
 	{
 		return; // 重入護欄（實測：同一擊在連續兩幀被讀成 just-pressed → 雙重建房）
 	}
+	// 先佔狀態再登入：登入期間（可能開瀏覽器）選單顯示進行中、殘留點擊被護欄擋
+	UiState = ENiSessionUiState::Hosting;
+	LastError.Reset();
+	EnsureLoggedInThen([this, bLan]() { HostSessionInternal(bLan); });
+}
+
+void UNiceInkSessionSubsystem::HostSessionInternal(bool bLan)
+{
 	IOnlineSessionPtr Sessions = GetSessionInterface();
 	if (!Sessions.IsValid())
 	{
@@ -77,6 +152,7 @@ void UNiceInkSessionSubsystem::HostSession(bool bLan)
 	Settings.bAllowJoinInProgress = false; // 開賽中不收新客（回合狀態機不支援中途加入）
 	Settings.bUsesPresence = !bLan;      // EOS 走 presence session
 	Settings.bUseLobbiesIfAvailable = !bLan; // EOS lobby（語音掛在 lobby RTC 上）
+	Settings.bUseLobbiesVoiceChatIfAvailable = !bLan; // lobby 建立即開 RTC 語音房，成員進房自動入語音（SPEC：無方位全房恆開）
 	Settings.bAllowJoinViaPresence = true;
 	Settings.Set(FName(TEXT("NICEINK")), FString(TEXT("dojo")), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
@@ -117,6 +193,13 @@ void UNiceInkSessionSubsystem::SearchSessions(bool bLan)
 	{
 		return; // 重入護欄
 	}
+	UiState = ENiSessionUiState::Searching; // 先佔狀態再登入（同 HostSession）
+	LastError.Reset();
+	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
+}
+
+void UNiceInkSessionSubsystem::SearchSessionsInternal(bool bLan)
+{
 	IOnlineSessionPtr Sessions = GetSessionInterface();
 	if (!Sessions.IsValid())
 	{

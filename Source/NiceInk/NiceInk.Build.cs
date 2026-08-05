@@ -28,7 +28,9 @@ public class NiceInk : ModuleRules
 			"RenderCore",
 			"RHI",
 			"ImageWrapper",
-			"ImageCore"
+			"ImageCore",
+			"VoiceChat",          // IVoiceChatUser（EOS lobby RTC 語音探針）
+			"OnlineSubsystemEOS"  // IOnlineSubsystemEOS::GetVoiceChatUserInterface
 		});
 	}
 }

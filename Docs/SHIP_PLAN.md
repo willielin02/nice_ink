@@ -72,11 +72,20 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
 
 ### B 級——工程做到「只差鑰匙」（使用者提供憑證後即通）
 
-- [ ] **B1 EOS 上線開關**：選單暴露 LAN/線上房選項（憑證未填時線上房灰掉＋說明）；
-      ini 佔位與 Docs/EOS_SETUP.md 已備，使用者填 Dev Portal 憑證即通。
-- [ ] **B2 EOS 語音**（RTC room）：接線點文件化（憑證依賴，無法本機驗證）。
-- [ ] B3 存檔鍵 → ProductUserId（EOS 接通後半小時工作，位置已註記）。
-- [ ] B4 六人真機延遲驗證（只能真人）。
+- [x] **B1 EOS 上線開關** ✅ 2026-08-05：憑證已填、DefaultPlatformService=EOS 啟用、
+      登入閂（persistentauth→portal fallback）、單機實測建房成功（見進度記錄）。
+- [x] **B2 EOS 語音**（RTC room）✅ 2026-08-05：lobby 建立即開語音房、自動入房實測
+      通過（NiVoice 探針 `loggedIn=1 channels=1` log 為證）。
+- [ ] B3 存檔鍵 → ProductUserId（EOS 接通後半小時工作，位置已註記）＋
+      PlayerDataStorage 雲端刺青持久化（Client Policy 權限已預留）。
+- [ ] B4 六人真機延遲驗證（只能真人）；**雙機 EOS 驗收**（join 流程＋雙向語音，
+      需兩台機兩個 Epic 帳號——同帳號雙開撞 PUID、PIE 不支援 EOS P2P）。
+- [ ] B5 **Steam 票證登入切換**（正式終態＝玩家零帳號零彈窗，Meccha 同款）：
+      待使用者辦 Steamworks（$100＋文件審核）拿 App ID→EOS Portal 身份提供程序
+      設 Steam→接線（引擎原生 ConnectLoginNoEAS 路徑）。現行 Epic 帳號登入
+      保留＝開發環境＋非 Steam 版備援。
+- [ ] B6 EAS 品牌驗證（去掉登入頁「未經驗證」警示）：需自有網域 DNS 驗證＋
+      隱私政策頁＋128px logo→提交審核。上架前做。
 
 ### C 級——使用者裁決域／僅使用者能做（不代決，列全）
 
@@ -88,7 +97,8 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
 - C3 噴射出口與褌的視覺（SPEC 待定 #11）。
 - C4 開場動畫場景改寫（SPEC 待定 #14）。
 - C5 迷宮環數降檔裁決（待定 #2）、RMB 瞄準切分追認（待定 #15）。
-- C6 **EOS Dev Portal 憑證**（Docs/EOS_SETUP.md 步驟 1-3）——沒有它上架版只有 LAN 房。
+- ~~C6 EOS Dev Portal 憑證~~ ✅ 2026-08-05 使用者完成（org NerdSoftStudio／product
+  NiceInk／client＋policy＋EAS 應用程式三許可；配方全文=Docs/EOS_SETUP.md）。
 - C7 **商店上架本體**：Steam/itch 帳號與費用、店面素材（膠囊圖/截圖/預告片）、定價、
   年齡分級問卷、內容審核方案（待定 #8——陌生人房手繪內容）、平台小號實測（待定 #12）。
   截圖/影片素材候選我會產出，選用屬使用者。
@@ -125,6 +135,31 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
 - **2026-07-17 A7 音效**：11 個合成 WAV（純 stdlib）入 /Game/Audio；NiAudio 播放層
   （音量=MasterVolume、**閉眼沉睡全域靜音=感官規格**）；接線=UI 點擊/相位轉換
   （轉瓶/入座酒/指認對錯/終局鑼）/巡禮 chime/落筆/噴漬/碳黑。無任何甦醒音。
+- **2026-08-05 BGM（單一恆定循環，使用者定向「一首走全場」）**：Suno 生成
+  「The Sneaky Koto」→rubberband 0.75× 不變音高→-16 LUFS→尾頭 2s 等功率交叉
+  淡接＝無縫 loop 100.6s（源檔+再生指令=SourceAssets/Music/SunoBgm/README）；
+  資產=/Game/Audio/bgm_sneaky_koto（looping=True）；播放層=GameInstance
+  EnsureBgmPlaying（ANiceInkHUD::BeginPlay 喚起=主選單/道場共用入口、
+  bPersistAcrossLevelTransition 跨關卡不斷、音量=MasterVolume×BgmScale 0.30
+  底噪級即時生效）；**恆定不掛任何遊戲狀態＝零洩漏構造保證**；沉睡者照播
+  （BGM 無情報身分，不走 NiAudio 靜音——補位設計待使用者追認）；-game 實跑
+  驗證 NiBgm log 綠。**授權待辦：Suno 商用權=付費方案綁定，出貨前確認（C8）。**
+- **2026-08-05 稿筆真麥克筆聲（user 耳測選定 freesound CC0 351145）**：切段診斷
+  →marker_loop（D 段穩定區+0.25s 交叉淡接=無縫摩擦床 1.35s）+marker_dab（B 段
+  =落筆觸感音 0.353s）入 /Game/Audio；落筆聲按針型分流（稿筆=MarkerDab、機器針
+  =StrokeStart 照舊、全端重放）；摩擦 loop=本人專屬 UpdateMarkerSfx（音量=
+  √(筆尖速度/8cm/s)×0.7×MasterVolume、EMA τ0.06s——**筆沒動就沒聲（LMB 按住
+  也一樣）、停頓歸零、收筆即停**；音高 0.94~1.06 隨速度；旋鈕 MarkerSfxRefSpeedCmS/
+  MarkerSfxVolume）；候選庫+淘選記錄=SourceAssets/Sfx/MarkerPen_Audition/README。
+  驗證=directdraw 迴歸 71/72（唯一 FAIL=cruise tipSpd 既知 flake 同簽名）；
+  設計捕捉：沉睡者夢中描圖=有自己的刺青機聲（滅別人的情報音、自己的操作聲
+  照有）——刺青機 buzz 程序合成=下一批。
+  **二輪（user 打回「勻速畫卻一段段急促」+dab 不要）**：真兇=失去接觸閘讓一次
+  拖曳反覆收/開筆——per-BeginStroke 的 dab 每次重開連響（包絡量測先洗清素材
+  =A/D 段 span≤2.3dB 平坦）；三刀修=dab 全拆（enum/分流/資產退役，機器針
+  StrokeStart 照舊）＋loop 閘改 LMB 按住 bPenTriggerLocal（收/開筆閃爍不再切
+  聲音）＋marker_loop 設 PlayWhenSilent（靜音期引擎不偷停=無重啟爆音）；
+  編譯綠；**音色/手感待使用者 viewport**。
 - **2026-07-17 A8 走路**：三角波側傾＋步點彈跳（硬切），停步硬還原；
   修掉兩個時序 bug（入睡蓋站姿/lean 殘留側傾）。bWalkAnimEnabled 可關。
 - **2026-07-17 A11 斷線**：PreLogin 拒絕開賽中加入（session 層 bAllowJoinInProgress
@@ -169,3 +204,28 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
 - **A9/A14 帳面狀態**：A 級全部完成；唯二未閉環＝①雙實例 LAN join 實測
   （打包 exe 防火牆＋使用者在機，見 C 級防火牆註記；程式側的雙擊拆房 bug 已修）
   ②Shipping 包的視覺冒煙（僅差一眼，Dev 包同源已驗）。
+- **2026-08-05 B1+B2+C6 EOS 上線全戰役（架構考證→改道→接線→單機實測全通）**：
+  - **架構考證（user 指定照抄 Meccha Chameleon）**：安裝目錄+二進位字串掃描實錘
+    其全棧＝UE5 listen server over EOS P2P（NAT 失敗走 Epic 免費中繼）＋EOS 大廳
+    ＋EOS Voice RTC（Vivox 零引用）＋Redpoint 付費外掛＋Steam 認證。結論＝與本
+    專案既有鷹架同形狀。
+  - **Redpoint 免費版死路（血價教訓）**：免費版＝純預編譯＋只發最新引擎（5.8）
+    ＋強制跟版＝引擎人質條款；本專案 5.7 物理不可用→全棄，留 5.7 走引擎原生
+    OnlineSubsystemEOS＋EOSVoiceChat（架構等價＝同一批 Epic 服務，外掛只是接頭；
+    Meccha 用的是付費版無此條款）。
+  - **接線（編譯綠＋robo_feign 26/0 EOS 啟用下迴歸全綠）**：憑證五值入 ini＋
+    `bUseLobbiesVoiceChatIfAvailable=!bLan`（lobby 即語音房）＋四個建房/搜房入口
+    改跟隨 `IsOnlineServiceConfigured()`（NULL=LAN、EOS=網路，零手動切換）＋
+    **登入閂**（persistentauth 靜默→失敗自接 accountportal 開瀏覽器——引擎
+    fallback 只掛 AutoLogin 路徑的坑）＋**NiVoice 探針**（進網路圖每 3s log 語音
+    狀態、入頻道自停、30s 未入大聲警告）。
+  - **登入制鐵事實**：桌面原生 OSS 無 device-id 顯名支援（ADD_USER_LOGIN_INFO=0
+    編譯期關閉）→Epic 帳號制是桌面唯一穩路；請求 scope 恆為 basic_profile+
+    friends_list+presence+offline_access（AuthScopeFlags 縮不掉、實測無效）→
+    **Portal 端 EAS 三許可全開對齊是唯一解**（三連錯全史=EOS_SETUP.md 配方）。
+  - **單機實測全通（log 為證）**：Epic 登入→EOS lobby 建房 OK→RTC 語音房自動
+    入房 OK（`NiVoice: loggedIn=1 channels=1`）；小記帳＝RTCAudio input device
+    枚舉警告（ESC 語音設定時處理）。語音出聲走 EOS SDK 音訊裝置不經 UE 音訊
+    ＝沉睡全域靜音天然不殺語音（SPEC 聽覺開放=構造保證）。
+  - **安全**：ClientSecret 在 DefaultEngine.ini——**repo 必須維持 private**（已驗
+    PRIVATE）。
