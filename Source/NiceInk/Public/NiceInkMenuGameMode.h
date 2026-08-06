@@ -4,8 +4,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "NiceInkMenuGameMode.generated.h"
 
-// L_MainMenu 的 GameMode：沒有遊戲，只有 canvas 選單。
-// 玩家＝旁觀者（空世界、鏡頭不動），一切互動在 ANiceInkMenuHUD。
+// L_MainMenu 的 GameMode：沒有遊戲——Slate 選單（ANiceInkMenuHUD 掛 SNiMenu）
+// ＋選單舞台（ANiceInkMenuStage：力士跟 BGM 跳舞、相機/燈全程式生成）。
 UCLASS()
 class NICEINK_API ANiceInkMenuGameMode : public AGameModeBase
 {
@@ -13,4 +13,6 @@ class NICEINK_API ANiceInkMenuGameMode : public AGameModeBase
 
 public:
 	ANiceInkMenuGameMode();
+
+	virtual void BeginPlay() override;
 };

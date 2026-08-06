@@ -45,6 +45,19 @@ FString ANiceInkGameMode::InitNewPlayer(APlayerController* NewPlayerController, 
 
 void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 {
+	// 房間碼上牆：建房時 SessionSubsystem 存進 GameInstance，這裡轉進 GameState
+	// 複製全員（大廳顯示給朋友唸）。無 session 流程（PIE/robo/直連）＝空＝不顯示。
+	if (ANiceInkGameState* GS = GetGameState<ANiceInkGameState>())
+	{
+		if (GS->RoomCode.IsEmpty())
+		{
+			if (const UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+			{
+				GS->RoomCode = GI->HostRoomCode;
+			}
+		}
+	}
+
 	// 席位＝入場順序；avatar 先看玩家意向、被佔用則輪派。要在 Super 之前指定，
 	// SpawnDefaultPawnFor 讀 SeatIndex 決定出生位置。
 	if (ANiceInkPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<ANiceInkPlayerState>() : nullptr)

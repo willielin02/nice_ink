@@ -26,4 +26,8 @@ public:
 
 	UPROPERTY()
 	float MasterVolume = 1.0f;
+
+	// 選單語言（NiLoc 索引；-1＝未選過→依 OS 文化自動偵測）
+	UPROPERTY()
+	int32 LanguageIndex = -1;
 };

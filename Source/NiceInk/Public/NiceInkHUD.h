@@ -29,6 +29,10 @@ protected:
 
 	float UiScale = 1.0f; // ClipY / 1080：所有尺寸的唯一縮放來源
 
+	// 文字投影開關：投影是給疊在 3D 場景上的字用的；平面深底（主選單）或
+	// 深色面板上開投影＝小字邊緣髒掉（08-06 user 抓「字雜亂」的主因）
+	bool bTokShadows = true;
+
 	float TierSize(ETextTier Tier) const;
 
 	// ---- UI 資產（runtime 字體＋圖示；BeginPlay 載入，UPROPERTY 保 GC）----
@@ -48,7 +52,18 @@ protected:
 	UPROPERTY() TObjectPtr<UTexture2D> IconTrap;
 	UPROPERTY() TObjectPtr<UTexture2D> IconSleep;
 	UPROPERTY() TObjectPtr<UTexture2D> IconNose;
+	// runtime 生成的圓角方塊（SDF alpha＝抗鋸齒；canvas 三角形零 AA 的繞道）
+	UPROPERTY() TObjectPtr<UTexture2D> RoundedTex;
 	void EnsureUiAssets();
+
+	// 臉像＝全 UI 身分載體（2026-08-06 SPEC #52 臉制定案：名字退出畫面）
+	UPROPERTY() TMap<int32, TObjectPtr<UTexture2D>> FaceIconCache;
+	class UTexture2D* GetFaceIcon(int32 AvatarIdx);
+	// 畫玩家臉像（含圓角紙框）；回傳實際寬度（0=查無臉）
+	float DrawFaceTok(const class APlayerState* PS, float X, float Y, float Size);
+
+	// 圓角半透明面板／按鈕底（9-slice 取樣 RoundedTex；素色簡約風的唯一面元件）
+	void DrawRoundedBox(float X, float Y, float W, float H, float Radius, const FLinearColor& Color);
 
 	// ---- 繪製 helper（全 HUD 只准經過這組，樣式不得繞道自畫）----
 	FVector2D DrawTok(const FString& Text, float X, float Y, ETextTier Tier,
@@ -66,9 +81,10 @@ protected:
 
 	void BeginUiFrame();
 
-	// 即時模式按鈕：畫＋判定一次完成；回傳「本幀被點下」
+	// 即時模式按鈕：畫＋判定一次完成；回傳「本幀被點下」。
+	// bOnLight＝畫在白卡上（墨字墨填）；否則畫在深底上（紙字紙填）。
 	bool Button(const FString& Label, float CenterX, float Y, float W, float H,
-		bool bEnabled = true, bool bAccent = false);
+		bool bEnabled = true, bool bAccent = false, bool bOnLight = false);
 
 	// 左右調整列：回傳 -1／0／+1
 	int32 AdjustRow(const FString& Label, const FString& Value, float CenterX, float Y,

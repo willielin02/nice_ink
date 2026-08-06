@@ -30,7 +30,8 @@ public class NiceInk : ModuleRules
 			"ImageWrapper",
 			"ImageCore",
 			"VoiceChat",          // IVoiceChatUser（EOS lobby RTC 語音探針）
-			"OnlineSubsystemEOS"  // IOnlineSubsystemEOS::GetVoiceChatUserInterface
+			"OnlineSubsystemEOS", // IOnlineSubsystemEOS::GetVoiceChatUserInterface
+			"AIModule"            // 主選單舞台的 AAIController（力士編舞直驅）
 		});
 	}
 }

@@ -831,6 +831,10 @@ public:
 	UFUNCTION(Exec)
 	void NiHost();
 
+	// 主選單舞台替身（2026-08-06）：無 PlayerState 的展示用角色——直接指定 avatar
+	//（正常入局走 EnsureAvatarApplied 讀 PlayerState，這裡繞過）
+	void SetupAsMenuDummy(int32 AvatarIdx);
+
 	UFUNCTION(Exec)
 	void NiJoin();
 

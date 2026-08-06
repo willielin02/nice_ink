@@ -9,7 +9,9 @@
 派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
 （沉睡＝**醉夢描圖小遊戲**：割糖餅式沿線描、描出線重來、描完甦醒；作畫者可花錢
 搖他的夢拖時間），其他人用刺青機在他身上畫畫；醒來後巡禮指認作者，
-猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產，輸入用輪詢、HUD 用 canvas 畫。
+猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產；局內 HUD 用 canvas 畫、
+輸入用輪詢；**主選單自 08-06 起＝Slate C++ 直寫（仍零編輯器資產；user 裁決——
+canvas 做不到毛玻璃半透明）**。
 **設計的唯一權威是 `SPEC.md`**（v4.0b——2026-08-03 描圖圖案池正推八式終定案；
 v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
 工作帳本與待使用者項在 `Docs/SHIP_PLAN.md`。
@@ -199,8 +201,50 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   `DreamMaze`/`DreamMazeComponent`（醉夢圓形迷宮：**v4.0 退役封存**——元件/RPC/
   套件全保留永不啟動；噴射拳腳=GNiceInkSprayEnabled/GNiceInkKickEnabled 雙閘封存
   ＝SPEC #51 未來更新）。
-- **前端與配對（2026-07-17 上架衝刺；08-05 EOS 上線）**：`NiceInkMenuGameMode/PlayerController/HUD`
-  （L_MainMenu canvas 主選單：名字/臉選擇/lan-online/建房/搜房列表/設定/授權頁）、
+- **前端與配對（2026-07-17 上架衝刺；08-05 EOS 上線＋選單 v2；08-06 Slate 白卡制
+  ＋跳舞舞台）**：`NiceInkMenuGameMode/PlayerController/HUD`＋`NiceInkMenuWidget`
+  （SNiMenu Slate 本體）＋`NiceInkMenuStage`。
+  **08-05 選單 v2＝房間碼前門**：建房生成 4 字母房碼（NICODE/NIPUB 廣告屬性、剔
+  I/L/O）→大廳大字顯示（GameState.RoomCode 複製）、加入頁輸碼直達＋公開房列表退居
+  陌生人房、invite only（預設）/public 二選、開發內臟全拆（連線模式恆自動跟
+  IsOnlineServiceConfigured）；robo 鉤子=`NiMenuAutoHost/NiMenuShowJoin/NiMenuJoinCode`
+  （-ExecCmds 直呼、逗號分隔——`|` 不是分隔符；**user 在機時禁焦點/輸入注入自動化、
+  截圖=topmost+NOACTIVATE＋SetProcessDPIAware**）；記帳=join-by-code E2E 併 B4
+  雙機驗收（本機防火牆無 UnrealEditor inbound 規則擋 LAN beacon）。
+  **08-06 Slate 白卡制（user 兩連打回 canvas 深棕版後定案）**：素色半透明＝
+  `SBackgroundBlur` 毛玻璃白卡（Paper 0.78）＋墨字＋酒金主鈕；SNiMenu 全 C++ 零
+  資產（Visibility lambda 輪詢換頁、SButton IsFocusable(false) 防搶鍵盤焦點）；
+  字體=**複合 UFont**（裸 FontFace 餵 FSlateFontInfo=豆腐字鐵坑；MenuHUD 建持
+  GC）；canvas 選單退役（DrawRoundedBox/白卡 helper 留局內 HUD 用）。
+  **08-06 字體制＝Zen Old Mincho 主聲部＋六文字系統矩陣**（user 質感審計定案：
+  圓體全站=軟成一團病根→明朝體標題/動作、圓體降級標籤；tagline/金劃刪、
+  licenses 併 settings；Zen 拉丁+日文｜源流明體=繁中（user 打回「繁中怎會沒
+  古風」後換裝、Noto TC 留庫備用）｜Noto SC/KR/Serif/Naskh＝簡中/韓/西里爾+
+  擴展拉丁/阿拉伯；SubTypeface 按碼域+culture 分流、fallback=源流；搭配三關=
+  同屬/字重齊/同屏混拉丁；儀器=NiMenuFontSample 取樣行；全 OFL 已入授權頁）。
+  **08-06 本地化第一階段＝13 語（user 定案照抄 Meccha 清單）**：NiceInkLocText
+  自管字串表（43 鍵×13 語零資產；譯文=Claude 初稿待母語校對）＋語言設定
+  （SettingsSave 持久化/OS 偵測 zh 變體分繁簡/-culture= 跟隨/ApplyLanguage 必同步
+  SetCurrentCulture=字體繁簡分流開關）＋session 錯誤鍵化＋大廳四句＋
+  **「文A」語言頁**（迷路窘境解：底列文A 鈕→13 母語名網格全列、點選即套用
+  重建；箭頭循環退役）；robo=NiMenuLang/NiMenuShowLang；剩=局內 HUD 字串
+  （另一量級）+AR 全鏡像。
+  **08-06 身分系統臉制（SPEC v4.0d #52）**：名字全退出畫面——選單名字欄刪
+  （舞台舞者=身分顯示）、大廳=席位+臉像+現金、揭曉=作者臉 96px、指認=大臉像、
+  頂欄=臉+狀態、房列表=純人數；DrawFaceTok=FaceIconCache+紙框+**FaceUV 版面
+  UV 裁切 (0.30,0.22)+(0.40,0.40)**（整張畫=膚色方塊鐵坑、外圈透明疊膚色底）；
+  隱形 ID 留 log/Steam persona；**runtime 自拍上傳升格身分系統本體=上架前必做
+  （架構三選一待裁：C++/ONNX/雲端/外掛工具）**。
+  **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝
+  `NiceInkMenuStage` 全程式生成（隱形地板+相機+無影平行光×2+完整
+  ANiceInkCharacter 替身）：墨水 RT 壓 512 省 VRAM、臉=SetupAsMenuDummy 直指
+  avatar（繞過 PlayerState）、AIController MoveToLocation 直驅（無 navmesh）→
+  現有摺り足步態+Jiggle 自然發生；對拍=GameInstance.GetBgmStartAudioTime＋
+  BeatSec 旋鈕（0.62 待耳測校準）；每 2 拍換邊橫移、每 16 拍轉圈。
+  鐵坑：mesh 前向=actor -X（面向鏡頭=yaw 180）、UE FOV=水平角（36°@16:9=望遠
+  壓臉）、橫移角色必關 MotionBlur、雙平行光要設 ForwardShadingPriority、
+  BGM 喚起原掛在 ANiceInkHUD::BeginPlay（MenuHUD 改繼承 AHUD 後要自己叫）。
+  設定/授權頁照舊（Slate 版）、
   `NiceInkGameInstance`（偏好持久化 NiceInk_Settings 槽＋斷線回選單＋BGM 播放層＋
   NiVoice 語音探針）、
   `NiceInkSessionSubsystem`（UI 狀態機＋?Name=?Avatar= 上服＋**EOS 登入閂**：

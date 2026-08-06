@@ -6,6 +6,7 @@
 #include "Engine/World.h"
 #include "IOnlineSubsystemEOS.h"
 #include "Kismet/GameplayStatics.h"
+#include "NiceInkLocText.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkSettingsSave.h"
 #include "OnlineSubsystem.h"
@@ -127,6 +128,7 @@ float UNiceInkGameInstance::GetMouseScale() const
 
 void UNiceInkGameInstance::LoadSettings()
 {
+	int32 SavedLang = -1;
 	if (const UNiceInkSettingsSave* Save = Cast<UNiceInkSettingsSave>(
 		UGameplayStatics::LoadGameFromSlot(SettingsSlotName, 0)))
 	{
@@ -134,7 +136,25 @@ void UNiceInkGameInstance::LoadSettings()
 		PreferredAvatar = Save->PreferredAvatar;
 		MouseSensitivityScale = FMath::Clamp(Save->MouseSensitivityScale, 0.2f, 3.0f);
 		MasterVolume = FMath::Clamp(Save->MasterVolume, 0.0f, 1.0f);
+		SavedLang = Save->LanguageIndex;
 	}
+
+	// 語言優先序：-culture= 命令列（robo/測試；引擎已套用、只跟隨不覆蓋）
+	// > 存檔 > OS 偵測
+	FString ForcedCulture;
+	if (FParse::Value(FCommandLine::Get(), TEXT("culture="), ForcedCulture) && !ForcedCulture.IsEmpty())
+	{
+		MenuLanguage = NiLoc::MatchLangFromCulture(ForcedCulture);
+	}
+	else
+	{
+		MenuLanguage = (SavedLang >= 0 && SavedLang < NiLoc::NumLangs)
+			? SavedLang : NiLoc::DetectDefaultLang();
+		FInternationalization::Get().SetCurrentCulture(NiLoc::LangCultureCode(MenuLanguage));
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiLang: saved=%d forced='%s' osDefault=%d -> lang=%d (%s)"),
+		SavedLang, *ForcedCulture, NiLoc::DetectDefaultLang(), MenuLanguage,
+		NiLoc::LangCultureCode(MenuLanguage));
 
 	if (PlayerDisplayName.IsEmpty())
 	{
@@ -142,6 +162,14 @@ void UNiceInkGameInstance::LoadSettings()
 		PlayerDisplayName = FString::Printf(TEXT("rikishi%02d"), FMath::RandRange(0, 99));
 		SaveSettings();
 	}
+}
+
+void UNiceInkGameInstance::ApplyLanguage(int32 LangIndex)
+{
+	MenuLanguage = FMath::Clamp(LangIndex, 0, NiLoc::NumLangs - 1);
+	// 文化同步＝字體矩陣的繁簡 Han 分流開關（SubTypeface Cultures 比對目前文化）
+	FInternationalization::Get().SetCurrentCulture(NiLoc::LangCultureCode(MenuLanguage));
+	SaveSettings();
 }
 
 void UNiceInkGameInstance::SaveSettings()
@@ -152,6 +180,7 @@ void UNiceInkGameInstance::SaveSettings()
 	Save->PreferredAvatar = PreferredAvatar;
 	Save->MouseSensitivityScale = MouseSensitivityScale;
 	Save->MasterVolume = MasterVolume;
+	Save->LanguageIndex = MenuLanguage;
 	UGameplayStatics::SaveGameToSlot(Save, SettingsSlotName, 0);
 }
 
@@ -182,6 +211,7 @@ void UNiceInkGameInstance::EnsureBgmPlaying(UWorld* World)
 	// ServerTravel／OpenLevel 不中斷——「所有場景同一首」的載體
 	BgmComponent = UGameplayStatics::SpawnSound2D(World, Bgm, GetBgmVolume(), 1.0f, 0.0f, nullptr,
 		/*bPersistAcrossLevelTransition=*/true, /*bAutoDestroy=*/false);
+	BgmStartAudioTimeS = World->GetAudioTimeSeconds(); // 編舞對拍的時間零點
 	UE_LOG(LogTemp, Log, TEXT("NiBgm: playing (vol %.2f, comp %s)"),
 		GetBgmVolume(), BgmComponent ? TEXT("ok") : TEXT("NULL"));
 }

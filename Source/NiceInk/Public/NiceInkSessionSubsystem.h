@@ -35,6 +35,18 @@ struct FNiFoundSession
 
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
 	int32 MaxSlots = 0;
+
+	// 房間碼（session 廣告屬性 NICODE；比對用，UI 永不顯示他房的碼）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
+	FString Code;
+
+	// 公開房（NIPUB=1）＝出現在瀏覽列表；私房只有碼能進
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
+	bool bPublic = true;
+
+	// 對應 SearchResults 的原始索引（列表過濾後 JoinFoundSession 要用它）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
+	int32 SearchIndex = INDEX_NONE;
 };
 
 // 連線房間管理：建房（listen server）／搜房／加入。
@@ -46,13 +58,19 @@ class NICEINK_API UNiceInkSessionSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 
 public:
-	// 建房並以 listen server 載入道場
+	// 建房並以 listen server 載入道場。每房生成一個 4 字母房間碼（進 session
+	// 廣告屬性＋GameInstance→GameState 複製給大廳顯示）；bPublicListed=false＝
+	// 私房：不進瀏覽列表、只有碼能進。
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
-	void HostSession(bool bLan = true);
+	void HostSession(bool bLan = true, bool bPublicListed = true);
 
 	// 搜房（結果進 GetFoundSessions；主選單列表用）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
 	void SearchSessions(bool bLan = true);
+
+	// 按房間碼直達（朋友局主通道）：搜房→比對 NICODE→加入；公開私房都吃
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
+	void JoinRoomByCode(const FString& RawCode, bool bLan = true);
 
 	// 加入搜尋結果中的第 Index 個房
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
@@ -73,6 +91,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Session")
 	FString GetLastError() const { return LastError; }
 
+	// 本地化用錯誤鍵＋參數（LastError 保留英文供 log；選單用鍵查 NiLoc 表翻譯）。
+	// 鍵值=ENiLocKey 的 int（避免標頭互相依賴）；-1=無
+	int32 GetLastErrorKey() const { return LastErrorKey; }
+	FString GetLastErrorParam() const { return LastErrorParam; }
+
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Session")
 	const TArray<FNiFoundSession>& GetFoundSessions() const { return FoundSummaries; }
 
@@ -86,7 +109,17 @@ private:
 
 	ENiSessionUiState UiState = ENiSessionUiState::Idle;
 	FString LastError;
+	int32 LastErrorKey = -1;
+	FString LastErrorParam;
 	bool bAutoJoinFirst = false;
+
+	// 碼直達流程中待比對的房間碼（OnFindSessionsComplete 消費後清除）
+	FString PendingJoinCode;
+	// 本次建房是否公開列出（HostSessionInternal 讀）
+	bool bPendingPublicListed = true;
+
+	// 4 字母房間碼；字元集剔除易混形（I/L/O）
+	static FString MakeRoomCode();
 
 	FDelegateHandle CreateHandle;
 	FDelegateHandle FindHandle;
@@ -107,7 +140,7 @@ private:
 	void SearchSessionsInternal(bool bLan);
 
 	IOnlineSessionPtr GetSessionInterface() const;
-	void SetFailed(const FString& Why);
+	void SetFailed(const FString& Why, int32 LocKey = -1, const FString& Param = FString());
 
 	// 加入成功後的旅行 URL 帶上本機偏好（?Name=&Avatar=——GameMode 端解析）
 	FString BuildTravelOptions() const;

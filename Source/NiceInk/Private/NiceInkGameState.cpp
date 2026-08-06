@@ -15,6 +15,7 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkGameState, CurrentPhase);
 	DOREPLIFETIME(ANiceInkGameState, CurrentRound);
+	DOREPLIFETIME(ANiceInkGameState, RoomCode);
 	DOREPLIFETIME(ANiceInkGameState, VictimPlayerId);
 	DOREPLIFETIME(ANiceInkGameState, TourWorkId);
 	DOREPLIFETIME(ANiceInkGameState, TourWorkNumber);

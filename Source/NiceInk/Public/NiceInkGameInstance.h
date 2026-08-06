@@ -34,6 +34,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Settings")
 	void SaveSettings();
 
+	// --- 選單語言（NiLoc 索引；13 語=照抄 Meccha 清單，2026-08-06 user 定案）---
+	int32 GetMenuLanguage() const { return MenuLanguage; }
+	// 設語言＋同步引擎文化（字體矩陣的繁簡分流靠 culture）＋存檔
+	void ApplyLanguage(int32 LangIndex);
+
 	// --- BGM（全遊戲唯一一首、恆定循環）---
 	// 恆定不變＝零洩漏的構造保證：BGM 永不對任何遊戲狀態反應（相位／沉睡／甦醒
 	// 一律不理）。沉睡者的全域靜音規格滅的是「情報音」（筆劃聲＝情報）；恆定 BGM
@@ -49,8 +54,17 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
 	float BgmScale = 0.30f;
 
+	// BGM 起播的 audio clock 時刻（選單編舞對拍用；<0＝尚未播）——
+	// 單曲恆定循環＝拍相位從起播時刻線性推算即可，不需讀音訊
+	double GetBgmStartAudioTime() const { return BgmStartAudioTimeS; }
+
 	// 名字合法域＝[A-Za-z0-9_-] 1..16 字——直接進 ?Name= travel option，不做 URL 編碼
 	static FString SanitizePlayerName(const FString& Raw);
+
+	// 本機建房生成的房間碼（transient 不入存檔）：ServerTravel 後 GameMode 讀走
+	// 轉進 GameState 複製；離房／拆房清除
+	UPROPERTY(Transient)
+	FString HostRoomCode;
 
 	// 各輸入輪詢點共用的靈敏度倍率（鉗 0.2–3.0）
 	float GetMouseScale() const;
@@ -75,6 +89,10 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<class UAudioComponent> BgmComponent;
+
+	double BgmStartAudioTimeS = -1.0;
+
+	int32 MenuLanguage = 0;
 
 	float GetBgmVolume() const;
 

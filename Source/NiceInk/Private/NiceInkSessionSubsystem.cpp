@@ -1,5 +1,7 @@
 #include "NiceInkSessionSubsystem.h"
 
+#include "NiceInkLocText.h"
+
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Interfaces/OnlineIdentityInterface.h"
@@ -8,6 +10,26 @@
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
+
+namespace
+{
+	// session 廣告屬性鍵：房間碼／公開列出
+	const FName NiCodeKey(TEXT("NICODE"));
+	const FName NiPublicKey(TEXT("NIPUB"));
+}
+
+FString UNiceInkSessionSubsystem::MakeRoomCode()
+{
+	// 剔除 I/L/O（與 1/0 混形）；4 位 ≈ 28 萬組合，撞碼機率可忽略
+	static const TCHAR Charset[] = TEXT("ABCDEFGHJKMNPQRSTUVWXYZ");
+	constexpr int32 N = UE_ARRAY_COUNT(Charset) - 1;
+	FString Code;
+	for (int32 i = 0; i < 4; ++i)
+	{
+		Code.AppendChar(Charset[FMath::RandRange(0, N - 1)]);
+	}
+	return Code;
+}
 
 IOnlineSessionPtr UNiceInkSessionSubsystem::GetSessionInterface() const
 {
@@ -28,10 +50,12 @@ bool UNiceInkSessionSubsystem::IsOnlineServiceConfigured()
 	return Service.Equals(TEXT("EOS"), ESearchCase::IgnoreCase);
 }
 
-void UNiceInkSessionSubsystem::SetFailed(const FString& Why)
+void UNiceInkSessionSubsystem::SetFailed(const FString& Why, int32 LocKey, const FString& Param)
 {
 	UiState = ENiSessionUiState::Failed;
-	LastError = Why;
+	LastError = Why;          // 英文＝log 用
+	LastErrorKey = LocKey;    // 鍵＝選單翻譯用（ENiLocKey 的 int）
+	LastErrorParam = Param;
 	UE_LOG(LogTemp, Warning, TEXT("Session: %s"), *Why);
 }
 
@@ -109,7 +133,7 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 	if (!bWasSuccessful)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("NiSession: EOS login FAILED: %s"), *Error);
-		SetFailed(TEXT("Epic sign-in failed — try again"));
+		SetFailed(TEXT("Epic sign-in failed — try again"), static_cast<int32>(ENiLocKey::ErrSignIn));
 		return;
 	}
 	UE_LOG(LogTemp, Log, TEXT("NiSession: EOS login OK (%s)"), *UserId.ToString());
@@ -119,7 +143,7 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 	}
 }
 
-void UNiceInkSessionSubsystem::HostSession(bool bLan)
+void UNiceInkSessionSubsystem::HostSession(bool bLan, bool bPublicListed)
 {
 	if (UiState == ENiSessionUiState::Hosting || UiState == ENiSessionUiState::Joining)
 	{
@@ -128,6 +152,7 @@ void UNiceInkSessionSubsystem::HostSession(bool bLan)
 	// 先佔狀態再登入：登入期間（可能開瀏覽器）選單顯示進行中、殘留點擊被護欄擋
 	UiState = ENiSessionUiState::Hosting;
 	LastError.Reset();
+	bPendingPublicListed = bPublicListed;
 	EnsureLoggedInThen([this, bLan]() { HostSessionInternal(bLan); });
 }
 
@@ -136,7 +161,7 @@ void UNiceInkSessionSubsystem::HostSessionInternal(bool bLan)
 	IOnlineSessionPtr Sessions = GetSessionInterface();
 	if (!Sessions.IsValid())
 	{
-		SetFailed(TEXT("no session interface — online services unavailable"));
+		SetFailed(TEXT("no session interface — online services unavailable"), static_cast<int32>(ENiLocKey::ErrNoOnline));
 		return;
 	}
 
@@ -156,6 +181,18 @@ void UNiceInkSessionSubsystem::HostSessionInternal(bool bLan)
 	Settings.bAllowJoinViaPresence = true;
 	Settings.Set(FName(TEXT("NICEINK")), FString(TEXT("dojo")), EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 
+	// 房間碼＋公開旗標進廣告屬性；碼同時存 GameInstance（ServerTravel 後
+	// GameMode 轉進 GameState 複製給大廳顯示——私房也一樣，碼就是門）
+	const FString RoomCode = MakeRoomCode();
+	Settings.Set(NiCodeKey, RoomCode, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	Settings.Set(NiPublicKey, bPendingPublicListed ? 1 : 0, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+	{
+		GI->HostRoomCode = RoomCode;
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiSession: room code %s (%s)"), *RoomCode,
+		bPendingPublicListed ? TEXT("public") : TEXT("invite only"));
+
 	UiState = ENiSessionUiState::Hosting;
 	LastError.Reset();
 	CreateHandle = Sessions->AddOnCreateSessionCompleteDelegate_Handle(
@@ -172,7 +209,7 @@ void UNiceInkSessionSubsystem::OnCreateSessionComplete(FName SessionName, bool b
 	UE_LOG(LogTemp, Log, TEXT("CreateSession %s: %s"), *SessionName.ToString(), bWasSuccessful ? TEXT("OK") : TEXT("FAILED"));
 	if (!bWasSuccessful)
 	{
-		SetFailed(TEXT("could not create the room"));
+		SetFailed(TEXT("could not create the room"), static_cast<int32>(ENiLocKey::ErrCreateFailed));
 		return;
 	}
 	if (GetWorld())
@@ -193,7 +230,27 @@ void UNiceInkSessionSubsystem::SearchSessions(bool bLan)
 	{
 		return; // 重入護欄
 	}
+	PendingJoinCode.Reset(); // 瀏覽搜尋不帶碼
 	UiState = ENiSessionUiState::Searching; // 先佔狀態再登入（同 HostSession）
+	LastError.Reset();
+	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
+}
+
+void UNiceInkSessionSubsystem::JoinRoomByCode(const FString& RawCode, bool bLan)
+{
+	if (UiState == ENiSessionUiState::Searching || UiState == ENiSessionUiState::Joining ||
+		UiState == ENiSessionUiState::Hosting)
+	{
+		return; // 重入護欄
+	}
+	const FString Code = RawCode.TrimStartAndEnd().ToUpper();
+	if (Code.Len() != 4)
+	{
+		SetFailed(TEXT("enter the 4-letter room code"), static_cast<int32>(ENiLocKey::ErrEnterCode));
+		return;
+	}
+	PendingJoinCode = Code;
+	UiState = ENiSessionUiState::Searching;
 	LastError.Reset();
 	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
 }
@@ -203,7 +260,7 @@ void UNiceInkSessionSubsystem::SearchSessionsInternal(bool bLan)
 	IOnlineSessionPtr Sessions = GetSessionInterface();
 	if (!Sessions.IsValid())
 	{
-		SetFailed(TEXT("no session interface — online services unavailable"));
+		SetFailed(TEXT("no session interface — online services unavailable"), static_cast<int32>(ENiLocKey::ErrNoOnline));
 		return;
 	}
 
@@ -240,34 +297,59 @@ void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 
 	const bool bWantedAutoJoin = bAutoJoinFirst;
 	bAutoJoinFirst = false;
+	const FString WantedCode = PendingJoinCode;
+	PendingJoinCode.Reset();
 
 	if (!bWasSuccessful || !SessionSearch.IsValid())
 	{
-		SetFailed(TEXT("search failed"));
+		SetFailed(TEXT("search failed"), static_cast<int32>(ENiLocKey::ErrSearchFailed));
 		return;
 	}
 
 	FoundSummaries.Reset();
-	for (const FOnlineSessionSearchResult& R : SessionSearch->SearchResults)
+	for (int32 i = 0; i < SessionSearch->SearchResults.Num(); ++i)
 	{
+		const FOnlineSessionSearchResult& R = SessionSearch->SearchResults[i];
 		FNiFoundSession S;
 		S.OwnerName = R.Session.OwningUserName.IsEmpty() ? TEXT("unknown host") : R.Session.OwningUserName;
 		S.PingMs = R.PingInMs;
 		S.MaxSlots = R.Session.SessionSettings.NumPublicConnections;
 		S.OpenSlots = R.Session.NumOpenPublicConnections;
+		S.SearchIndex = i;
+		R.Session.SessionSettings.Get(NiCodeKey, S.Code);
+		int32 Pub = 1; // 舊版房（無旗標）當公開
+		R.Session.SessionSettings.Get(NiPublicKey, Pub);
+		S.bPublic = Pub != 0;
 		FoundSummaries.Add(S);
 	}
 	UE_LOG(LogTemp, Log, TEXT("FindSessions: %d found"), FoundSummaries.Num());
 
-	if (FoundSummaries.IsEmpty())
+	// 碼直達：比對 NICODE（公開私房都吃），命中即加入
+	if (!WantedCode.IsEmpty())
 	{
-		SetFailed(TEXT("no rooms found on this network"));
+		for (const FNiFoundSession& S : FoundSummaries)
+		{
+			if (S.Code.Equals(WantedCode, ESearchCase::IgnoreCase))
+			{
+				UiState = ENiSessionUiState::Idle;
+				JoinFoundSession(S.SearchIndex);
+				return;
+			}
+		}
+		SetFailed(FString::Printf(TEXT("no room with code %s — check the code with your host"), *WantedCode),
+			static_cast<int32>(ENiLocKey::ErrNoRoomWithCode), WantedCode);
 		return;
 	}
 
+	// 瀏覽搜尋零結果不是錯誤——列表空狀態由 HUD 呈現
 	UiState = ENiSessionUiState::Idle;
 	if (bWantedAutoJoin)
 	{
+		if (FoundSummaries.IsEmpty())
+		{
+			SetFailed(TEXT("no rooms found on this network"), static_cast<int32>(ENiLocKey::ErrNoRoomsLan));
+			return;
+		}
 		JoinFoundSession(0);
 	}
 }
@@ -281,7 +363,7 @@ void UNiceInkSessionSubsystem::JoinFoundSession(int32 Index)
 	IOnlineSessionPtr Sessions = GetSessionInterface();
 	if (!Sessions.IsValid() || !SessionSearch.IsValid() || !SessionSearch->SearchResults.IsValidIndex(Index))
 	{
-		SetFailed(TEXT("that room is no longer available"));
+		SetFailed(TEXT("that room is no longer available"), static_cast<int32>(ENiLocKey::ErrRoomGone));
 		return;
 	}
 
@@ -304,7 +386,9 @@ void UNiceInkSessionSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinS
 	{
 		SetFailed(Result == EOnJoinSessionCompleteResult::SessionIsFull
 			? TEXT("the room is full")
-			: TEXT("could not join the room"));
+			: TEXT("could not join the room"),
+			Result == EOnJoinSessionCompleteResult::SessionIsFull
+			? static_cast<int32>(ENiLocKey::ErrRoomFull) : static_cast<int32>(ENiLocKey::ErrJoinFailed));
 		return;
 	}
 
@@ -318,7 +402,7 @@ void UNiceInkSessionSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinS
 			return;
 		}
 	}
-	SetFailed(TEXT("could not resolve the room address"));
+	SetFailed(TEXT("could not resolve the room address"), static_cast<int32>(ENiLocKey::ErrResolve));
 }
 
 void UNiceInkSessionSubsystem::DestroySession()
@@ -326,6 +410,10 @@ void UNiceInkSessionSubsystem::DestroySession()
 	if (IOnlineSessionPtr Sessions = GetSessionInterface())
 	{
 		Sessions->DestroySession(NAME_GameSession);
+	}
+	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+	{
+		GI->HostRoomCode.Reset();
 	}
 	UiState = ENiSessionUiState::Idle;
 }

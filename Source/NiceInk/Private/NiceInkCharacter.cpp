@@ -904,6 +904,19 @@ void ANiceInkCharacter::PollShakeAttack(APlayerController* PC)
 	ServerAttackShake();
 }
 
+void ANiceInkCharacter::SetupAsMenuDummy(int32 AvatarIdx)
+{
+	if (!Body || !InkCanvas || FNiceInkAvatars::Num() <= 0)
+	{
+		return;
+	}
+	const int32 Idx = FMath::Clamp(AvatarIdx, 0, FNiceInkAvatars::Num() - 1);
+	Body->ApplyAvatar(FNiceInkAvatars::Get(Idx));
+	Body->BindCanvas(InkCanvas);
+	Body->SetEyesClosed(false);
+	AppliedAvatarIndex = Idx; // EnsureAvatarApplied 無 PS 直接 return——不會互搶
+}
+
 void ANiceInkCharacter::EnsureAvatarApplied()
 {
 	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();

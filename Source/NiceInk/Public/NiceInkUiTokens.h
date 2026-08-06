@@ -15,4 +15,9 @@ namespace NiHudColor
 	static const FLinearColor Green    = FLinearColor::FromSRGBColor(FColor(134, 176, 108));
 	static const FLinearColor Skin     = FLinearColor::FromSRGBColor(FColor(238, 195, 168));
 	static const FLinearColor Lavender = FLinearColor::FromSRGBColor(FColor(169, 163, 207));
+
+	// 白卡制（2026-08-06 user 打回深棕全暗＝糊成一團泥；素色半透明=Meccha 式
+	// 白卡＋墨字）：白面板上的文字色階與深酒金
+	static const FLinearColor InkDim    = FLinearColor::FromSRGBColor(FColor(122, 111, 97));
+	static const FLinearColor AmberDeep = FLinearColor::FromSRGBColor(FColor(191, 122, 24));
 }

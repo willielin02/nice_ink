@@ -22,4 +22,30 @@ public:
 
 	UFUNCTION(Exec)
 	void NiMenuJoin();
+
+	// --- 房間碼自動化（-ExecCmds 開機直呼用，timer-deferred 讓引擎完全就緒）---
+
+	// 建房（跟隨服務自選 LAN/EOS；bPublic 0=私房 invite only）
+	UFUNCTION(Exec)
+	void NiMenuAutoHost(int32 bPublic = 0);
+
+	// 開加入頁並預填房間碼（只擺畫面不加入——截圖自查用）
+	UFUNCTION(Exec)
+	void NiMenuShowJoin(const FString& Code);
+
+	// 按碼加入（等價於加入頁輸碼＋join with code）
+	UFUNCTION(Exec)
+	void NiMenuJoinCode(const FString& Code);
+
+	// 多文字系統取樣行（字體矩陣驗證：日/繁/簡/韓/俄/阿/土 一行上牆）
+	UFUNCTION(Exec)
+	void NiMenuFontSample();
+
+	// 切語言（NiLoc 索引 0-12；robo 多語截圖用）
+	UFUNCTION(Exec)
+	void NiMenuLang(int32 LangIndex);
+
+	// 開語言全列頁（robo 截圖用）
+	UFUNCTION(Exec)
+	void NiMenuShowLang();
 };

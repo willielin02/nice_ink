@@ -10,6 +10,22 @@ linked or reproduced below. This file ships next to the game executable.
 - License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
 - Used as the in-game UI font (Medium / ExtraBold weights).
 
+### Zen Old Mincho
+- Copyright (c) The Zen Project Authors (Yoshimichi Ohira)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Used as the menu display font (Regular / Bold / Black weights).
+
+### GenRyuMin (源流明體)
+- Copyright (c) ButTaiwan, derived from Source Han Serif (Adobe/Google)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Used for Traditional Chinese menu text.
+
+### Noto Serif / Noto Serif SC / Noto Serif KR / Noto Naskh Arabic
+- Copyright (c) The Noto Project Authors (Google)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Used for Simplified Chinese, Korean, Cyrillic, extended Latin and Arabic menu text.
+- (Noto Serif TC is also bundled as a backup face.)
+
 ## Icons
 
 ### game-icons.net

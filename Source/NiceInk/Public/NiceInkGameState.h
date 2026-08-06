@@ -26,6 +26,11 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 CurrentRound = 0;
 
+	// 房間碼（主機建房時生成、全員可見——大廳顯示給朋友唸；無 session 流程
+	//（PIE/robo/直連）時為空＝HUD 不畫）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	FString RoomCode;
+
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 VictimPlayerId = INDEX_NONE;
 
