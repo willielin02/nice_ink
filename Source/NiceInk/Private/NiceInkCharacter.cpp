@@ -32,6 +32,7 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
+#include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkTypes.h"
@@ -295,6 +296,16 @@ void ANiceInkCharacter::BeginPlay()
 			PC->bShowMouseCursor = false;
 			PC->SetInputMode(FInputModeGameOnly());
 		}
+	}
+
+	// 雲端隨身上行（B3）：只有 packaged/-game 的遠端客戶端有戲——等本機雲端
+	// 拉取完成後把資產交給主機。PIE/robo（WorldType≠Game）與 listen 主機不啟動。
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::Game && !HasAuthority() &&
+		UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		PersonaUploadTicksLeft = 20; // 0.5s × 20 ＝ 10s 內等到就發車
+		GetWorldTimerManager().SetTimer(PersonaUploadTimer, this,
+			&ANiceInkCharacter::MaybeUploadPersona, 0.5f, /*bLoop=*/true);
 	}
 
 	// 實體筆外觀：真資產（刺青機/麥克筆）＝實尺寸（scale 1）；圓柱退路＝縮成 1.2cm 粗 15cm 長。
@@ -3271,6 +3282,154 @@ void ANiceInkCharacter::MulticastRestoreWork_Implementation(FInkWork Work)
 	{
 		InkCanvas->RestoreWork(Work);
 	}
+}
+
+// --- 雲端隨身資產搬運（B3）---
+
+namespace
+{
+	constexpr int32 PersonaChunkSize = 16 * 1024;
+	constexpr int32 PersonaMaxBytes = 4 * 1024 * 1024; // 資產＝向量筆劃，KB 級；4MB＝瘋值上限
+}
+
+void ANiceInkCharacter::MaybeUploadPersona()
+{
+	UWorld* World = GetWorld();
+	const bool bEligible = World && World->WorldType == EWorldType::Game && !HasAuthority() &&
+		UNiceInkSessionSubsystem::IsOnlineServiceConfigured() && !bPersonaUploadDone;
+	if (!bEligible)
+	{
+		GetWorldTimerManager().ClearTimer(PersonaUploadTimer);
+		return;
+	}
+	if (--PersonaUploadTicksLeft <= 0)
+	{
+		GetWorldTimerManager().ClearTimer(PersonaUploadTimer); // 放棄：server 逾時走主機本機槽
+		return;
+	}
+	if (!IsLocallyControlled())
+	{
+		return; // 佔有時序未到（他人角色會在 ticks 耗盡後自然收攤）
+	}
+
+	UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this);
+	if (!Persona || Persona->GetAssetsPullState() != UNiceInkPersonaSubsystem::EPullState::Done)
+	{
+		return; // 雲端拉取未完成：下一 tick 再看
+	}
+
+	bPersonaUploadDone = true;
+	GetWorldTimerManager().ClearTimer(PersonaUploadTimer);
+
+	const TArray<uint8>& Bytes = Persona->GetCachedAssets();
+	if (!Persona->HasCloudAssets() || Bytes.Num() <= 0 || Bytes.Num() > PersonaMaxBytes)
+	{
+		return; // 新帳號無資產：不上行，server 逾時 fallback（多半也是空）＝乾淨新身
+	}
+
+	ServerPersonaBegin(Bytes.Num());
+	for (int32 Off = 0; Off < Bytes.Num(); Off += PersonaChunkSize)
+	{
+		TArray<uint8> Chunk(Bytes.GetData() + Off, FMath::Min(PersonaChunkSize, Bytes.Num() - Off));
+		ServerPersonaChunk(Off, Chunk);
+	}
+	ServerPersonaEnd(FCrc::MemCrc32(Bytes.GetData(), Bytes.Num()));
+	UE_LOG(LogTemp, Log, TEXT("NiPersona: uploaded %d bytes to host"), Bytes.Num());
+}
+
+void ANiceInkCharacter::ServerPersonaBegin_Implementation(int32 TotalBytes)
+{
+	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
+	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes || (PS && PS->bAssetsRestored))
+	{
+		PersonaUpExpected = -1; // 拒收（已還原過＝重複列車；或瘋值）
+		return;
+	}
+	PersonaUpExpected = TotalBytes;
+	PersonaUpReceived = 0;
+	PersonaUpBuf.SetNumZeroed(TotalBytes);
+}
+
+void ANiceInkCharacter::ServerPersonaChunk_Implementation(int32 Offset, const TArray<uint8>& Bytes)
+{
+	if (PersonaUpExpected < 0 || Offset < 0 || Bytes.Num() <= 0 ||
+		Offset + Bytes.Num() > PersonaUpExpected)
+	{
+		return;
+	}
+	FMemory::Memcpy(PersonaUpBuf.GetData() + Offset, Bytes.GetData(), Bytes.Num());
+	PersonaUpReceived += Bytes.Num();
+}
+
+void ANiceInkCharacter::ServerPersonaEnd_Implementation(uint32 Crc)
+{
+	if (PersonaUpExpected < 0 || PersonaUpReceived != PersonaUpExpected ||
+		FCrc::MemCrc32(PersonaUpBuf.GetData(), PersonaUpBuf.Num()) != Crc)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiPersona: upload rejected (expected=%d received=%d)"),
+			PersonaUpExpected, PersonaUpReceived);
+	}
+	else if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+	{
+		GM->ApplyUploadedPersona(this, PersonaUpBuf);
+	}
+	PersonaUpBuf.Empty();
+	PersonaUpExpected = -1;
+	PersonaUpReceived = 0;
+}
+
+void ANiceInkCharacter::SendPersonaToOwner(const TArray<uint8>& Bytes)
+{
+	if (!HasAuthority() || Bytes.Num() <= 0 || Bytes.Num() > PersonaMaxBytes)
+	{
+		return;
+	}
+	ClientPersonaBegin(Bytes.Num());
+	for (int32 Off = 0; Off < Bytes.Num(); Off += PersonaChunkSize)
+	{
+		TArray<uint8> Chunk(Bytes.GetData() + Off, FMath::Min(PersonaChunkSize, Bytes.Num() - Off));
+		ClientPersonaChunk(Off, Chunk);
+	}
+	ClientPersonaEnd(FCrc::MemCrc32(Bytes.GetData(), Bytes.Num()));
+}
+
+void ANiceInkCharacter::ClientPersonaBegin_Implementation(int32 TotalBytes)
+{
+	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
+	{
+		PersonaDownExpected = -1;
+		return;
+	}
+	PersonaDownExpected = TotalBytes;
+	PersonaDownReceived = 0;
+	PersonaDownBuf.SetNumZeroed(TotalBytes);
+}
+
+void ANiceInkCharacter::ClientPersonaChunk_Implementation(int32 Offset, const TArray<uint8>& Bytes)
+{
+	if (PersonaDownExpected < 0 || Offset < 0 || Bytes.Num() <= 0 ||
+		Offset + Bytes.Num() > PersonaDownExpected)
+	{
+		return;
+	}
+	FMemory::Memcpy(PersonaDownBuf.GetData() + Offset, Bytes.GetData(), Bytes.Num());
+	PersonaDownReceived += Bytes.Num();
+}
+
+void ANiceInkCharacter::ClientPersonaEnd_Implementation(uint32 Crc)
+{
+	const bool bOk = PersonaDownExpected > 0 && PersonaDownReceived == PersonaDownExpected &&
+		FCrc::MemCrc32(PersonaDownBuf.GetData(), PersonaDownBuf.Num()) == Crc;
+	if (bOk)
+	{
+		if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
+		{
+			Persona->StoreAssets(PersonaDownBuf); // 快取＋寫自己的雲端保險箱
+		}
+	}
+	PersonaDownBuf.Empty();
+	PersonaDownExpected = -1;
+	PersonaDownReceived = 0;
 }
 
 void ANiceInkCharacter::OnRep_Asleep()

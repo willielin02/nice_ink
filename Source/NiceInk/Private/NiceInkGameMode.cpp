@@ -10,8 +10,10 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
+#include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSaveGame.h"
+#include "NiceInkSessionSubsystem.h"
 #include "TimerManager.h"
 
 ANiceInkGameMode::ANiceInkGameMode()
@@ -87,17 +89,16 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 
 	Super::PostLogin(NewPlayer);
 
-	// 跨場資產還原（延遲讓新客戶端的 actor channel 就緒，multicast 才到得了它）
+	// 跨場資產還原（延遲讓新客戶端的 actor channel 就緒，multicast 才到得了它）。
+	// B3 起＝編排制：LAN/PIE 首 tick 即走本機槽（時序與舊制同＝+2s）；
+	// EOS 玩家等雲端（主機本人）或上行列車（遠端），逾時 fallback 本機槽。
 	if (APawn* Pawn = NewPlayer ? NewPlayer->GetPawn() : nullptr)
 	{
 		TWeakObjectPtr<ANiceInkCharacter> WeakChar = Cast<ANiceInkCharacter>(Pawn);
 		FTimerHandle Unused;
 		GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, WeakChar]()
 		{
-			if (ANiceInkCharacter* C = WeakChar.Get())
-			{
-				RestoreCharacter(C);
-			}
+			TryRestoreTick(WeakChar, 12);
 		}), 2.0f, false);
 	}
 
@@ -219,7 +220,17 @@ FString ANiceInkGameMode::SaveSlotFor(const ANiceInkPlayerState* PS) const
 	{
 		return TEXT("NiceInk_Unknown");
 	}
-	// PIE 的玩家名帶隨機尾碼（Willie_desktop-7461A）——剝掉，改用席位穩定鍵
+
+	// B3：EOS 玩家＝ProductUserId 鍵（跨房/改名/席位恆定；Steam 票證登入
+	// 同為 Connect 層 PUID＝同一條路）。此槽是主機側熱備——雲端才是正本。
+	const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
+	if (!Puid.IsEmpty())
+	{
+		return FString::Printf(TEXT("NiceInk_P_%s"), *Puid);
+	}
+
+	// 舊制 fallback（LAN/PIE/robo）：PIE 的玩家名帶隨機尾碼（Willie_desktop-7461A）
+	// ——剝掉，改用席位穩定鍵
 	FString Name = PS->GetPlayerName();
 	int32 DashIdx;
 	if (Name.FindLastChar(TEXT('-'), DashIdx) && Name.Len() - DashIdx == 6)
@@ -248,15 +259,41 @@ void ANiceInkGameMode::PersistCharacter(ANiceInkCharacter* Character)
 		}
 	}
 	UGameplayStatics::SaveGameToSlot(Save, SaveSlotFor(PS), 0);
+
+	// B3 雲端下行：EOS 玩家把最新資產送回本人寫自己的雲端保險箱
+	//（PlayerDataStorage 私人不可代寫＝必經本人；LAN/PIE 無 PUID＝跳過）。
+	// 遠端斷線瞬間的 Client RPC 送不到＝無妨，上一個結算點已寫過雲端。
+	const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
+	if (!Puid.IsEmpty() && UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		TArray<uint8> Bytes;
+		if (UGameplayStatics::SaveGameToMemory(Save, Bytes) && Bytes.Num() > 0)
+		{
+			const APlayerController* PC = Cast<APlayerController>(Character->GetController());
+			if (PC && PC->IsLocalController())
+			{
+				// listen 主機本人：不過網，直寫雲端
+				if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
+				{
+					Persona->StoreAssets(Bytes);
+				}
+			}
+			else
+			{
+				Character->SendPersonaToOwner(Bytes);
+			}
+		}
+	}
 }
 
 void ANiceInkGameMode::RestoreCharacter(ANiceInkCharacter* Character)
 {
 	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
-	if (!PS)
+	if (!PS || PS->bAssetsRestored)
 	{
 		return;
 	}
+	PS->bAssetsRestored = true; // 嘗試過即封口（含「無存檔＝乾淨新身」）——防雙重還原
 
 	const FString Slot = SaveSlotFor(PS);
 	if (!UGameplayStatics::DoesSaveGameExist(Slot, 0))
@@ -274,6 +311,99 @@ void ANiceInkGameMode::RestoreCharacter(ANiceInkCharacter* Character)
 	{
 		Character->MulticastRestoreWork(Work); // 恩怨博物館：刺青跟著角色走
 	}
+}
+
+void ANiceInkGameMode::ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes)
+{
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS || PS->bAssetsRestored)
+	{
+		return;
+	}
+
+	UNiceInkSaveGame* Save = Cast<UNiceInkSaveGame>(UGameplayStatics::LoadGameFromMemory(Bytes));
+	if (!Save)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiPersona: uploaded persona failed to deserialize — ignoring"));
+		return;
+	}
+	PS->bAssetsRestored = true;
+
+	// 信任界線（listen server 派對遊戲＝無絕對防竄改，記帳接受）：
+	// 只做格式與量級的理智檢查，語意照單全收
+	PS->Cash = FMath::Clamp(Save->Cash, 0, 100000000);
+	int32 Applied = 0;
+	for (const FInkWork& Work : Save->Tattoos)
+	{
+		if (Work.State == EInkWorkState::Marker || Applied >= 1024)
+		{
+			continue; // 麥克筆永不跨場；1024 幅＝瘋值上限
+		}
+		Character->MulticastRestoreWork(Work);
+		++Applied;
+	}
+
+	// 主機本機槽同步熱備（該玩家下次在斷網/雲端故障時仍有得撈）
+	UGameplayStatics::SaveGameToSlot(Save, SaveSlotFor(PS), 0);
+	UE_LOG(LogTemp, Log, TEXT("NiPersona: applied uploaded persona for %s (cash=%d, tattoos=%d)"),
+		*PS->GetPlayerName(), PS->Cash, Applied);
+}
+
+void ANiceInkGameMode::TryRestoreTick(TWeakObjectPtr<ANiceInkCharacter> WeakChar, int32 TicksLeft)
+{
+	ANiceInkCharacter* Character = WeakChar.Get();
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!Character || !PS || PS->bAssetsRestored)
+	{
+		return; // 離場／已還原（上行列車先到）＝收工
+	}
+
+	const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
+	if (Puid.IsEmpty() || !UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		RestoreCharacter(Character); // LAN/PIE/robo：原路本機槽，時序與舊制同
+		return;
+	}
+
+	const APlayerController* PC = Cast<APlayerController>(Character->GetController());
+	if (PC && PC->IsLocalController())
+	{
+		// listen 主機本人：資產不過網，直讀本機雲端快取
+		if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
+		{
+			if (Persona->GetAssetsPullState() == UNiceInkPersonaSubsystem::EPullState::Done)
+			{
+				if (Persona->HasCloudAssets())
+				{
+					ApplyUploadedPersona(Character, Persona->GetCachedAssets());
+				}
+				else
+				{
+					RestoreCharacter(Character); // 雲端無檔：本機 PUID 槽 fallback
+				}
+				return;
+			}
+		}
+		else
+		{
+			RestoreCharacter(Character);
+			return;
+		}
+	}
+	// EOS 遠端：等 Character 的上行列車（ServerPersonaEnd → ApplyUploadedPersona）
+
+	if (TicksLeft <= 0)
+	{
+		UE_LOG(LogTemp, Log, TEXT("NiPersona: no cloud persona for %s within window — host-local fallback"),
+			*PS->GetPlayerName());
+		RestoreCharacter(Character); // 逾時：主機本機 PUID 槽（同機重連有得撈；多半＝乾淨新身）
+		return;
+	}
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, WeakChar, TicksLeft]()
+	{
+		TryRestoreTick(WeakChar, TicksLeft - 1);
+	}), 1.0f, false);
 }
 
 void ANiceInkGameMode::PersistAllCharacters()
@@ -735,6 +865,11 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 			}
 		}
 		RoundCleanupAllCharacters();
+		// B3：碳黑誕生＝資產即刻落盤＋上雲（不等終局——中途斷線/主機跑路不丟碳黑）
+		if (bWrongGuess)
+		{
+			PersistCharacter(GetVictimCharacter());
+		}
 	}), FMath::Min(1.2f, ResolutionSeconds * 0.4f), false);
 }
 

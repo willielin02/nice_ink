@@ -81,5 +81,10 @@ private:
 	float SpinYawRemaining = 0.0f; // >0＝旋轉中（每拍觸發後遞減到 0）
 	float CurrentYaw = 180.0f;     // 面向相機（見 FaceCameraYaw）
 
+	// persona 穿戴輪詢（SPEC #52 v4.0e：舞台力士＝自己的臉＋自己的刺青）
+	int32 AppliedFaceRev = 0;      // 已套用的自訂臉版本（0=尚未；換臉即重套）
+	bool bCloudTattoosApplied = false;
+	void DressDancerFromPersona();
+
 	double BeatClock(const UWorld* World) const;
 };

@@ -798,6 +798,29 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastRestoreWork(FInkWork Work);
 
+	// --- 雲端隨身資產搬運（B3；EOS PlayerDataStorage）---
+	// 位元組列車：UNiceInkSaveGame 序列化 bytes 分塊過網（16KB/塊＋CRC 驗收）。
+	// 上行（進房）＝owner client 把自己雲端的資產交給 server 套用；
+	// 下行（結算）＝server 把最新資產發回本人、由本人客戶端寫自己的雲端保險箱
+	// （PlayerDataStorage 私人不可代寫＝只能經本人）。LAN/PIE 全程不走這裡。
+
+	UFUNCTION(Server, Reliable)
+	void ServerPersonaBegin(int32 TotalBytes);
+	UFUNCTION(Server, Reliable)
+	void ServerPersonaChunk(int32 Offset, const TArray<uint8>& Bytes);
+	UFUNCTION(Server, Reliable)
+	void ServerPersonaEnd(uint32 Crc);
+
+	UFUNCTION(Client, Reliable)
+	void ClientPersonaBegin(int32 TotalBytes);
+	UFUNCTION(Client, Reliable)
+	void ClientPersonaChunk(int32 Offset, const TArray<uint8>& Bytes);
+	UFUNCTION(Client, Reliable)
+	void ClientPersonaEnd(uint32 Crc);
+
+	// server 端便利：把 bytes 切塊發下行列車給 owner
+	void SendPersonaToOwner(const TArray<uint8>& Bytes);
+
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
 
@@ -966,6 +989,21 @@ public:
 private:
 	float CameraPitch = 0.0f;
 	int32 AppliedAvatarIndex = INDEX_NONE;
+
+	// --- 雲端隨身資產搬運內部狀態（B3）---
+	// server 端上行收件緩衝（每角色一份；PersonaUpExpected<0＝未開始/已拒收）
+	TArray<uint8> PersonaUpBuf;
+	int32 PersonaUpExpected = -1;
+	int32 PersonaUpReceived = 0;
+	// client 端下行收件緩衝
+	TArray<uint8> PersonaDownBuf;
+	int32 PersonaDownExpected = -1;
+	int32 PersonaDownReceived = 0;
+	// client 端進房上行：等 Persona 雲端拉取完成再發車（0.5s 輪詢、10s 放棄）
+	FTimerHandle PersonaUploadTimer;
+	int32 PersonaUploadTicksLeft = 0;
+	bool bPersonaUploadDone = false;
+	void MaybeUploadPersona();
 
 	bool bSystemMenuOpen = false;
 	void PollSystemMenu(APlayerController* PC);

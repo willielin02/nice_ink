@@ -7,6 +7,7 @@
 #include "IOnlineSubsystemEOS.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiceInkLocText.h"
+#include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkSettingsSave.h"
 #include "OnlineSubsystem.h"
@@ -104,12 +105,16 @@ UNiceInkGameInstance* UNiceInkGameInstance::Get(const UObject* WorldContext)
 
 FString UNiceInkGameInstance::SanitizePlayerName(const FString& Raw)
 {
+	// v4.0e：名字上畫面＋13 語＝開放 Unicode（中日韓/假名/西里爾…全收）。
+	// 黑名單制，只擋三類：控制字元與空白、travel URL 語法字（?=&/\"）、
+	// 檔名保留字（<>:*|——LAN 舊制存檔槽名帶玩家名）。上限 16 字元。
 	FString Out;
 	for (const TCHAR C : Raw)
 	{
-		const bool bOk = (C >= 'a' && C <= 'z') || (C >= 'A' && C <= 'Z') ||
-			(C >= '0' && C <= '9') || C == '_' || C == '-';
-		if (bOk)
+		const bool bBad = C <= 0x20 || C == 0x7F ||
+			C == '?' || C == '=' || C == '&' || C == '/' || C == '\\' || C == '"' ||
+			C == '<' || C == '>' || C == ':' || C == '*' || C == '|';
+		if (!bBad)
 		{
 			Out.AppendChar(C);
 		}
@@ -137,6 +142,7 @@ void UNiceInkGameInstance::LoadSettings()
 		MouseSensitivityScale = FMath::Clamp(Save->MouseSensitivityScale, 0.2f, 3.0f);
 		MasterVolume = FMath::Clamp(Save->MasterVolume, 0.0f, 1.0f);
 		SavedLang = Save->LanguageIndex;
+		SettingsRevision = Save->Revision;
 	}
 
 	// 語言優先序：-culture= 命令列（robo/測試；引擎已套用、只跟隨不覆蓋）
@@ -172,7 +178,7 @@ void UNiceInkGameInstance::ApplyLanguage(int32 LangIndex)
 	SaveSettings();
 }
 
-void UNiceInkGameInstance::SaveSettings()
+UNiceInkSettingsSave* UNiceInkGameInstance::BuildSettingsSaveObject() const
 {
 	UNiceInkSettingsSave* Save = Cast<UNiceInkSettingsSave>(
 		UGameplayStatics::CreateSaveGameObject(UNiceInkSettingsSave::StaticClass()));
@@ -181,7 +187,26 @@ void UNiceInkGameInstance::SaveSettings()
 	Save->MouseSensitivityScale = MouseSensitivityScale;
 	Save->MasterVolume = MasterVolume;
 	Save->LanguageIndex = MenuLanguage;
-	UGameplayStatics::SaveGameToSlot(Save, SettingsSlotName, 0);
+	Save->Revision = SettingsRevision;
+	return Save;
+}
+
+void UNiceInkGameInstance::SaveSettings()
+{
+	// 雲端偏好套用中＝不遞增（Revision 由雲端直設）也不回推——防乒乓
+	UNiceInkPersonaSubsystem* Persona = GetSubsystem<UNiceInkPersonaSubsystem>();
+	const bool bApplyingCloud = Persona && Persona->IsApplyingCloudSettings();
+	if (!bApplyingCloud)
+	{
+		++SettingsRevision;
+	}
+
+	UGameplayStatics::SaveGameToSlot(BuildSettingsSaveObject(), SettingsSlotName, 0);
+
+	if (!bApplyingCloud && Persona)
+	{
+		Persona->PushSettings(); // 未登入＝no-op；登入後偏好即時上雲
+	}
 }
 
 float UNiceInkGameInstance::GetBgmVolume() const

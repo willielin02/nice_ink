@@ -10,9 +10,20 @@
 #include "GameFramework/PlayerController.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Paths.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkPersonaSubsystem.h"
+#include "NiceInkSaveGame.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkUiTokens.h"
+#if PLATFORM_WINDOWS
+// 現代檔案對話框（IFileOpenDialog，Vista+）：引擎 DesktopPlatform 走
+// GetOpenFileNameW 古典模板＝高 DPI 下被點陣放大（2026-08-07 user 抓「畫質低」）
+// ——自接 COM，順帶 Shipping 也能用（不再依賴 Developer 模組）
+#include "Windows/AllowWindowsPlatformTypes.h"
+#include <shobjidl.h>
+#include "Windows/HideWindowsPlatformTypes.h"
+#endif
 #include "Widgets/Images/SImage.h"
 #include "Widgets/Input/SButton.h"
 #include "Widgets/Input/SEditableTextBox.h"
@@ -186,9 +197,21 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	OwnerPC = InArgs._OwnerPC;
 	MenuFont = InArgs._Font;
 
+	// AR 版面鏡像（v4.0e）：流向跟文化——SetCurrentCulture("ar") 時 Slate 整樹
+	// 自動鏡像（SHorizontalBox 逆序/HAlign 翻面/命中判定跟著走）；換語言重建
+	// 選單時以新文化重算。房碼格等 LTR 記號在各自子樹釘回 LeftToRight。
+	SetFlowDirectionPreference(EFlowDirectionPreference::Culture);
+
 	if (UNiceInkGameInstance* Inst = GI())
 	{
 		ErrorBanner = Inst->ConsumeDisconnectReason();
+	}
+
+	// 靜默登入（persistentauth-only、絕不彈瀏覽器）：進房前把雲端 persona
+	// （名字/偏好/現金/刺青）拉下來給個人檔案頁與舞台力士
+	if (UNiceInkSessionSubsystem* S = Sessions())
+	{
+		S->TrySilentLogin();
 	}
 
 	// --- 樣式庫（白卡制）---
@@ -228,12 +251,13 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	[
 		SNew(SOverlay)
 
-		// 五頁疊放、Visibility 輪詢切換
+		// 六頁疊放、Visibility 輪詢切換
 		+ SOverlay::Slot()[BuildRootPage()]
 		+ SOverlay::Slot()[BuildJoinPage()]
 		+ SOverlay::Slot()[BuildSettingsPage()]
 		+ SOverlay::Slot()[BuildCreditsPage()]
 		+ SOverlay::Slot()[BuildLanguagePage()]
+		+ SOverlay::Slot()[BuildProfilePage()]
 
 		// 版本戳（右下、極低調——資訊存在但不參與畫面）
 		+ SOverlay::Slot().HAlign(HAlign_Right).VAlign(VAlign_Bottom).Padding(0, 0, 16, 10)
@@ -323,8 +347,8 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 					[
 						SNew(SVerticalBox)
 
-						// 臉制（SPEC #52 定案）：名字欄退出畫面——身分＝臉（舞台上跳舞的
-						// 就是你）；底層隱形自動名只進 log/引擎
+						// 身分＝名字＋臉並列（SPEC #52 v4.0e）：名字欄住個人檔案頁、
+						// 舞台上跳舞的就是你；主卡只留動作
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							SNew(SButton).ButtonStyle(&PrimaryStyle).IsFocusable(false)
@@ -397,6 +421,11 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 48)
 		[
 			SNew(SHorizontalBox)
+			// 個人檔案（SPEC #52 v4.0e：名字＋自拍＋現金＋刺青的家）
+			+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0)
+			[
+				MakeGhostButton(LocS(ENiLocKey::Profile), [this]() { OpenProfilePage(); })
+			]
 			// 「文A」＝語言入口（Google 式語言符號、不依賴任何語言的文字——
 			// 看不懂當前語言的玩家也找得到；2026-08-06 迷路窘境調查後補）
 			+ SHorizontalBox::Slot().AutoWidth().Padding(8, 0)
@@ -427,8 +456,10 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 
 TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 {
-	// 房碼格：4 個白格、字母墨色、下一格酒金底線
+	// 房碼格：4 個白格、字母墨色、下一格酒金底線。
+	// 房間碼＝拉丁字母 LTR 記號（唸給朋友聽的順序）——AR 鏡像下也不得逆序
 	TSharedRef<SHorizontalBox> Slots = SNew(SHorizontalBox);
+	Slots->SetFlowDirectionPreference(EFlowDirectionPreference::LeftToRight);
 	for (int32 i = 0; i < 4; ++i)
 	{
 		Slots->AddSlot().AutoWidth().Padding(i == 0 ? 0 : 12, 0, 0, 0)
@@ -794,6 +825,304 @@ TSharedRef<SWidget> SNiMenu::BuildLanguagePage()
 	];
 }
 
+TSharedRef<SWidget> SNiMenu::BuildProfilePage()
+{
+	// 個人檔案（SPEC #52 v4.0e）：名字＋自拍＋現金的家；刺青直接看背景舞台
+	// 的力士本人（雲端資產到貨即穿上，見 NiceInkMenuStage::DressDancerFromPersona）
+	return SNew(SBox).Visibility_Lambda([this]() { return PageVis(EPage::Profile); })
+	[
+		SNew(SVerticalBox)
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 56, 0, 0)
+		[
+			SNew(STextBlock).Font(Serif(42, true, 80)).ColorAndOpacity(NiHudColor::Paper)
+				.Text(Loc(ENiLocKey::Profile))
+		]
+		+ SVerticalBox::Slot().FillHeight(1)[SNew(SSpacer)]
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+		[
+			SNew(SBox).WidthOverride(460)
+			[
+				SNew(SBackgroundBlur).BlurStrength(14).CornerRadius(FVector4(18, 18, 18, 18))
+				[
+					SNew(SBorder).BorderImage(&CardBrush).Padding(FMargin(34, 26, 34, 30))
+					[
+						SNew(SVerticalBox)
+
+						// --- 名字（v4.0e：辨識＝名字＋臉並列，名字欄回歸）---
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							SNew(STextBlock).Font(Label(10)).ColorAndOpacity(NiHudColor::InkDim)
+								.Text(Loc(ENiLocKey::YourName))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+						[
+							SAssignNew(NameBox, SEditableTextBox)
+								.Style(&NameBoxStyle)
+								.HintText(Loc(ENiLocKey::ClickToType))
+								.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type)
+								{
+									CommitName();
+								})
+						]
+
+						// --- 現金（雲端資產；未登入＝提示）---
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 18, 0, 0)
+						[
+							SNew(STextBlock).Font(Label(10)).ColorAndOpacity(NiHudColor::InkDim)
+								.Text(Loc(ENiLocKey::CashLabel))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 4, 0, 0)
+						[
+							SNew(STextBlock).Font(Serif(26)).ColorAndOpacity(NiHudColor::Ink)
+								.Text_Lambda([this]() -> FText
+								{
+									if (UNiceInkPersonaSubsystem* P = Persona())
+									{
+										if (UNiceInkSaveGame* Save = P->GetCloudSaveView())
+										{
+											return FText::FromString(FString::Printf(TEXT("$ %d"), Save->Cash));
+										}
+									}
+									const UNiceInkSessionSubsystem* S = Sessions();
+									return (S && S->IsLoggedIn())
+										? FText::FromString(TEXT("$ 10000")) // 新帳號＝入場預設
+										: Loc(ENiLocKey::NotSignedIn);
+								})
+						]
+
+						// --- 上傳自拍 ---
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 22, 0, 0)
+						[
+							SNew(SButton).ButtonStyle(&PrimaryStyle).IsFocusable(false)
+								.HAlign(HAlign_Center).VAlign(VAlign_Center)
+								.ContentPadding(FMargin(0, 15))
+								.IsEnabled_Lambda([this]()
+								{
+									UNiceInkPersonaSubsystem* P = Persona();
+									return !P || P->GetIntakeState() != UNiceInkPersonaSubsystem::EFaceIntakeState::Running;
+								})
+								.OnClicked_Lambda([this]()
+								{
+									PickSelfieAndIntake();
+									return FReply::Handled();
+								})
+							[
+								SNew(STextBlock).Font(Serif(20)).ColorAndOpacity(NiHudColor::Ink)
+									.Text_Lambda([this]()
+									{
+										// 已有臉＝「重新上傳」（user 定案 2026-08-07）
+										UNiceInkPersonaSubsystem* P = Persona();
+										return (P && P->HasCustomFace())
+											? Loc(ENiLocKey::ReuploadSelfie) : Loc(ENiLocKey::UploadSelfie);
+									})
+							]
+						]
+						// 眉毛鐵律（2026-07-08 定案：UI 提醒、後果自負、不做補救）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+						[
+							SNew(STextBlock).Font(Font(11)).ColorAndOpacity(NiHudColor::InkDim)
+								.AutoWrapText(true)
+								.Text(Loc(ENiLocKey::BrowHint))
+						]
+						// 管線狀態列（Running/Done/Failed；Idle 隱藏）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+						[
+							SNew(STextBlock).Font(Font(13))
+								.Visibility_Lambda([this]()
+								{
+									UNiceInkPersonaSubsystem* P = Persona();
+									return (P && P->GetIntakeState() != UNiceInkPersonaSubsystem::EFaceIntakeState::Idle)
+										? EVisibility::Visible : EVisibility::Collapsed;
+								})
+								.ColorAndOpacity_Lambda([this]() -> FSlateColor
+								{
+									UNiceInkPersonaSubsystem* P = Persona();
+									return (P && P->GetIntakeState() == UNiceInkPersonaSubsystem::EFaceIntakeState::Failed)
+										? FSlateColor(NiHudColor::Red) : FSlateColor(NiHudColor::InkDim);
+								})
+								.Text_Lambda([this]() -> FText
+								{
+									UNiceInkPersonaSubsystem* P = Persona();
+									if (!P)
+									{
+										return FText::GetEmpty();
+									}
+									switch (P->GetIntakeState())
+									{
+									case UNiceInkPersonaSubsystem::EFaceIntakeState::Running:
+										// 附已耗秒數（管線一趟約一分鐘——別讓玩家以為當機）
+										return FText::FromString(FString::Printf(TEXT("%s  %ds"),
+											*LocS(ENiLocKey::FaceProcessing),
+											FMath::FloorToInt32(static_cast<float>(P->GetIntakeElapsedS()))));
+									case UNiceInkPersonaSubsystem::EFaceIntakeState::Done:    return Loc(ENiLocKey::FaceUpdated);
+									case UNiceInkPersonaSubsystem::EFaceIntakeState::Failed:  return Loc(ENiLocKey::FaceFailed);
+									default:                                                  return FText::GetEmpty();
+									}
+								})
+						]
+
+						// --- 臉庫（2026-08-07 user 定案：上傳過的臉全保存、點選即換）---
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 18, 0, 0)
+						[
+							SNew(STextBlock).Font(Label(10)).ColorAndOpacity(NiHudColor::InkDim)
+								.Visibility_Lambda([this]()
+								{
+									return (FaceRowBox.IsValid() && FaceRowBox->NumSlots() > 0)
+										? EVisibility::Visible : EVisibility::Collapsed;
+								})
+								.Text(Loc(ENiLocKey::SavedFaces))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
+						[
+							SAssignNew(FaceRowBox, SHorizontalBox)
+						]
+					]
+				]
+			]
+		]
+		+ SVerticalBox::Slot().FillHeight(1)[SNew(SSpacer)]
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, 48)
+		[
+			MakeGhostButton(LocS(ENiLocKey::Back), [this]()
+			{
+				CommitName();
+				Page = EPage::Root;
+			})
+		]
+	];
+}
+
+void SNiMenu::OpenProfilePage()
+{
+	Page = EPage::Profile;
+	// 開頁播種名字欄（雲端偏好可能在建 UI 後才到）＋重建臉庫列
+	if (NameBox.IsValid() && GI())
+	{
+		NameBox->SetText(FText::FromString(GI()->PlayerDisplayName));
+	}
+	RefreshFaceRow();
+}
+
+void SNiMenu::RefreshFaceRow()
+{
+	if (!FaceRowBox.IsValid())
+	{
+		return;
+	}
+	FaceRowBox->ClearChildren();
+	FaceThumbBrushes.Reset();
+
+	UNiceInkPersonaSubsystem* P = Persona();
+	if (!P)
+	{
+		return;
+	}
+	int32 Shown = 0;
+	for (const FString& Id : P->ListLibraryFaceIds())
+	{
+		if (Shown >= 6)
+		{
+			break; // 版面上限：最新六張（更舊的仍在磁碟，未做翻頁）
+		}
+		UTexture2D* Thumb = P->GetFaceThumb(Id);
+		TSharedPtr<FSlateBrush> Brush = MakeShared<FSlateBrush>();
+		Brush->ImageSize = FVector2D(56, 56);
+		if (Thumb)
+		{
+			Brush->SetResourceObject(Thumb); // GC 錨在 Persona 的 ThumbCache（UPROPERTY）
+		}
+		else
+		{
+			Brush->TintColor = FSlateColor(FLinearColor(0.62f, 0.55f, 0.48f, 1.0f)); // 無縮圖（legacy 遷移臉）＝素膚塊
+		}
+		FaceThumbBrushes.Add(Brush);
+
+		FaceRowBox->AddSlot().AutoWidth().Padding(Shown == 0 ? 0.0f : 8.0f, 0, 0, 0)
+		[
+			SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
+				.ContentPadding(FMargin(3))
+				.OnClicked_Lambda([this, Id]()
+				{
+					if (UNiceInkPersonaSubsystem* PP = Persona())
+					{
+						PP->ActivateFace(Id); // FaceRevision 遞增→舞台力士下一 tick 換臉
+					}
+					return FReply::Handled();
+				})
+			[
+				SNew(SOverlay)
+				+ SOverlay::Slot()
+				[
+					SNew(SBox).WidthOverride(56).HeightOverride(56)
+					[
+						SNew(SImage).Image(Brush.Get())
+					]
+				]
+				// 穿著中＝底部酒金線（與房碼格的下一格指示同語彙）
+				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Bottom).Padding(0, 0, 0, 2)
+				[
+					SNew(SBox).WidthOverride(40).HeightOverride(3)
+					[
+						SNew(SImage).Image(&UnderlineBrush)
+							.Visibility_Lambda([this, Id]()
+							{
+								UNiceInkPersonaSubsystem* PP = Persona();
+								return (PP && PP->GetActiveFaceId() == Id)
+									? EVisibility::Visible : EVisibility::Collapsed;
+							})
+					]
+				]
+			]
+		];
+		++Shown;
+	}
+}
+
+UNiceInkPersonaSubsystem* SNiMenu::Persona() const
+{
+	UNiceInkGameInstance* Inst = GI();
+	return Inst ? Inst->GetSubsystem<UNiceInkPersonaSubsystem>() : nullptr;
+}
+
+void SNiMenu::PickSelfieAndIntake()
+{
+#if PLATFORM_WINDOWS
+	// IFileOpenDialog（現代對話框、DPI 原生清晰；Shipping 可用）
+	FString Picked;
+	FWindowsPlatformMisc::CoInitialize();
+	IFileOpenDialog* Dialog = nullptr;
+	if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+		IID_PPV_ARGS(&Dialog))) && Dialog)
+	{
+		const COMDLG_FILTERSPEC Filters[] = { { L"Images", L"*.jpg;*.jpeg;*.png" } };
+		Dialog->SetFileTypes(UE_ARRAY_COUNT(Filters), Filters);
+		const void* Parent = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(AsShared());
+		if (SUCCEEDED(Dialog->Show(reinterpret_cast<HWND>(const_cast<void*>(Parent)))))
+		{
+			IShellItem* Item = nullptr;
+			if (SUCCEEDED(Dialog->GetResult(&Item)) && Item)
+			{
+				PWSTR Path = nullptr;
+				if (SUCCEEDED(Item->GetDisplayName(SIGDN_FILESYSPATH, &Path)) && Path)
+				{
+					Picked = FString(Path);
+					CoTaskMemFree(Path);
+				}
+				Item->Release();
+			}
+		}
+		Dialog->Release();
+	}
+	if (!Picked.IsEmpty())
+	{
+		if (UNiceInkPersonaSubsystem* P = Persona())
+		{
+			P->BeginSelfieIntake(FPaths::ConvertRelativePathToFull(Picked));
+		}
+	}
+#endif
+}
+
 FText SNiMenu::StatusText() const
 {
 	const UNiceInkSessionSubsystem* S = Sessions();
@@ -884,6 +1213,18 @@ void SNiMenu::RebuildRoomList()
 void SNiMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime)
 {
 	SCompoundWidget::Tick(AllottedGeometry, InCurrentTime, InDeltaTime);
+
+	// 個人檔案頁：換臉/上傳完成（FaceRevision 變動）＝重建臉庫列
+	if (Page == EPage::Profile)
+	{
+		UNiceInkPersonaSubsystem* P = Persona();
+		const int32 Rev = P ? P->GetFaceRevision() : 0;
+		if (Rev != LastFaceRowRev)
+		{
+			LastFaceRowRev = Rev;
+			RefreshFaceRow();
+		}
+	}
 
 	if (Page == EPage::Join)
 	{

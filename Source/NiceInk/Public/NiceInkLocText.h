@@ -20,6 +20,11 @@ enum class ENiLocKey : uint8
 	ErrEnterCode, ErrNoOnline, ErrCreateFailed, ErrSearchFailed, ErrNoRoomsLan,
 	ErrRoomGone, ErrRoomFull, ErrJoinFailed, ErrResolve, ErrNoRoomWithCode, ErrSignIn,
 	LobbyCodeHint, LobbyStart, LobbyWaiting, LobbyWaitingHost,
+	// 個人檔案頁（2026-08-06 SPEC #52 v4.0e：辨識＝名字＋臉 icon）
+	Profile, UploadSelfie, CashLabel, FaceProcessing, FaceUpdated, FaceFailed,
+	NotSignedIn, BrowHint,
+	// 臉庫（2026-08-07：上傳過的臉全保存、點選即換）
+	ReuploadSelfie, SavedFaces,
 	COUNT
 };
 

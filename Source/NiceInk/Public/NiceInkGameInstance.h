@@ -34,6 +34,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Settings")
 	void SaveSettings();
 
+	// 偏好版本號（雲端同步比帳用；SaveSettings 遞增、套用雲端偏好時直設）
+	int32 SettingsRevision = 0;
+
+	// 以當前欄位組一顆 SettingsSave 物件（本機槽與雲端共用同一序列化）
+	class UNiceInkSettingsSave* BuildSettingsSaveObject() const;
+
 	// --- 選單語言（NiLoc 索引；13 語=照抄 Meccha 清單，2026-08-06 user 定案）---
 	int32 GetMenuLanguage() const { return MenuLanguage; }
 	// 設語言＋同步引擎文化（字體矩陣的繁簡分流靠 culture）＋存檔
@@ -58,7 +64,8 @@ public:
 	// 單曲恆定循環＝拍相位從起播時刻線性推算即可，不需讀音訊
 	double GetBgmStartAudioTime() const { return BgmStartAudioTimeS; }
 
-	// 名字合法域＝[A-Za-z0-9_-] 1..16 字——直接進 ?Name= travel option，不做 URL 編碼
+	// 名字合法域（v4.0e 開放 Unicode）＝黑名單制：擋控制字元/空白/URL 語法字/
+	// 檔名保留字，上限 16 字——直接進 ?Name= travel option，不做 URL 編碼
 	static FString SanitizePlayerName(const FString& Raw);
 
 	// 本機建房生成的房間碼（transient 不入存檔）：ServerTravel 後 GameMode 讀走

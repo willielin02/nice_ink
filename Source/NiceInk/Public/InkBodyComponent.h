@@ -99,6 +99,10 @@ public:
 	// 名冊 avatar 套用（載入貼圖＋膚色）
 	void ApplyAvatar(const FNiceInkAvatarDef& Avatar);
 
+	// 自訂臉套用（runtime 匯入的貼圖直塞；SPEC #52 v4.0e 自拍上傳）——
+	// 與 ApplyAvatar 同語意，只是貼圖不走資產路徑
+	void ApplyCustomAvatar(UTexture2D* Open, UTexture2D* Closed, UTexture2D* EyeMask, FLinearColor Tone);
+
 	// 建 MID 並綁定畫布 RT 與玩家貼圖。可重複呼叫（貼圖換了之後重綁）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void BindCanvas(UInkCanvasComponent* Canvas);

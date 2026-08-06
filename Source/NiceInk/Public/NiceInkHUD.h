@@ -35,6 +35,14 @@ protected:
 
 	float TierSize(ETextTier Tier) const;
 
+public:
+	// 六文字系統複合字體（13 語矩陣：圓體+Zen 預設、繁/簡/韓/西里爾+擴拉丁/
+	// 阿拉伯 SubTypeface、源流明體 fallback）——選單與局內 HUD 共用同一座矩陣
+	//（2026-08-07：名字回歸局內後，局內只掛 M+ 兩面＝韓/阿/非日系漢字豆腐——
+	// 抽共用根治；建置失敗回傳引擎 MediumFont 保底）
+	static UFont* BuildCompositeUiFont(UObject* Outer, const TCHAR* FontName);
+
+protected:
 	// ---- UI 資產（runtime 字體＋圖示；BeginPlay 載入，UPROPERTY 保 GC）----
 	UPROPERTY() TObjectPtr<UFont> UiFont;
 	UPROPERTY() TObjectPtr<UTexture2D> IconCup;
@@ -64,6 +72,17 @@ protected:
 
 	// 圓角半透明面板／按鈕底（9-slice 取樣 RoundedTex；素色簡約風的唯一面元件）
 	void DrawRoundedBox(float X, float Y, float W, float H, float Radius, const FLinearColor& Color);
+
+	// ---- AR 版面鏡像（2026-08-07 SPEC v4.0e）----
+	// 文化=ar 時整個 UI chrome 水平鏡像：座標一律以 LTR 邏輯空間書寫，
+	// 鏡像只發生在繪製原語（DrawTok/DrawRoundedBox/DrawFaceTok/DrawIconTok）
+	// 與 Button 命中判定這一層＝一次且僅一次。遊戲幾何（描圖盤/轉盤/準星/
+	// 致盲潑漬/調色盤數字鍵序）以 TGuardValue 掛起豁免。
+	bool bRTLLayout = false;        // DrawHUD 每幀跟語言設定刷新
+	bool bMirrorSuspended = false;  // 原語內部與豁免區掛起（防雙重鏡像）
+	bool IsMirrored() const { return bRTLLayout && !bMirrorSuspended; }
+	float FlipX(float X) const;              // 錨點鏡像
+	float FlipXW(float X, float W) const;    // 矩形左緣鏡像
 
 	// ---- 繪製 helper（全 HUD 只准經過這組，樣式不得繞道自畫）----
 	FVector2D DrawTok(const FString& Text, float X, float Y, ETextTier Tier,

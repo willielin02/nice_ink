@@ -25,6 +25,10 @@ public:
 	// server-only 意向值：PostLogin 派發 AvatarIndex 時優先採用（被佔用則輪派）。
 	int32 DesiredAvatarIndex = INDEX_NONE;
 
+	// server-only：跨場資產已套用（雲端上行或主機本機槽，擇一次）——
+	// 防雙重還原（上行與逾時 fallback 是兩條並行路）
+	bool bAssetsRestored = false;
+
 	// 連續罰酒杯數（只數罰酒；猜對離座歸零；第三杯＝終局）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 PenaltyCups = 0;

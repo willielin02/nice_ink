@@ -27,6 +27,16 @@ blender --background --python make_avatar_blend.py -- avatar_previews/<name>.ble
 
 # （選配）QA 渲染——僅供參考，驗收以用戶 viewport 為準
 blender --background avatar_previews/<name>.blend --python render_avatar_preview.py -- <絕對路徑前綴>
+
+# 3. 遊戲內「上傳自拍」的單人接駁（2026-08-06 個人檔案頁）：跑完整管線＋
+#    sumo 眼罩單人烘焙＋縮圖，四工件落到 <outdir>（遊戲傳 Saved/PlayerFace/library/<id>）；
+#    stdout/stderr 全記到 <outdir>/intake_log.txt（遊戲以隱藏行程啟動＝驗屍管道）
+<python> intake_selfie.py <selfie.jpg> <outdir>
+
+# 4. BiSeNet -> ONNX（2026-08-07 SPEC #52 裁決「遊戲內建 C++/ONNX」的 M0）：
+#    輸出 models/bisenet_512.onnx（單檔自包含）＋pth vs onnx label 對賬
+#    （需 onnxscript/onnx，已裝進 venv；cp950 主控台要 PYTHONIOENCODING=utf-8）
+<python> export_bisenet_onnx.py [test_selfie]
 ```
 
 - `<python>`：暫用舊 repo 的 venv：`..\..\..\nice_ink_face_pipeline\venv\Scripts\python.exe`

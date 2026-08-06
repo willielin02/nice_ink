@@ -227,14 +227,52 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   （SettingsSave 持久化/OS 偵測 zh 變體分繁簡/-culture= 跟隨/ApplyLanguage 必同步
   SetCurrentCulture=字體繁簡分流開關）＋session 錯誤鍵化＋大廳四句＋
   **「文A」語言頁**（迷路窘境解：底列文A 鈕→13 母語名網格全列、點選即套用
-  重建；箭頭循環退役）；robo=NiMenuLang/NiMenuShowLang；剩=局內 HUD 字串
-  （另一量級）+AR 全鏡像。
-  **08-06 身分系統臉制（SPEC v4.0d #52）**：名字全退出畫面——選單名字欄刪
-  （舞台舞者=身分顯示）、大廳=席位+臉像+現金、揭曉=作者臉 96px、指認=大臉像、
-  頂欄=臉+狀態、房列表=純人數；DrawFaceTok=FaceIconCache+紙框+**FaceUV 版面
-  UV 裁切 (0.30,0.22)+(0.40,0.40)**（整張畫=膚色方塊鐵坑、外圈透明疊膚色底）；
-  隱形 ID 留 log/Steam persona；**runtime 自拍上傳升格身分系統本體=上架前必做
-  （架構三選一待裁：C++/ONNX/雲端/外掛工具）**。
+  重建；箭頭循環退役）；robo=NiMenuLang/NiMenuShowLang；**08-07 AR 全鏡像
+  SHIPPED-自驗**（user 指令「一併處理好整個版面鏡像」）＝Slate 選單一行制
+  `SetFlowDirectionPreference(Culture)`（整樹自動鏡像含命中；房碼格釘回
+  LeftToRight=拉丁記號不逆序）＋canvas HUD **原語層一次性鏡像**（座標恆以
+  LTR 邏輯空間書寫、FlipX/FlipXW 只在 DrawTok/RoundedBox/FaceTok/IconTok/
+  BigTitle+Button 命中判定發生；DrawFaceTok 內部 TGuardValue 掛起防雙重鏡像）
+  ＋**遊戲幾何豁免**（描圖盤/轉盤/準星/調色盤鍵序=TGuardValue 掛起；筆
+  viewmodel 走 AHUD::DrawTexture 天然不鏡）；bRTLLayout=DrawHUD 每幀跟文化；
+  實測=ar 選單鈕序反轉/chip 靠右/版本戳翻左＋大廳 seat 靠右現金靠左（阿拉伯
+  數字 ١٠،٠٠٠=FText::AsNumber 文化紅利免費送）＋zht 迴歸零變動；
+  剩=局內 HUD 字串翻譯（另一量級）。
+  **08-06 身分系統臉制（SPEC v4.0d #52）→ 同日 v4.0e 修訂＝名字＋臉雙載體**：
+  （v4.0d 原案名字全退場；user 隨後裁決「辨識靠名字+臉部照片icon」）——
+  大廳=席位+臉像+**名字**+現金、揭曉/指認/頂欄=臉像+名字並列；
+  DrawFaceTok=FaceIconCache+紙框+**FaceUV 版面 UV 裁切 (0.30,0.22)+(0.40,0.40)**
+  （整張畫=膚色方塊鐵坑、外圈透明疊膚色底）；底層唯一鍵仍=隱形 PUID（名字=顯示
+  層可重複）。**08-06 個人檔案頁 BUILT-自驗**＝主選單第六頁（名字欄回歸+現金
+  （雲端資產視圖）+上傳自拍+眉毛鐵律提示 BrowHint）；**自拍→臉 runtime 接入
+  （開發機版）**＝intake_selfie.py（selfie_to_face_texture+sumo 眼罩單人烘焙）
+  →PersonaSubsystem 背景行程輪詢（FTSTicker）→FImageUtils 匯入三貼圖（眼罩
+  SRGB=false）+skin_color.json→Saved/PlayerFace/ 本機正本、開機自載；
+  InkBodyComponent::ApplyCustomAvatar；舞台力士=DressDancerFromPersona（換臉+
+  穿雲端刺青，Tick 輪詢冪等）；**選單靜默登入**=TrySilentLogin（persistentauth-
+  only、失敗不開 portal 不進 Failed UI；靜默中按 Host/Join=併回 portal 路）；
+  robo 鉤子=NiMenuShowProfile/
+  NiMenuSelfie/**NiMenuShot（Shot showui——HighResShot 不含 Slate UI 鐵坑）**。
+  **08-07 五連（user viewport 裁決）**：名字開放 Unicode（Sanitize 黑名單制）＋
+  檔案對話框=**IFileOpenDialog COM 自接**（DesktopPlatform=GetOpenFileNameW
+  古典模板高 DPI 糊=退役、Shipping 可用）＋處理秒數上狀態列（實測 61~107s/張）＋
+  **臉庫**（library/<時間戳>/四工件+thumb=HUD 裁切框膚色打底；active.txt 指針；
+  ThumbCache=UPROPERTY=Slate brush 不保 GC 的貼圖錨；選單縮圖列點選即換、
+  舊平鋪檔自動遷移 legacy）＋已有臉→「重新上傳自拍」＋**六文字系統矩陣抽共用**
+  （BuildCompositeUiFont 住基底 ANiceInkHUD、選單/局內同座——此前局內只掛
+  M+ 兩面=韓/阿/非日系漢字豆腐；大廳「力士の墨한글」實測全渲染）＋
+  **canvas 整形路**（DrawTok/MeasureTok：RTL/呈現形碼域命中→
+  ShapeBidirectionalText+FCanvasShapedTextItem；「الحبر」連寫+RTL 實測正確；
+  拉丁/CJK 原快路零變動；AR 殘項只剩版面鏡像）＋robo 鉤子 NiMenuSetName/
+  NiMenuShot 改 core ticker
+  （world timer 死在 ServerTravel；Shot 必走 PC->ConsoleCommand）；
+  **#52 三選一已裁（08-07 user「當然是1遊戲內建」）＝C++/ONNX 內建**：
+  路線圖=SHIP_PLAN C1 M0~M5（每站與 python 對賬）；M0 完成=NNERuntimeORT
+  確認+LaMa 本是 ONNX+**BiSeNet 已轉單檔 onnx（對賬 100.000%）**；風險點=
+  MediaPipe landmarker（tflite 包、M2 優先、傾向社群 FaceMesh ONNX 轉換=
+  保索引語義免重標 TPS 錨）；venv 路=過渡期對照組；
+  **待做=自訂臉雲端儲存+房內分發**（bytes 列車擴大到 MB 級；沒有它房內他人
+  仍看名冊臉）。
   **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝
   `NiceInkMenuStage` 全程式生成（隱形地板+相機+無影平行光×2+完整
   ANiceInkCharacter 替身）：墨水 RT 壓 512 省 VRAM、臉=SetupAsMenuDummy 直指
@@ -259,8 +297,16 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   恆為 basic+friends+presence+offline_access、AuthScopeFlags 縮不掉→Portal EAS
   三許可全開對齊＝唯一解；配方=Docs/EOS_SETUP.md）；LAN 照舊（選單切換、
   IsOnlineServiceConfigured 全程式自動跟隨）；**ClientSecret 在 ini＝repo 必須
-  private**；待辦=雙機驗收/Steam 票證登入（正式終態）/品牌驗證/ProductUserId
-  存檔鍵+雲端刺青（帳本=SHIP_PLAN B3~B6）。打包＝RunUAT BuildCookRun（cook 白名單在
+  private**；**08-06 B3 雲端隨身 BUILT-自驗**＝`NiceInkPersonaSubsystem`
+  （EOS PlayerDataStorage：現金+碳黑/永久刺青+偏好跟帳號走——存檔鍵改
+  `NiceInk_P_<PUID>`（NetId「EAS|PUID」後半＝Connect 層、Steam 票證同路零改動；
+  LAN/PIE 無 PUID＝舊名字+席位鍵原路）；進房上行=client 分塊 RPC 16KB+CRC→host
+  驗證套用（bAssetsRestored 防雙還原、12s 逾時走主機本機槽熱備）、結算下行=每
+  Persist 點+碳黑誕生點 host 回傳本人寫自己雲端（私人保險箱不可代寫）；偏好=
+  Revision 比帳高者贏；**Epic PUID≠Steam PUID＝B5 切換時開發資產不搬家屬預期**；
+  雲端 E2E 併 B4 雙機驗收）；
+  待辦=雙機驗收/Steam 票證登入（正式終態）/品牌驗證（帳本=SHIP_PLAN B4~B6）。
+  打包＝RunUAT BuildCookRun（cook 白名單在
   DefaultGame.ini；**只被 C++ 字串路徑引用的資產要 AlwaysCook**）。
 - 場地＝`L_Dojo`（道場獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；07-30~31 場景修：
   兩門洞各四片拉門重排（軌距=板厚→任兩板零重疊=共面閃爍歸零）＋四張武道布掛軸

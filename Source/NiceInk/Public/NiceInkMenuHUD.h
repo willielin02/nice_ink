@@ -28,6 +28,9 @@ public:
 	// robo 鉤子（NiMenuShowLang）：開語言全列頁
 	void RoboOpenLanguagePage();
 
+	// robo 鉤子（NiMenuShowProfile）：開個人檔案頁
+	void RoboOpenProfilePage();
+
 	// 換語言後重建選單（靜態文字全在 Construct 定死＝重建刷新；
 	// 延後一 tick——不在 widget 自己的點擊回呼裡拆它）
 	void RecreateMenu(bool bOpenSettings);

@@ -78,6 +78,8 @@ $RECYCLE.BIN/
 # Face pipeline - large ML models and Python venv
 Tools/FacePipeline/models/lama_fp32.onnx
 Tools/FacePipeline/models/79999_iter.pth
+Tools/FacePipeline/models/bisenet_512.onnx
+Tools/FacePipeline/models/*.onnx.data
 Tools/FacePipeline/venv/
 
 # Face pipeline - per-run artifacts (regenerable)

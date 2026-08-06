@@ -30,4 +30,9 @@ public:
 	// 選單語言（NiLoc 索引；-1＝未選過→依 OS 文化自動偵測）
 	UPROPERTY()
 	int32 LanguageIndex = -1;
+
+	// 偏好版本號：每次使用者改動遞增。雲端同步（NiPersona）比帳用——
+	// 高者贏、平手本機贏；跨裝置同步的夠用規則
+	UPROPERTY()
+	int32 Revision = 0;
 };

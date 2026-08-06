@@ -7,6 +7,7 @@
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Misc/ConfigCacheIni.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkPersonaSubsystem.h"
 #include "OnlineSessionSettings.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
@@ -77,6 +78,52 @@ FString UNiceInkSessionSubsystem::BuildTravelOptions() const
 	return Options;
 }
 
+bool UNiceInkSessionSubsystem::IsLoggedIn() const
+{
+	IOnlineSubsystem* OSS = GetWorld() ? Online::GetSubsystem(GetWorld()) : nullptr;
+	IOnlineIdentityPtr Identity = OSS ? OSS->GetIdentityInterface() : nullptr;
+	return IsOnlineServiceConfigured() && Identity.IsValid() &&
+		Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn;
+}
+
+void UNiceInkSessionSubsystem::TrySilentLogin()
+{
+	if (bSilentLoginTried || !IsOnlineServiceConfigured())
+	{
+		return;
+	}
+	bSilentLoginTried = true;
+
+	IOnlineSubsystem* OSS = GetWorld() ? Online::GetSubsystem(GetWorld()) : nullptr;
+	IOnlineIdentityPtr Identity = OSS ? OSS->GetIdentityInterface() : nullptr;
+	if (!Identity.IsValid())
+	{
+		return;
+	}
+	if (Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+	{
+		if (UNiceInkPersonaSubsystem* Persona = GetGameInstance()
+			? GetGameInstance()->GetSubsystem<UNiceInkPersonaSubsystem>() : nullptr)
+		{
+			Persona->HandleLoginSuccess();
+		}
+		return;
+	}
+	if (bLoginInFlight)
+	{
+		return;
+	}
+
+	bLoginInFlight = true;
+	bSilentLoginAttempt = true; // OnLoginComplete：失敗只記 log，不開 portal、不進 Failed UI
+	LoginHandle = Identity->AddOnLoginCompleteDelegate_Handle(0,
+		FOnLoginCompleteDelegate::CreateUObject(this, &UNiceInkSessionSubsystem::OnLoginComplete));
+	FOnlineAccountCredentials Creds;
+	Creds.Type = TEXT("persistentauth");
+	Identity->Login(0, Creds);
+	UE_LOG(LogTemp, Log, TEXT("NiSession: silent login attempt (menu persona prefetch)"));
+}
+
 void UNiceInkSessionSubsystem::EnsureLoggedInThen(TFunction<void()> Then)
 {
 	IOnlineSubsystem* OSS = GetWorld() ? Online::GetSubsystem(GetWorld()) : nullptr;
@@ -84,6 +131,16 @@ void UNiceInkSessionSubsystem::EnsureLoggedInThen(TFunction<void()> Then)
 	if (!IsOnlineServiceConfigured() || !Identity.IsValid() ||
 		Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
 	{
+		// 已登入＝補拉雲端 persona（冪等；覆蓋引擎 AutoLogin 等非本閂路徑）
+		if (IsOnlineServiceConfigured() && Identity.IsValid() &&
+			Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+		{
+			if (UNiceInkPersonaSubsystem* Persona = GetGameInstance()
+				? GetGameInstance()->GetSubsystem<UNiceInkPersonaSubsystem>() : nullptr)
+			{
+				Persona->HandleLoginSuccess();
+			}
+		}
 		Then(); // NULL/LAN 或已登入＝直通
 		return;
 	}
@@ -113,6 +170,17 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 		Identity->ClearOnLoginCompleteDelegate_Handle(0, LoginHandle);
 	}
 
+	// 選單靜默登入：失敗且沒有待跑動作＝安靜收場（不開 portal、不進 Failed UI）；
+	// 靜默期間玩家已按 Host/Join（PendingAfterLogin 有值）＝併回正常路走 portal
+	if (bSilentLoginAttempt && !bWasSuccessful && !PendingAfterLogin)
+	{
+		bSilentLoginAttempt = false;
+		bLoginInFlight = false;
+		UE_LOG(LogTemp, Log, TEXT("NiSession: silent login declined (%s) — persona sync waits for host/join"), *Error);
+		return;
+	}
+	bSilentLoginAttempt = false;
+
 	// 首次/快取過期＝persistentauth 必 EOS_InvalidAuth → 開 Account Portal 瀏覽器登入重試一次
 	if (!bWasSuccessful && !bPortalRetryUsed && Identity.IsValid())
 	{
@@ -137,6 +205,14 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 		return;
 	}
 	UE_LOG(LogTemp, Log, TEXT("NiSession: EOS login OK (%s)"), *UserId.ToString());
+
+	// 雲端隨身層開拉（偏好＋跨場資產；B3）——在旅行前啟動，資產在 Dojo 端等它
+	if (UNiceInkPersonaSubsystem* Persona = GetGameInstance()
+		? GetGameInstance()->GetSubsystem<UNiceInkPersonaSubsystem>() : nullptr)
+	{
+		Persona->HandleLoginSuccess();
+	}
+
 	if (Run)
 	{
 		Run();

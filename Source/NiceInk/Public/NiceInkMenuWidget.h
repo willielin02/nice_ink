@@ -46,8 +46,11 @@ public:
 	// robo 鉤子（NiMenuShowLang）：開語言全列頁
 	void OpenLanguagePage() { Page = EPage::Language; }
 
+	// 開個人檔案頁（robo 鉤子 NiMenuShowProfile 與主選單按鈕共用；含名字欄播種）
+	void OpenProfilePage();
+
 private:
-	enum class EPage : uint8 { Root, Join, Settings, Credits, Language };
+	enum class EPage : uint8 { Root, Join, Settings, Credits, Language, Profile };
 	EPage Page = EPage::Root;
 
 	TWeakObjectPtr<APlayerController> OwnerPC;
@@ -81,6 +84,10 @@ private:
 	// --- 動態子區 ---
 	TSharedPtr<SEditableTextBox> NameBox;
 	TSharedPtr<SVerticalBox> RoomListBox;
+	TSharedPtr<SHorizontalBox> FaceRowBox;              // 臉庫列（個人檔案頁）
+	TArray<TSharedPtr<FSlateBrush>> FaceThumbBrushes;   // 縮圖 brush（比 widget 長壽）
+	int32 LastFaceRowRev = -1;                          // FaceRevision 變動＝重建臉庫列
+	void RefreshFaceRow();
 
 	// --- helpers ---
 	FText Loc(ENiLocKey Key) const;   // 目前語言字串（FText）
@@ -100,6 +107,9 @@ private:
 	TSharedRef<SWidget> BuildSettingsPage();
 	TSharedRef<SWidget> BuildCreditsPage();
 	TSharedRef<SWidget> BuildLanguagePage(); // 13 語母語名全列網格（「文A」鈕入口）
+	TSharedRef<SWidget> BuildProfilePage();  // 個人檔案（SPEC #52 v4.0e：名字＋自拍＋現金）
+	class UNiceInkPersonaSubsystem* Persona() const;
+	void PickSelfieAndIntake();              // 檔案對話框→自拍管線
 	TSharedRef<SWidget> MakeGhostButton(const FString& Label, TFunction<void()> OnClick);
 	TSharedRef<SWidget> MakeChip(const FString& Label, bool bPublicValue);
 	EVisibility PageVis(EPage P) const { return Page == P ? EVisibility::Visible : EVisibility::Collapsed; }

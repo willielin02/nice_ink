@@ -32,6 +32,31 @@ void UInkBodyComponent::ApplyAvatar(const FNiceInkAvatarDef& Avatar)
 	}
 }
 
+void UInkBodyComponent::ApplyCustomAvatar(UTexture2D* Open, UTexture2D* Closed, UTexture2D* EyeMask, FLinearColor Tone)
+{
+	if (!Open || !Closed)
+	{
+		return;
+	}
+	FaceOpenTexture = Open;
+	FaceClosedTexture = Closed;
+	if (EyeMask)
+	{
+		EyeMaskTexture = EyeMask;
+	}
+	SkinTone = Tone;
+
+	if (DynamicBodyMaterial)
+	{
+		DynamicBodyMaterial->SetVectorParameterValue(SkinToneParam, SkinTone);
+		if (EyeMaskTexture)
+		{
+			DynamicBodyMaterial->SetTextureParameterValue(EyeMaskParam, EyeMaskTexture);
+		}
+		ApplyFaceTexture();
+	}
+}
+
 void UInkBodyComponent::BindCanvas(UInkCanvasComponent* Canvas)
 {
 	UMaterialInterface* BaseMaterial = BodyMaterial ? BodyMaterial.Get() : GetMaterial(0);

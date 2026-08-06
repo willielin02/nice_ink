@@ -9,9 +9,13 @@
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
+#include "InkTypes.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkPersonaSubsystem.h"
+#include "NiceInkSaveGame.h"
 
 ANiceInkMenuStage::ANiceInkMenuStage()
 {
@@ -127,6 +131,48 @@ void ANiceInkMenuStage::BeginPlay()
 	SpawnSun(FRotator(-40.0f, 20.0f, 0), FillLux, 0);  // 反向補（從）
 }
 
+void ANiceInkMenuStage::DressDancerFromPersona()
+{
+	UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this);
+	if (!Persona || !Dancer)
+	{
+		return;
+	}
+
+	// 自訂臉：版本變了就重套（上傳自拍完成的瞬間，舞台力士當場換臉）
+	if (Persona->HasCustomFace() && Persona->GetFaceRevision() != AppliedFaceRev)
+	{
+		if (UInkBodyComponent* Body = Dancer->FindComponentByClass<UInkBodyComponent>())
+		{
+			Body->ApplyCustomAvatar(Persona->GetFaceOpen(), Persona->GetFaceClosed(),
+				Persona->GetEyeMaskInk(), Persona->GetCustomSkinTone());
+			AppliedFaceRev = Persona->GetFaceRevision();
+		}
+	}
+
+	// 雲端刺青：靜默登入拉到資產後，把碳黑/永久重播上替身畫布（一次性）
+	if (!bCloudTattoosApplied)
+	{
+		if (UNiceInkSaveGame* Save = Persona->GetCloudSaveView())
+		{
+			if (UInkCanvasComponent* Canvas = Dancer->FindComponentByClass<UInkCanvasComponent>())
+			{
+				int32 Applied = 0;
+				for (const FInkWork& Work : Save->Tattoos)
+				{
+					if (Work.State != EInkWorkState::Marker)
+					{
+						Canvas->RestoreWork(Work);
+						++Applied;
+					}
+				}
+				bCloudTattoosApplied = true;
+				UE_LOG(LogTemp, Log, TEXT("NiStage: dancer dressed with %d cloud tattoos"), Applied);
+			}
+		}
+	}
+}
+
 double ANiceInkMenuStage::BeatClock(const UWorld* World) const
 {
 	const UNiceInkGameInstance* GI = World ? Cast<UNiceInkGameInstance>(World->GetGameInstance()) : nullptr;
@@ -160,6 +206,8 @@ void ANiceInkMenuStage::Tick(float DeltaSeconds)
 			}
 		}
 	}
+
+	DressDancerFromPersona(); // 自訂臉／雲端刺青到貨即穿上（輪詢冪等）
 
 	const int32 Beat = FMath::Max(0, FMath::FloorToInt32(BeatClock(World) / FMath::Max(0.1f, BeatSec)));
 	if (Beat != LastBeat)

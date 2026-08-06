@@ -10,6 +10,7 @@
 #include "Engine/Font.h"
 #include "Engine/Texture2D.h"
 #include "EngineUtils.h"
+#include "Fonts/FontCache.h"
 #include "Fonts/FontMeasure.h"
 #include "Fonts/SlateFontInfo.h"
 #include "Framework/Application/SlateApplication.h"
@@ -41,6 +42,109 @@ void ANiceInkHUD::BeginPlay()
 	}
 }
 
+UFont* ANiceInkHUD::BuildCompositeUiFont(UObject* Outer, const TCHAR* FontName)
+{
+	// runtime 複合字體（Slate 的 FSlateFontInfo 只吃 UFont，裸 FontFace＝豆腐字）。
+	// 六文字系統矩陣（2026-08-06 對齊 Meccha 13 語調查；08-07 抽共用——名字上
+	// 局內畫面後，局內 HUD 也要全覆蓋）：
+	// 預設面＝圓體（輔助）＋Zen Old Mincho（標題/動作，拉丁+日文）；
+	// SubTypeface＝繁中/簡中（Han 統一碼同域→用 culture 區分）、韓文、
+	// 西里爾+擴展拉丁、阿拉伯；Fallback＝源流明體（en/ja 文化下的雜漢字保底）。
+	// 每個面都提供同名五席（Regular/Bold/Serif/SerifRegular/SerifBlack）＝
+	// 字面名在任何文字系統下都解析得到。
+	auto Load = [](const TCHAR* Path) -> UObject*
+	{
+		return StaticLoadObject(UObject::StaticClass(), nullptr, Path);
+	};
+	auto FillTypeface = [](FTypeface& T, UObject* Regular, UObject* Bold, UObject* Serif,
+		UObject* SerifRegular, UObject* SerifBlack)
+	{
+		const TPair<const TCHAR*, UObject*> Slots[] = {
+			{ TEXT("Regular"), Regular }, { TEXT("Bold"), Bold }, { TEXT("Serif"), Serif },
+			{ TEXT("SerifRegular"), SerifRegular }, { TEXT("SerifBlack"), SerifBlack },
+		};
+		for (const auto& S : Slots)
+		{
+			if (S.Value)
+			{
+				FTypefaceEntry& E = T.Fonts.AddDefaulted_GetRef();
+				E.Name = S.Key;
+				E.Font = FFontData(S.Value);
+			}
+		}
+	};
+
+	UObject* MPlusMed = Load(TEXT("/Game/UI/Fonts/FF_MPlusRounded_Medium.FF_MPlusRounded_Medium"));
+	UObject* MPlusXB = Load(TEXT("/Game/UI/Fonts/FF_MPlusRounded_XBold.FF_MPlusRounded_XBold"));
+	UObject* ZenReg = Load(TEXT("/Game/UI/Fonts/FF_ZenOldMincho_Regular.FF_ZenOldMincho_Regular"));
+	UObject* ZenBold = Load(TEXT("/Game/UI/Fonts/FF_ZenOldMincho_Bold.FF_ZenOldMincho_Bold"));
+	UObject* ZenBlack = Load(TEXT("/Game/UI/Fonts/FF_ZenOldMincho_Black.FF_ZenOldMincho_Black"));
+	if (!MPlusMed && !ZenBold)
+	{
+		return GEngine ? GEngine->GetMediumFont() : nullptr;
+	}
+
+	UFont* Composite = NewObject<UFont>(Outer, FontName);
+	Composite->FontCacheType = EFontCacheType::Runtime;
+	FCompositeFont& CF = Composite->GetMutableInternalCompositeFont();
+	FillTypeface(CF.DefaultTypeface, MPlusMed, MPlusXB, ZenBold, ZenReg, ZenBlack);
+
+	struct FScript
+	{
+		const TCHAR* Prefix;      // /Game/UI/Fonts/FF_<Prefix>_<Weight>
+		const TCHAR* Cultures;    // 空=不限文化
+		std::initializer_list<TPair<int32, int32>> Ranges;
+		bool bHasBlack;
+	};
+	const FScript Scripts[] = {
+		// Han 統一碼：繁簡同碼域，靠 culture 分流（ja/en 不吃、走預設 Zen）。
+		// 繁中=源流明體（舊式明體＝Zen 同屬；2026-08-06 user 打回「繁中怎會沒古風」
+		// 後換裝；Noto TC 留庫備用）
+		{ TEXT("GenRyuMin"), TEXT("zh-Hant;zh-TW;zh-HK;zh-MO"),
+			{ {0x2E80, 0x303F}, {0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF} }, true },
+		{ TEXT("NotoSerifSC"), TEXT("zh-Hans;zh-CN;zh-SG;zh"),
+			{ {0x2E80, 0x303F}, {0x3400, 0x4DBF}, {0x4E00, 0x9FFF}, {0xF900, 0xFAFF} }, true },
+		// 韓文（碼域獨占、不限文化）
+		{ TEXT("NotoSerifKR"), TEXT(""),
+			{ {0x1100, 0x11FF}, {0x3130, 0x318F}, {0xA960, 0xA97F}, {0xAC00, 0xD7FF} }, true },
+		// 西里爾＋擴展拉丁（土耳其文 İığş 等；基本拉丁留 Zen）
+		{ TEXT("NotoSerif"), TEXT(""),
+			{ {0x0100, 0x024F}, {0x0400, 0x052F} }, false },
+		// 阿拉伯（含連寫呈現形；RTL 整形由 Slate ICU 處理）
+		{ TEXT("NotoNaskh"), TEXT(""),
+			{ {0x0600, 0x06FF}, {0x0750, 0x077F}, {0x08A0, 0x08FF}, {0xFB50, 0xFDFF}, {0xFE70, 0xFEFF} }, false },
+	};
+	for (const FScript& S : Scripts)
+	{
+		UObject* Reg = Load(*FString::Printf(TEXT("/Game/UI/Fonts/FF_%s_Regular.FF_%s_Regular"), S.Prefix, S.Prefix));
+		UObject* Bold = Load(*FString::Printf(TEXT("/Game/UI/Fonts/FF_%s_Bold.FF_%s_Bold"), S.Prefix, S.Prefix));
+		UObject* Black = S.bHasBlack
+			? Load(*FString::Printf(TEXT("/Game/UI/Fonts/FF_%s_Black.FF_%s_Black"), S.Prefix, S.Prefix))
+			: Bold;
+		if (!Reg && !Bold)
+		{
+			continue; // 缺面＝該文字系統走 fallback（不擋其他系統）
+		}
+		FCompositeSubFont& Sub = CF.SubTypefaces.AddDefaulted_GetRef();
+		Sub.Cultures = S.Cultures;
+		for (const auto& R : S.Ranges)
+		{
+			Sub.CharacterRanges.Add(FInt32Range(R.Key, R.Value));
+		}
+		FillTypeface(Sub.Typeface, Reg, Bold, Bold, Reg, Black);
+	}
+
+	// Fallback：en/ja 文化下撞到的雜漢字保底（源流明體＝與 Zen 同屬舊式、字符繼承思源）
+	if (UObject* FbReg = Load(TEXT("/Game/UI/Fonts/FF_GenRyuMin_Regular.FF_GenRyuMin_Regular")))
+	{
+		UObject* FbBold = Load(TEXT("/Game/UI/Fonts/FF_GenRyuMin_Bold.FF_GenRyuMin_Bold"));
+		UObject* FbBlack = Load(TEXT("/Game/UI/Fonts/FF_GenRyuMin_Black.FF_GenRyuMin_Black"));
+		FillTypeface(CF.FallbackTypeface.Typeface, FbReg, FbBold ? FbBold : FbReg,
+			FbBold ? FbBold : FbReg, FbReg, FbBlack ? FbBlack : FbReg);
+	}
+	return Composite;
+}
+
 void ANiceInkHUD::EnsureUiAssets()
 {
 	if (UiFont)
@@ -48,30 +152,8 @@ void ANiceInkHUD::EnsureUiAssets()
 		return;
 	}
 
-	UObject* MediumFace = StaticLoadObject(UObject::StaticClass(), nullptr, TEXT("/Game/UI/Fonts/FF_MPlusRounded_Medium.FF_MPlusRounded_Medium"));
-	UObject* XBoldFace = StaticLoadObject(UObject::StaticClass(), nullptr, TEXT("/Game/UI/Fonts/FF_MPlusRounded_XBold.FF_MPlusRounded_XBold"));
-	if (MediumFace || XBoldFace)
-	{
-		UFont* Composite = NewObject<UFont>(this, TEXT("NiUiFont"));
-		Composite->FontCacheType = EFontCacheType::Runtime;
-		if (MediumFace)
-		{
-			FTypefaceEntry& Entry = Composite->GetMutableInternalCompositeFont().DefaultTypeface.Fonts.AddDefaulted_GetRef();
-			Entry.Name = TEXT("Regular");
-			Entry.Font = FFontData(MediumFace);
-		}
-		if (XBoldFace)
-		{
-			FTypefaceEntry& Entry = Composite->GetMutableInternalCompositeFont().DefaultTypeface.Fonts.AddDefaulted_GetRef();
-			Entry.Name = TEXT("Bold");
-			Entry.Font = FFontData(XBoldFace);
-		}
-		UiFont = Composite;
-	}
-	else if (GEngine)
-	{
-		UiFont = GEngine->GetMediumFont(); // 資產缺失的保底：至少不畫空
-	}
+	// 13 語矩陣與選單同一座（08-07 抽共用）：名字＝任何語言、局內照樣顯示
+	UiFont = BuildCompositeUiFont(this, TEXT("NiUiFont"));
 
 	IconCup    = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Cup.T_UI_Cup"));
 	IconSpray  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Spray.T_UI_Spray"));
@@ -123,6 +205,7 @@ void ANiceInkHUD::DrawRoundedBox(float X, float Y, float W, float H, float Radiu
 	{
 		return;
 	}
+	X = FlipXW(X, W); // AR 鏡像（9-slice 左右對稱＝翻左緣即可）
 	if (!RoundedTex)
 	{
 		DrawRect(Color, X, Y, W, H); // 資產缺失保底
@@ -162,6 +245,35 @@ float ANiceInkHUD::TierSize(ETextTier Tier) const
 	}
 }
 
+namespace
+{
+	// 需要整形/雙向排序的碼域（阿拉伯/希伯來等 RTL＋呈現形＋印度系/泰寮緬）：
+	// 命中才走 HarfBuzz 整形路——拉丁/CJK/韓文走原快路徑零變動（整形每幀有成本）
+	bool NiTextNeedsShaping(const FString& Text)
+	{
+		for (const TCHAR C : Text)
+		{
+			if ((C >= 0x0590 && C <= 0x08FF) || (C >= 0x0900 && C <= 0x0DFF) ||
+				(C >= 0x0E00 && C <= 0x0EFF) || (C >= 0x1000 && C <= 0x109F) ||
+				(C >= 0xFB1D && C <= 0xFDFF) || (C >= 0xFE70 && C <= 0xFEFF))
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+}
+
+float ANiceInkHUD::FlipX(float X) const
+{
+	return (bRTLLayout && !bMirrorSuspended && Canvas) ? Canvas->ClipX - X : X;
+}
+
+float ANiceInkHUD::FlipXW(float X, float W) const
+{
+	return (bRTLLayout && !bMirrorSuspended && Canvas) ? Canvas->ClipX - X - W : X;
+}
+
 FVector2D ANiceInkHUD::MeasureTok(const FString& Text, ETextTier Tier, bool bBold)
 {
 	if (!Canvas || !UiFont || !FSlateApplication::IsInitialized())
@@ -170,6 +282,14 @@ FVector2D ANiceInkHUD::MeasureTok(const FString& Text, ETextTier Tier, bool bBol
 	}
 	const int32 SizePx = FMath::Max(8, FMath::RoundToInt(TierSize(Tier) * UiScale));
 	const FSlateFontInfo Info(UiFont, SizePx, bBold ? FName("Bold") : FName("Regular"));
+	if (NiTextNeedsShaping(Text))
+	{
+		// 整形量測（阿拉伯連寫後寬度≠逐字距總和）
+		auto FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
+		const FShapedGlyphSequenceRef Shaped = FontCache->ShapeBidirectionalText(
+			Text, Info, Canvas->GetDPIScale(), TextBiDi::ComputeBaseDirection(Text), ETextShapingMethod::Auto);
+		return FVector2D(Shaped->GetMeasuredWidth(), Shaped->GetMaxTextHeight());
+	}
 	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
 	return FVector2D(Measure->Measure(Text, Info, Canvas->GetDPIScale()));
 }
@@ -180,6 +300,13 @@ FVector2D ANiceInkHUD::DrawTok(const FString& Text, float X, float Y, ETextTier 
 	if (!Canvas || !UiFont || Text.IsEmpty())
 	{
 		return FVector2D::ZeroVector;
+	}
+	if (IsMirrored())
+	{
+		// AR 鏡像：錨點翻面＋左右對齊互換（置中不變——ClipX-X 對 W/2 是恆等）
+		X = Canvas->ClipX - X;
+		Align = (Align == EHAlign::Left) ? EHAlign::Right
+			: (Align == EHAlign::Right) ? EHAlign::Left : EHAlign::Center;
 	}
 	const FVector2D Size = MeasureTok(Text, Tier, bBold);
 	if (Align == EHAlign::Center)
@@ -192,6 +319,23 @@ FVector2D ANiceInkHUD::DrawTok(const FString& Text, float X, float Y, ETextTier 
 	}
 	const int32 SizePx = FMath::Max(8, FMath::RoundToInt(TierSize(Tier) * UiScale));
 	const FSlateFontInfo Info(UiFont, SizePx, bBold ? FName("Bold") : FName("Regular"));
+
+	if (NiTextNeedsShaping(Text))
+	{
+		// 整形路（2026-08-07）：阿拉伯文等連寫文字＝HarfBuzz 整形＋BiDi 排序後
+		// 以 shaped item 上屏——FCanvasTextItem 逐碼位直畫＝斷筆+左右顛倒
+		auto FontCache = FSlateApplication::Get().GetRenderer()->GetFontCache();
+		const FShapedGlyphSequenceRef Shaped = FontCache->ShapeBidirectionalText(
+			Text, Info, Canvas->GetDPIScale(), TextBiDi::ComputeBaseDirection(Text), ETextShapingMethod::Auto);
+		FCanvasShapedTextItem Item(FVector2D(X, Y), Shaped, Color);
+		if (bTokShadows)
+		{
+			Item.EnableShadow(FLinearColor(0.0f, 0.0f, 0.0f, 0.6f), FVector2D(1.0f, 1.0f) * FMath::Max(1.0f, UiScale));
+		}
+		Canvas->DrawItem(Item);
+		return Size;
+	}
+
 	FCanvasTextItem Item(FVector2D(X, Y), FText::FromString(Text), Info, Color);
 	if (bTokShadows)
 	{
@@ -234,6 +378,9 @@ float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float S
 	{
 		return 0.0f;
 	}
+	// AR 鏡像在此翻一次、內部原語掛起（框與貼圖必須同座標系——臉不左右翻）
+	X = FlipXW(X, Size);
+	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 	FLinearColor Frame = NiHudColor::Paper;
 	Frame.A = 0.9f;
 	const float Pad = FMath::Max(1.5f, Size * 0.05f);
@@ -251,6 +398,7 @@ void ANiceInkHUD::DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, con
 	{
 		return;
 	}
+	X = FlipXW(X, Size); // AR 鏡像（位置翻面、圖示本體不左右翻）
 	Canvas->K2_DrawTexture(Tex, FVector2D(X, Y), FVector2D(Size, Size),
 		FVector2D::ZeroVector, FVector2D::UnitVector, Tint, BLEND_Translucent);
 }
@@ -290,8 +438,10 @@ bool ANiceInkHUD::Button(const FString& Label, float CenterX, float Y, float W, 
 	bool bEnabled, bool bAccent, bool bOnLight)
 {
 	const float X = CenterX - W * 0.5f;
+	// 命中判定用物理座標（滑鼠活在物理空間；AR 鏡像時按鈕畫在翻面位置）
+	const float HitX = FlipXW(X, W);
 	const bool bHover = bEnabled &&
-		MousePos.X >= X && MousePos.X <= X + W && MousePos.Y >= Y && MousePos.Y <= Y + H;
+		MousePos.X >= HitX && MousePos.X <= HitX + W && MousePos.Y >= Y && MousePos.Y <= Y + H;
 
 	// 素色簡約風：無邊框、圓角；主按鈕（accent）＝實心酒金＋墨字；
 	// 白卡上（bOnLight）＝墨填墨字、深底上＝紙填紙字。
@@ -364,7 +514,7 @@ void ANiceInkHUD::DrawBigTitle(const FString& Text, float CenterX, float Y, floa
 	const FSlateFontInfo Info(UiFont, FMath::RoundToInt(SizePx * UiScale), FName("Bold"));
 	FCanvasTextItem Item(FVector2D(0, 0), FText::FromString(Text), Info, Color);
 	Item.bCentreX = true;
-	Item.Position = FVector2D(CenterX, Y);
+	Item.Position = FVector2D(FlipX(CenterX), Y); // AR 鏡像（置中錨翻面）
 	if (bTokShadows)
 	{
 		Item.EnableShadow(FLinearColor(0, 0, 0, 0.6f), FVector2D(2.0f, 2.0f) * UiScale);
@@ -411,6 +561,13 @@ void ANiceInkHUD::DrawHUD()
 	}
 	EnsureUiAssets();
 	UiScale = Canvas->ClipY / 1080.0f;
+
+	// AR 版面鏡像（v4.0e）：跟語言設定即時刷新（文化=ar → chrome 全鏡像）
+	{
+		const UNiceInkGameInstance* NiGI = UNiceInkGameInstance::Get(this);
+		bRTLLayout = NiGI && FCString::Strcmp(
+			NiLoc::LangCultureCode(NiGI->GetMenuLanguage()), TEXT("ar")) == 0;
+	}
 
 	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
 	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
@@ -550,7 +707,8 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	case ENiceInkPhase::Drawing:
 		if (VictimPS)
 		{
-			SubText = TEXT("is asleep");
+			// v4.0e：臉像＋名字並列（辨識雙載體）
+			SubText = FString::Printf(TEXT("%s is asleep"), *VictimPS->GetPlayerName());
 			SubFacePS = VictimPS;
 			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
 		}
@@ -561,7 +719,7 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	case ENiceInkPhase::Accusation:
 		if (VictimPS)
 		{
-			SubText = TEXT("is choosing...");
+			SubText = FString::Printf(TEXT("%s is choosing..."), *VictimPS->GetPlayerName());
 			SubFacePS = VictimPS;
 			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
 		}
@@ -627,9 +785,15 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 			W * 0.5f, H * 0.26f, ETextTier::Display, bCorrect ? NiHudColor::Green : NiHudColor::Red, EHAlign::Center, true);
 		const float RevealFace = 96.0f * UiScale;
 		DrawFaceTok(AuthorPS, W * 0.5f - RevealFace * 0.5f, H * 0.26f + 56.0f * UiScale, RevealFace);
+		float RevealY = H * 0.26f + 56.0f * UiScale + RevealFace + 8.0f * UiScale;
+		if (AuthorPS)
+		{
+			// v4.0e：臉像＋名字並列——揭曉的臉下方跟名字
+			DrawTok(AuthorPS->GetPlayerName(), W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+			RevealY += 22.0f * UiScale;
+		}
 		DrawTok(bCorrect ? TEXT("takes the seat") : TEXT("inks the picked work  ·  +1 cup"),
-			W * 0.5f, H * 0.26f + 56.0f * UiScale + RevealFace + 10.0f * UiScale,
-			ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
+			W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
 	}
 
 	if (GS->CurrentPhase == ENiceInkPhase::Finale || GS->CurrentPhase == ENiceInkPhase::PostGame)
@@ -639,9 +803,11 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 			DrawTok(TEXT("OUT COLD"), W * 0.5f, H * 0.2f, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
 			const float LoserFace = 72.0f * UiScale;
 			DrawFaceTok(LoserPS, W * 0.5f - LoserFace * 0.5f, H * 0.2f + 52.0f * UiScale, LoserFace);
+			float LoserY = H * 0.2f + 52.0f * UiScale + LoserFace + 8.0f * UiScale;
+			DrawTok(LoserPS->GetPlayerName(), W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+			LoserY += 22.0f * UiScale;
 			DrawTok(TEXT("cash is split  ·  ink locked forever"),
-				W * 0.5f, H * 0.2f + 52.0f * UiScale + LoserFace + 10.0f * UiScale,
-				ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
+				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
 		}
 	}
 }
@@ -737,10 +903,11 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 	Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
 	for (const ANiceInkPlayerState* PS : Sorted)
 	{
-		// 臉制（SPEC #52）：名列＝席位＋臉像＋現金
+		// v4.0e：名列＝席位＋臉像＋名字＋現金（辨識雙載體）
 		DrawTok(FString::Printf(TEXT("seat %d"), PS->SeatIndex + 1),
 			CX - 150.0f * UiScale, LineY, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Left, false);
 		DrawFaceTok(PS, CX - 52.0f * UiScale, LineY - 2.0f * UiScale, RowH - 6.0f * UiScale);
+		DrawTok(PS->GetPlayerName().Left(14), CX - 12.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
 		DrawTok(FText::AsNumber(PS->Cash).ToString(), CX + 190.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Right, false);
 		LineY += RowH;
 	}
@@ -847,7 +1014,13 @@ void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter
 	{
 		DrawTok(TEXT("?"), W * 0.5f, LineY + 14.0f * UiScale, ETextTier::Title, NiHudColor::Amber, EHAlign::Center, true);
 	}
-	LineY += SuspectFace + 10.0f * UiScale;
+	LineY += SuspectFace + 8.0f * UiScale;
+	if (Suspect)
+	{
+		// v4.0e：嫌疑人大臉像下方跟名字（辨識雙載體）
+		DrawTok(Suspect->GetPlayerName(), W * 0.5f, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+	}
+	LineY += 24.0f * UiScale;
 	DrawTok(TEXT("1-9 view work   ·   TAB suspect   ·   ENTER accuse"),
 		W * 0.5f, LineY, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
@@ -880,6 +1053,8 @@ void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)
 
 void ANiceInkHUD::DrawPaletteStrip(const ANiceInkCharacter* MyChar)
 {
+	// AR 鏡像豁免：色塊順序＝實體數字鍵 1..0 的鍵盤順序（物理域非版面域）
+	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 	// 鎖定中常駐色票列：十色塊＋鍵位數字＋當前色高亮框——固定色盤是承重設計
 	//（限時作畫/皮膚可讀策展/墨杯題材/畫風指紋），可視化補完 hotbar 慣例的另一半。
 	// 色塊直接用調色盤 linear 值＝與墨水同色（準星/範圍圈同一約定，不過 sRGB）。
@@ -942,6 +1117,9 @@ void ANiceInkHUD::DrawBlindOverlay(const ANiceInkCharacter* MyChar)
 
 void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGameState* GS, const ANiceInkPlayerState* MyPS)
 {
+	// AR 鏡像豁免：描圖盤/姿勢面板＝玩法幾何（夢裡的圖形不因語言翻面）
+	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
+
 	const float W = Canvas->ClipX;
 	const float H = Canvas->ClipY;
 
@@ -1111,6 +1289,9 @@ void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
 	const float Radius = 70.0f * UiScale;
 	const float Remaining = FMath::Max(0.0f, MyChar->TrapDialEndTime - GetWorld()->GetTimeSeconds());
 
+	// AR 鏡像豁免：轉盤＝玩法幾何（角度方向/指針/刻度不因語言翻面）
+	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
+
 	DrawTok(TEXT("HE STEPPED ON YOU"), Center.X, Center.Y - Radius - 74.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
 	DrawTok(TEXT("SPIN HIS DREAM"), Center.X, Center.Y - Radius - 48.0f * UiScale, ETextTier::Title, NiHudColor::Amber, EHAlign::Center, true);
 
@@ -1150,6 +1331,9 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 	{
 		return;
 	}
+
+	// AR 鏡像豁免：準星/落點/筆 viewmodel＝玩法幾何（錨定 aim 不因語言翻面）
+	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 
 	FLinearColor CrosshairColor = FLinearColor::White;
 	if (const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr)

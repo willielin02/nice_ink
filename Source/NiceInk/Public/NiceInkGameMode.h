@@ -198,6 +198,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedTraceSeed = 0;
 
+	// 雲端隨身上行終點（Character::ServerPersonaEnd 驗收後轉入；B3）：
+	// bytes＝UNiceInkSaveGame 序列化；驗證→套用（錢包＋逐幅 MulticastRestoreWork）
+	void ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);
+
 private:
 	FTimerHandle PhaseTimerHandle;
 	FTimerHandle AutoStartTimerHandle;
@@ -258,11 +262,17 @@ private:
 	// 相位切換時全員強制起身（貼臉鎖定不跨相位）
 	void ForceExitAllLeans();
 
-	// 跨場持久化（錢包＋刺青）。存檔鍵＝玩家名（去 PIE 尾碼）＋席位；
-	// 正式版改 EOS product user id。
+	// 跨場持久化（錢包＋刺青）。存檔鍵＝EOS ProductUserId（B3，跨房/改名/席位
+	// 恆定；Steam 票證登入同為 Connect 層 PUID＝同鍵路徑）；無 PUID（LAN/PIE/robo）
+	// fallback＝舊制玩家名（去 PIE 尾碼）＋席位。
 	FString SaveSlotFor(const class ANiceInkPlayerState* PS) const;
 	void PersistCharacter(ANiceInkCharacter* Character);
 	void RestoreCharacter(ANiceInkCharacter* Character);
+
+	// 跨場資產還原編排（PostLogin 起跳、1s 輪詢至多 TicksLeft 次）：
+	// 無 PUID＝立刻走本機槽（LAN/PIE 原路）；EOS 主機本人＝等雲端拉取；
+	// EOS 遠端＝等上行列車；逾時＝本機 PUID 槽 fallback
+	void TryRestoreTick(TWeakObjectPtr<ANiceInkCharacter> WeakChar, int32 TicksLeft);
 
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void PersistAllCharacters();

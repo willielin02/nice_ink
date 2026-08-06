@@ -238,6 +238,55 @@ namespace
 		TEXT("warte auf den Host  ·  {0} / 6"), TEXT("aguardando o anfitrião  ·  {0} / 6"),
 		TEXT("ожидание хоста  ·  {0} / 6"), TEXT("oda sahibi bekleniyor  ·  {0} / 6"),
 		TEXT("بانتظار المضيف  ·  {0} / 6") } },
+	// Profile
+	{ { TEXT("Profile"), TEXT("プロフィール"), TEXT("個人檔案"), TEXT("个人档案"), TEXT("프로필"),
+		TEXT("Perfil"), TEXT("Profil"), TEXT("Profilo"), TEXT("Profil"),
+		TEXT("Perfil"), TEXT("Профиль"), TEXT("Profil"), TEXT("الملف الشخصي") } },
+	// UploadSelfie
+	{ { TEXT("Upload Selfie"), TEXT("自撮りをアップロード"), TEXT("上傳自拍"), TEXT("上传自拍"), TEXT("셀카 업로드"),
+		TEXT("Subir selfie"), TEXT("Envoyer un selfie"), TEXT("Carica un selfie"), TEXT("Selfie hochladen"),
+		TEXT("Enviar selfie"), TEXT("Загрузить селфи"), TEXT("Selfie yükle"), TEXT("رفع سيلفي") } },
+	// CashLabel
+	{ { TEXT("CASH"), TEXT("所持金"), TEXT("現金"), TEXT("现金"), TEXT("현금"),
+		TEXT("DINERO"), TEXT("ARGENT"), TEXT("CONTANTI"), TEXT("BARGELD"),
+		TEXT("DINHEIRO"), TEXT("НАЛИЧНЫЕ"), TEXT("NAKİT"), TEXT("النقود") } },
+	// FaceProcessing
+	{ { TEXT("processing your face…"), TEXT("顔を処理中…"), TEXT("臉部處理中…"), TEXT("脸部处理中…"), TEXT("얼굴 처리 중…"),
+		TEXT("procesando tu cara…"), TEXT("traitement du visage…"), TEXT("elaborazione del volto…"), TEXT("Gesicht wird verarbeitet…"),
+		TEXT("processando seu rosto…"), TEXT("обработка лица…"), TEXT("yüz işleniyor…"), TEXT("جارٍ معالجة الوجه…") } },
+	// FaceUpdated
+	{ { TEXT("face updated!"), TEXT("顔を更新しました"), TEXT("臉已更新！"), TEXT("脸已更新！"), TEXT("얼굴이 업데이트됨"),
+		TEXT("¡cara actualizada!"), TEXT("visage mis à jour !"), TEXT("volto aggiornato!"), TEXT("Gesicht aktualisiert!"),
+		TEXT("rosto atualizado!"), TEXT("лицо обновлено!"), TEXT("yüz güncellendi!"), TEXT("تم تحديث الوجه!") } },
+	// FaceFailed
+	{ { TEXT("face processing failed"), TEXT("顔の処理に失敗しました"), TEXT("臉部處理失敗"), TEXT("脸部处理失败"), TEXT("얼굴 처리 실패"),
+		TEXT("falló el procesamiento"), TEXT("échec du traitement"), TEXT("elaborazione non riuscita"), TEXT("Verarbeitung fehlgeschlagen"),
+		TEXT("falha no processamento"), TEXT("ошибка обработки"), TEXT("işleme başarısız"), TEXT("فشلت المعالجة") } },
+	// NotSignedIn
+	{ { TEXT("not signed in yet"), TEXT("未サインイン"), TEXT("尚未登入"), TEXT("尚未登录"), TEXT("로그인되지 않음"),
+		TEXT("sin sesión iniciada"), TEXT("non connecté"), TEXT("non connesso"), TEXT("nicht angemeldet"),
+		TEXT("não conectado"), TEXT("не выполнен вход"), TEXT("oturum açılmadı"), TEXT("لم يتم تسجيل الدخول") } },
+	// BrowHint（眉毛鐵律：2026-07-08 定案「UI 提醒請露出眉毛，否則你會沒有眉毛」）
+	{ { TEXT("show your eyebrows in the photo — or your rikishi won't have any"),
+		TEXT("眉毛が見える写真にしてください。隠れていると眉なしになります"),
+		TEXT("自拍請露出眉毛，否則你會沒有眉毛"), TEXT("自拍请露出眉毛，否则你会没有眉毛"),
+		TEXT("사진에서 눈썹이 보여야 합니다. 아니면 눈썹이 없어져요"),
+		TEXT("muestra las cejas en la foto o tu luchador no tendrá"),
+		TEXT("montrez vos sourcils sur la photo, sinon vous n'en aurez pas"),
+		TEXT("mostra le sopracciglia nella foto o non ne avrai"),
+		TEXT("Augenbrauen im Foto zeigen — sonst hast du keine"),
+		TEXT("mostre as sobrancelhas na foto ou ficará sem"),
+		TEXT("на фото должны быть видны брови, иначе их не будет"),
+		TEXT("fotoğrafta kaşların görünsün, yoksa kaşsız kalırsın"),
+		TEXT("أظهر حاجبيك في الصورة وإلا فلن يكون لديك حواجب") } },
+	// ReuploadSelfie
+	{ { TEXT("Re-upload Selfie"), TEXT("自撮りを再アップロード"), TEXT("重新上傳自拍"), TEXT("重新上传自拍"), TEXT("셀카 다시 업로드"),
+		TEXT("Volver a subir selfie"), TEXT("Renvoyer un selfie"), TEXT("Ricarica un selfie"), TEXT("Selfie erneut hochladen"),
+		TEXT("Reenviar selfie"), TEXT("Загрузить селфи заново"), TEXT("Selfie'yi yeniden yükle"), TEXT("إعادة رفع سيلفي") } },
+	// SavedFaces
+	{ { TEXT("YOUR FACES"), TEXT("保存した顔"), TEXT("已儲存的臉"), TEXT("已保存的脸"), TEXT("저장된 얼굴"),
+		TEXT("TUS CARAS"), TEXT("TES VISAGES"), TEXT("I TUOI VOLTI"), TEXT("DEINE GESICHTER"),
+		TEXT("SEUS ROSTOS"), TEXT("ВАШИ ЛИЦА"), TEXT("YÜZLERİN"), TEXT("وجوهك") } },
 	};
 
 	static const TCHAR* GNativeNames[NiLoc::NumLangs] = {

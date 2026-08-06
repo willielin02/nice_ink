@@ -2,6 +2,7 @@
 
 #include "NiceInkGameInstance.h"
 #include "NiceInkMenuHUD.h"
+#include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSessionSubsystem.h"
 #include "TimerManager.h"
 
@@ -111,6 +112,63 @@ void ANiceInkMenuPlayerController::NiMenuShowLang()
 			MenuHud->RoboOpenLanguagePage();
 		}
 	}), 1.0f, false);
+}
+
+void ANiceInkMenuPlayerController::NiMenuShowProfile()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkMenuHUD* MenuHud = Cast<ANiceInkMenuHUD>(GetHUD()))
+		{
+			MenuHud->RoboOpenProfilePage();
+		}
+	}), 1.0f, false);
+}
+
+void ANiceInkMenuPlayerController::NiMenuShot(float DelaySeconds, const FString& Name)
+{
+	// core ticker＝跨關卡存活（world timer 會死在 ServerTravel——AutoHost 後
+	// 拍大廳就靠這條）；Shot showui＝含 Slate/HUD（HighResShot 只拍 3D 場景）
+	TWeakObjectPtr<UGameInstance> WeakGI = GetGameInstance();
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[WeakGI, Name](float) -> bool
+	{
+		UGameInstance* GI = WeakGI.Get();
+		UWorld* World = GI ? GI->GetWorld() : nullptr;
+		// 要走 PC->ConsoleCommand——GEngine->Exec 不路由 Shot（viewport exec 鏈）
+		if (APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr)
+		{
+			PC->ConsoleCommand(FString::Printf(TEXT("Shot showui filename=%s"), *Name));
+		}
+		return false; // 一次性
+	}), FMath::Max(0.1f, DelaySeconds));
+}
+
+void ANiceInkMenuPlayerController::NiMenuSelfie(const FString& SelfiePath)
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, SelfiePath]()
+	{
+		if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
+		{
+			Persona->BeginSelfieIntake(SelfiePath);
+		}
+	}), 1.0f, false);
+}
+
+void ANiceInkMenuPlayerController::NiMenuSetName(const FString& Name)
+{
+	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+	{
+		const FString Clean = UNiceInkGameInstance::SanitizePlayerName(Name);
+		if (!Clean.IsEmpty())
+		{
+			GI->PlayerDisplayName = Clean;
+			GI->SaveSettings();
+			UE_LOG(LogTemp, Log, TEXT("NiMenu: name set to '%s'"), *Clean);
+		}
+	}
 }
 
 void ANiceInkMenuPlayerController::NiMenuJoinCode(const FString& Code)

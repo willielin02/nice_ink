@@ -83,6 +83,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
 	void DestroySession();
 
+	// 選單開場的純靜默登入（persistentauth；失敗絕不開 Account Portal、不進
+	// Failed UI）——目的＝進房前就把雲端 persona（現金/刺青/偏好/名字）拉下來
+	// 給個人檔案頁與舞台力士。每 session 只試一次；真登入仍由 Host/Join 觸發。
+	void TrySilentLogin();
+
+	// 目前是否已 EOS 登入（個人檔案頁「尚未登入」提示用；LAN/NULL 恆 false）
+	bool IsLoggedIn() const;
+
 	// --- 選單輪詢面 ---
 
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Session")
@@ -132,6 +140,8 @@ private:
 	FDelegateHandle LoginHandle;
 	bool bLoginInFlight = false;
 	bool bPortalRetryUsed = false; // 靜默失敗→開瀏覽器重試一次（引擎 fallback 只掛 AutoLogin 路徑，這裡自己接）
+	bool bSilentLoginAttempt = false; // 選單開場的純靜默登入：失敗不開 portal、不進 Failed UI
+	bool bSilentLoginTried = false;
 	TFunction<void()> PendingAfterLogin;
 
 	void EnsureLoggedInThen(TFunction<void()> Then);

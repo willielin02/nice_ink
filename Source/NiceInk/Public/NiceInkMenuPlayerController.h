@@ -48,4 +48,20 @@ public:
 	// 開語言全列頁（robo 截圖用）
 	UFUNCTION(Exec)
 	void NiMenuShowLang();
+
+	// 開個人檔案頁（robo 截圖用）
+	UFUNCTION(Exec)
+	void NiMenuShowProfile();
+
+	// 延遲 HighResShot（robo：-ExecCmds 鏈尾接自拍——免搶焦點免注入）
+	UFUNCTION(Exec)
+	void NiMenuShot(float DelaySeconds, const FString& Name);
+
+	// 直接餵自拍路徑進臉管線（robo：繞過檔案對話框＝免輸入注入）
+	UFUNCTION(Exec)
+	void NiMenuSelfie(const FString& SelfiePath);
+
+	// 直接設玩家名（robo：多語名字顯示驗證＝免輸入注入；經 Sanitize＋存檔）
+	UFUNCTION(Exec)
+	void NiMenuSetName(const FString& Name);
 };

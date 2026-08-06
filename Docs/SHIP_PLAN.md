@@ -76,8 +76,52 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
       登入閂（persistentauth→portal fallback）、單機實測建房成功（見進度記錄）。
 - [x] **B2 EOS 語音**（RTC room）✅ 2026-08-05：lobby 建立即開語音房、自動入房實測
       通過（NiVoice 探針 `loggedIn=1 channels=1` log 為證）。
-- [ ] B3 存檔鍵 → ProductUserId（EOS 接通後半小時工作，位置已註記）＋
-      PlayerDataStorage 雲端刺青持久化（Client Policy 權限已預留）。
+- [x] **B3 存檔鍵 → ProductUserId＋PlayerDataStorage 雲端隨身** ✅ 2026-08-06
+      BUILT-自驗（user 定案「依討論結論對齊實作、終態=Steam」）：
+      ①存檔鍵＝PUID（`NiceInk_P_<puid>`；取 NetId「EAS|PUID」後半＝**Connect 層、
+      不碰 EpicAccountId**——B5 切 Steam 票證登入時同一條鍵路徑零改動；無 PUID
+      （LAN/PIE/robo）fallback 舊名字+席位鍵＝既有測試零擾）。
+      ②`UNiceInkPersonaSubsystem`（GameInstance 子系統）＝雲端隨身層：登入成功
+      （SessionSubsystem 登入閂兩路都掛鉤）拉 `persona_assets_v1.sav`＋
+      `persona_settings_v1.sav`（引擎 OSS EOS 的 IOnlineUserCloud＝PlayerDataStorage）。
+      ③資產流：進房上行＝owner client 分塊 RPC（16KB＋CRC）交 host 驗證套用
+      （錢包鉗位/Marker 拒收/1024 幅瘋值上限；PS.bAssetsRestored 防雙重還原、
+      12s 逾時 fallback 主機本機槽）；結算下行＝每個 Persist 點（雷射/終局/搖晃
+      扣款＋**新增碳黑誕生點即刻落盤**）host 回傳本人→本人寫自己雲端保險箱
+      （PlayerDataStorage 私人不可代寫）；主機本機槽降級為熱備。
+      ④偏好雲端同步＝Revision 比帳（高者贏、平手本機贏；-culture= robo 覆寫恆優先）。
+      記帳：listen server 無絕對防竄改（門檻＝EOS API 級，派對遊戲接受）；
+      **Epic 帳號 PUID ≠ Steam 票證 PUID＝切 B5 時開發期資產不搬家（預期非 bug）**；
+      房內他人臉/資產分發不歸此層（自拍上傳=SPEC #52 另案）。
+      驗證：編譯過＋robo fullloop/trace 迴歸（LAN/PIE 原路）；**雲端 E2E 併 B4
+      雙機驗收**（PIE 不支援 EOS，單機 -game 只能驗到寫入 log）。
+- [x] **B7 個人檔案頁＋自拍臉 runtime 接入（開發機版）** ✅ 2026-08-06 BUILT-自驗
+      （user 指令「名字/照片要有地方設定、現金/紋身要有地方看」＋SPEC v4.0e
+      「辨識＝名字＋臉icon」）：①主選單第六頁 Profile＝名字欄回歸（CommitName
+      沿用）＋現金（Persona 雲端資產視圖；未登入顯「尚未登入」）＋上傳自拍鈕
+      ＋眉毛鐵律提示（BrowHint 8 鍵×13 語入 NiLoc）；②自拍→臉＝
+      Tools/FacePipeline/intake_selfie.py（v7 管線＋sumo 眼罩單人烘焙）→
+      PersonaSubsystem 背景行程（venv python；FTSTicker 輪詢）→runtime 匯入
+      三貼圖＋膚色→Saved/PlayerFace/ 正本＋開機自載→舞台力士當場換臉
+      （DressDancerFromPersona＋ApplyCustomAvatar）；③選單靜默登入
+      TrySilentLogin（persistentauth-only 零彈窗）＝進房前雲端 persona 到位、
+      **實測 EOS 雲端寫入 OK（cloud write OK log 為證＝B3 真線首驗）**；
+      ④局內名字回歸＝大廳/揭曉/指認/頂欄臉像+名字並列；⑤robo 鉤子
+      NiMenuShowProfile/NiMenuSelfie/NiMenuShot（Shot showui）。
+      **08-07 續批（user 五連裁決）**：①名字開放 Unicode（Sanitize 改黑名單制
+      ：擋控制/空白/URL 語法字/檔名保留字；中日韓可入名）；②檔案對話框換
+      IFileOpenDialog COM（引擎 DesktopPlatform=GetOpenFileNameW 古典模板＝
+      高 DPI 點陣糊——自接現代對話框、Shipping 可用、DesktopPlatform 依賴移除）；
+      ③處理中狀態列附已耗秒數（實測 61~107s/張）；④**臉庫**＝上傳全保存
+      Saved/PlayerFace/library/<時間戳>/（含 256² 縮圖=HUD 裁切框膚色打底）、
+      active.txt 指針、個人檔案頁縮圖列點選即換（酒金底線=穿著中）、舊平鋪檔
+      自動遷移 library/legacy；⑤已有臉→按鈕變「重新上傳自拍」（ReuploadSelfie/
+      SavedFaces ×13 語）。E2E 綠（遷移+新臉入庫+切換+文案截圖自查）。
+      **已知缺口（誠實記帳）**：(a) 自訂臉只有本人看得到——雲端儲存+房內分發
+      （MB 級 bytes 列車）未做＝房內他人仍見名冊臉（下一段工作）；(b) 管線=
+      本機 venv 依賴＝**正式出貨前必須裁決 SPEC #52 三選一**（對話框已 Shipping
+      安全）；(c) legacy 遷移臉無縮圖=素塊（重上傳即有）；(d) 手感/版面以
+      user viewport 為準。
 - [ ] B4 六人真機延遲驗證（只能真人）；**雙機 EOS 驗收**（join 流程＋雙向語音，
       需兩台機兩個 Epic 帳號——同帳號雙開撞 PUID、PIE 不支援 EOS P2P）。
 - [ ] B5 **Steam 票證登入切換**（正式終態＝玩家零帳號零彈窗，Meccha 同款）：
@@ -89,9 +133,35 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
 
 ### C 級——使用者裁決域／僅使用者能做（不代決，列全）
 
-- C1 **運行時自拍→臉貼圖**：現為離線 python 管線（torch/LaMa/mediapipe），移植進
-  遊戲客戶端＝以週計的獨立工程。v1 上架的產品決策：內建名冊上架 vs 等自拍管線。
-  （本任務以名冊+選擇 UI 出貨形態準備。）
+- C1 **運行時自拍→臉貼圖＝遊戲內建 C++/ONNX（✅ 2026-08-07 使用者裁決
+  「當然是1遊戲內建」——SPEC #52 三選一收束）**。移植路線圖（以週計；每站
+  以「與 python 管線輸出對賬」為驗收閘）：
+  - [x] **M0 地基勘察** ✅ 08-07：UE 5.7 NNE 推理插件確認（**NNERuntimeORT**
+        ＝正式 ONNX Runtime，CPU+DirectML）；模型盤點＝LaMa **已是 ONNX**
+        （208MB fp32，免移植；可 fp16 量化砍半）、BiSeNet pth→**已轉
+        bisenet_512.onnx（53MB 單檔自包含，pth vs onnx label 對賬 100.000%**，
+        儀器=Tools/FacePipeline/export_bisenet_onnx.py）、MediaPipe
+        face_landmarker.task=風險點（見 M2）。
+  - [ ] **M1 NNE 接線**：NNERuntimeORT 啟用＋三模型入 Content（AlwaysCook）＋
+        C++ 推理殼（INNERuntimeCPU::CreateModel→RunSync）；先跑 BiSeNet
+        512² 分割煙測＝與 python parse_selfie 同圖對賬。
+  - [ ] **M2 臉部特徵點（風險最高、先做）**：MediaPipe .task=tflite 包、
+        UE 無 tflite runtime。路線甲=社群 MediaPipe FaceMesh ONNX 轉換
+        （FaceDetector+468 landmarks）；乙=改用原生 ONNX 特徵點模型
+        （如 PFLD/3DDFA 系）＋重校 TPS 錨點表。裁決標準＝特徵點語義與
+        現管線 MediaPipe 索引相容度（TPS 錨/眉框/眼環全掛 MediaPipe 索引，
+        換模型=全部重標——優先甲）。
+  - [ ] **M3 古典影像處理 C++ 化**：cv2 依賴清單化（resize/warp/TPS/
+        Poisson 膜/TELEA inpaint/形態學/高斯）→ OpenCV 第三方庫入
+        ThirdParty（UE 慣例靜態鏈）或逐函式手寫（Poisson 膜/羽化已是
+        自寫 numpy＝直譯 C++；TPS/TELEA 用 OpenCV 省險）。
+  - [ ] **M4 管線編排 C++ 化**：selfie_to_face_texture 十二步驟移植＝
+        UNiceInkFaceBakery（背景執行緒、進度回報進個人檔案頁狀態列）；
+        每步與 python 產物影像 diff 對賬（金樣本=六測試臉）。
+  - [ ] **M5 併入 Persona**：BeginSelfieIntake 改內建管線（venv 路徑退役為
+        開發對照組）；眼罩 sumo 烘焙（純幾何仿射）同批 C++ 化；
+        模型入包尺寸記帳（~260MB→fp16 後 ~130MB）。
+  紅利=模型常駐（NNE 資產載一次）＝處理時間砍掉冷啟大頭。
 - C2 HUD 墨刷 UI kit 三選一（現成包/AI 生成/手繪；07-15 使用者暫停討論）——
   本任務維持 token HUD 出貨形態。
 - C3 噴射出口與褌的視覺（SPEC 待定 #11）。
