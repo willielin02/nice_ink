@@ -46,6 +46,14 @@
 		{
 			"Name": "ProceduralMeshComponent",
 			"Enabled": true
+		},
+		{
+			"Name": "NNERuntimeORT",
+			"Enabled": true
+		},
+		{
+			"Name": "OpenCV",
+			"Enabled": true
 		}
 	]
 }

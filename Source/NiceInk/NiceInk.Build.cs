@@ -33,7 +33,10 @@ public class NiceInk : ModuleRules
 			"Json",               // skin_color.json 解析（自拍臉 runtime 匯入）
 			"VoiceChat",          // IVoiceChatUser（EOS lobby RTC 語音探針）
 			"OnlineSubsystemEOS", // IOnlineSubsystemEOS::GetVoiceChatUserInterface
-			"AIModule"            // 主選單舞台的 AAIController（力士編舞直驅）
+			"AIModule",           // 主選單舞台的 AAIController（力士編舞直驅）
+			"NNE",                // 內建臉管線（SPEC #52 C1）：ONNX 推理（NNERuntimeORTCpu）
+			"OpenCV",             // 內建臉管線：古典影像處理（world455 含 shape/photo/calib3d）
+			"OpenCVHelper"        // Pre/PostOpenCVHeaders + DLL 載入
 		});
 
 		// 檔案對話框（個人檔案頁「上傳自拍」）＝Windows COM IFileOpenDialog 直呼

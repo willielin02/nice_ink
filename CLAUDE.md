@@ -266,11 +266,21 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   拉丁/CJK 原快路零變動；AR 殘項只剩版面鏡像）＋robo 鉤子 NiMenuSetName/
   NiMenuShot 改 core ticker
   （world timer 死在 ServerTravel；Shot 必走 PC->ConsoleCommand）；
-  **#52 三選一已裁（08-07 user「當然是1遊戲內建」）＝C++/ONNX 內建**：
-  路線圖=SHIP_PLAN C1 M0~M5（每站與 python 對賬）；M0 完成=NNERuntimeORT
-  確認+LaMa 本是 ONNX+**BiSeNet 已轉單檔 onnx（對賬 100.000%）**；風險點=
-  MediaPipe landmarker（tflite 包、M2 優先、傾向社群 FaceMesh ONNX 轉換=
-  保索引語義免重標 TPS 錨）；venv 路=過渡期對照組；
+  **#52 三選一已裁（08-07 user「當然是1遊戲內建」）＝C++/ONNX 內建
+  →同日 M0~M5 全站 SHIPPED-自驗（帳本=SHIP_PLAN C1 含全數字）**：
+  `Source/NiceInk/Private/Face/`（NiceInkFaceOnnx=NNE 推理殼、
+  NiceInkFaceLandmarks=MediaPipe 全鏈重現、NiceInkFaceBakery{,Core,Warp}=
+  selfie_to_face_texture v7＋intake_selfie 全移植）；模型=raw .onnx 在
+  **Content/FaceBakery/models（gitignore、NonUFS staging）**＋data/ 常數檔
+  （入 git）；Persona 內建路優先、`-facevenv`=venv 對照組；金樣本對賬 8 張
+  =rgb mean 2~3/alpha 全等/眼罩 99.997%/emma 同文案拒收；暖 88s 冷 156s、
+  模型常駐快取。鐵坑：UE opencv_world455 **無 jpeg 無平行化**（IO 走
+  ImageWrapper、BlurF 自寫 ParallelFor 高斯、TPS map 一次 remap ×5）、
+  NNE 輸出形狀要符號 fallback、**NNE ORT 非編輯器預設單線程**（ini 已設
+  IntraOp=0）、TArray Add 自身元素=擴容斷言、PS1 中文註解無 BOM=cp950 吞
+  換行；task 解包=兩顆 tflite 純標準 op→tf2onnx 同權重直轉（索引零重標）；
+  對賬儀器=mp_onnx_landmarks/gen_gold_refs/compare_parity.py＋NiFaceBake
+  console 指令；遺留=fp16 量化/EXIF 方向/打包版實測；venv 路=對照組保留；
   **待做=自訂臉雲端儲存+房內分發**（bytes 列車擴大到 MB 級；沒有它房內他人
   仍看名冊臉）。
   **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝

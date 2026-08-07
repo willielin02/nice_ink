@@ -142,26 +142,51 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
         bisenet_512.onnx（53MB 單檔自包含，pth vs onnx label 對賬 100.000%**，
         儀器=Tools/FacePipeline/export_bisenet_onnx.py）、MediaPipe
         face_landmarker.task=風險點（見 M2）。
-  - [ ] **M1 NNE 接線**：NNERuntimeORT 啟用＋三模型入 Content（AlwaysCook）＋
-        C++ 推理殼（INNERuntimeCPU::CreateModel→RunSync）；先跑 BiSeNet
-        512² 分割煙測＝與 python parse_selfie 同圖對賬。
-  - [ ] **M2 臉部特徵點（風險最高、先做）**：MediaPipe .task=tflite 包、
-        UE 無 tflite runtime。路線甲=社群 MediaPipe FaceMesh ONNX 轉換
-        （FaceDetector+468 landmarks）；乙=改用原生 ONNX 特徵點模型
-        （如 PFLD/3DDFA 系）＋重校 TPS 錨點表。裁決標準＝特徵點語義與
-        現管線 MediaPipe 索引相容度（TPS 錨/眉框/眼環全掛 MediaPipe 索引，
-        換模型=全部重標——優先甲）。
-  - [ ] **M3 古典影像處理 C++ 化**：cv2 依賴清單化（resize/warp/TPS/
-        Poisson 膜/TELEA inpaint/形態學/高斯）→ OpenCV 第三方庫入
-        ThirdParty（UE 慣例靜態鏈）或逐函式手寫（Poisson 膜/羽化已是
-        自寫 numpy＝直譯 C++；TPS/TELEA 用 OpenCV 省險）。
-  - [ ] **M4 管線編排 C++ 化**：selfie_to_face_texture 十二步驟移植＝
-        UNiceInkFaceBakery（背景執行緒、進度回報進個人檔案頁狀態列）；
-        每步與 python 產物影像 diff 對賬（金樣本=六測試臉）。
-  - [ ] **M5 併入 Persona**：BeginSelfieIntake 改內建管線（venv 路徑退役為
-        開發對照組）；眼罩 sumo 烘焙（純幾何仿射）同批 C++ 化；
-        模型入包尺寸記帳（~260MB→fp16 後 ~130MB）。
-  紅利=模型常駐（NNE 資產載一次）＝處理時間砍掉冷啟大頭。
+  - [x] **M1 NNE 接線** ✅ 08-07：NNERuntimeORT＋OpenCV 插件啟用；模型改
+        **raw .onnx 入 Content/FaceBakery/models（NonUFS staging，非 uasset）**
+        ——UNNEModelData::Init 在 runtime 從 bytes 直建、GetModelData 現場叫
+        ORT（不用編輯器匯入/AlwaysCook）；推理殼=Face/NiceInkFaceOnnx
+        （坑：SetInputTensorShapes 後輸出形狀可能不解析→符號形狀 fallback）。
+        **NNE ORT 非編輯器目標預設 IntraOp=1 單線程＝打包版陷阱**——
+        DefaultEngine.ini 已設 GameThreadingOptions IntraOp=0。
+  - [x] **M2 臉部特徵點** ✅ 08-07（比路線甲更優的形態）：**task 解包後兩顆
+        tflite 都是純標準 op**（新版 face_landmarks_detector=256²/478 點無
+        attention 自訂 op）→ tf2onnx 直轉＝**同權重同索引零重標**
+        （models/face_detector.onnx 128²/896 anchor＋face_landmarks.onnx）。
+        C++ 全鏈=Face/NiceInkFaceLandmarks（BlazeFace 解碼/加權 NMS/眼點旋轉
+        ROI/裁切/映回）；對賬儀器=Tools/FacePipeline/mp_onnx_landmarks.py：
+        vs mediapipe 官方 9/10 張 mean<2px、唯一離群=眼部全遮臉（雙方同等
+        合法猜測、overlay 目檢確認）。
+  - [x] **M3 古典影像處理 C++ 化** ✅ 08-07：引擎自帶 OpenCV 插件
+        opencv_world455＝**完整 contrib 版（shape/photo/calib3d 全有）**，
+        TPS/TELEA/fitEllipse/estimateAffine2D 全部原生呼叫；Poisson 膜/羽化/
+        自然填充=numpy 直譯。坑：**UE 的 imgcodecs 沒帶 jpeg**→影像 IO 全走
+        UE ImageWrapper（順帶 unicode 路徑安全）；**UE 的 OpenCV 無平行化**
+        →BlurF 自寫 ParallelFor 可分離高斯（同 kernel 同邊界）＋TPS map
+        建一次 remap ×5（輸出 drift=0.1/255=浮點噪聲）。
+  - [x] **M4 管線編排 C++ 化** ✅ 08-07：Face/NiceInkFaceBakery{Core,Warp}
+        =selfie_to_face_texture v7 十二步全移植（現行組態：鬍留貼圖/擴張島/
+        眼閉變體；死路不移植=鬍區 LaMa 重生、DIRECT_MODE、legacy 單 mask、
+        v5 flatten、seam QA 儀器）。**金樣本對賬（8 張）**：face_open/closed
+        rgb mean 2.0~2.9（p95≤9、多人照 5.4）、alpha 全等、eye_mask_ink
+        ≥99.997%、skin_color Δ≤3、emma **同文案拒收**（Head mask too small）；
+        儀器=gen_gold_refs.py＋compare_parity.py＋NiFaceBake console 指令
+        （dump 模式含中間產物）。已知等價差異（記帳）：顆粒 RNG 不同源
+        （統計等價）、BiSeNet 前處理 PIL vs INTER_AREA（label 一致 99.7~99.9%）、
+        JPEG 解碼器、**EXIF 方向不套用**（cv2.imread 會套——手機直幅照差異點，
+        待補 EXIF 旋轉）。
+  - [x] **M5 併入 Persona** ✅ 08-07：BeginSelfieIntake 內建管線優先
+        （`-facevenv` 強制舊 venv 路=對照組）；眼罩 sumo 烘焙＋縮圖＋
+        skin_color.json 同批 C++ 化（工件合約與 intake_selfie.py 一字不差、
+        intake_log.txt 照寫）；模型常駐快取（首次 ~65s 載入、之後零冷啟）。
+        E2E 實測（NiMenuSelfie 真 Persona 路）：DONE native＋ActivateFace＋
+        FaceRevision 遞增。**耗時：暖 88s/冷 156s**（python venv 61~107s——
+        大魚已收割：TPS 107→22s、flat-field 56→26s；剩餘大頭=LaMa 推理
+        ~15s/趟×2＋冷啟 session 65s）。
+  - 遺留（後續）：(a) fp16 量化（260MB→~130MB 入包＋冷啟砍半）；
+    (b) EXIF 方向；(c) 打包版全流程實測（staging/單線程 ini 生效）；
+    (d) **模型不在 git**（同 venv 時代）——新機器要從
+    Tools/FacePipeline/models 複製到 Content/FaceBakery/models。
 - C2 HUD 墨刷 UI kit 三選一（現成包/AI 生成/手繪；07-15 使用者暫停討論）——
   本任務維持 token HUD 出貨形態。
 - C3 噴射出口與褌的視覺（SPEC 待定 #11）。

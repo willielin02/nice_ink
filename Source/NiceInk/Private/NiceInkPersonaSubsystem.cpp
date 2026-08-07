@@ -1,6 +1,9 @@
 #include "NiceInkPersonaSubsystem.h"
 
+#include "Async/Async.h"
 #include "Dom/JsonObject.h"
+#include "Face/NiceInkFaceBakery.h"
+#include "HAL/FileManager.h"
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
 #include "ImageUtils.h"
@@ -428,6 +431,34 @@ void UNiceInkPersonaSubsystem::BeginSelfieIntake(const FString& SelfiePath)
 	{
 		return; // 管線跑一趟要幾十秒——重入忽略
 	}
+
+	// 內建管線優先（SPEC #52 定案①）：模型在 Content/FaceBakery 就緒即走 C++/ONNX；
+	// -facevenv＝強制舊 venv python 路（開發對照組）
+	const bool bForceVenv = FParse::Param(FCommandLine::Get(), TEXT("facevenv"));
+	if (!bForceVenv && FNiFaceBakery::IsAvailable())
+	{
+		PendingIntakeId = FDateTime::Now().ToString(TEXT("%Y%m%d-%H%M%S"));
+		const FString OutDir = FPaths::ConvertRelativePathToFull(LibraryDir() / PendingIntakeId);
+		IFileManager::Get().MakeDirectory(*OutDir, /*Tree=*/true);
+		IntakeState = EFaceIntakeState::Running;
+		IntakeStartTime = FPlatformTime::Seconds();
+		NativeIntake = MakeShared<FNativeIntakeState, ESPMode::ThreadSafe>();
+		TSharedPtr<FNativeIntakeState, ESPMode::ThreadSafe> State = NativeIntake;
+		UE_LOG(LogTemp, Log, TEXT("NiPersona: selfie intake started NATIVE (%s -> %s)"), *SelfiePath, *PendingIntakeId);
+		Async(EAsyncExecution::Thread, [SelfiePath, OutDir, State]()
+		{
+			FString Err;
+			State->bSuccess = FNiFaceBakery::RunIntake(SelfiePath, OutDir, Err);
+			State->bDone = true;
+		});
+		if (!IntakeTicker.IsValid())
+		{
+			IntakeTicker = FTSTicker::GetCoreTicker().AddTicker(
+				FTickerDelegate::CreateUObject(this, &UNiceInkPersonaSubsystem::TickIntake), 0.5f);
+		}
+		return;
+	}
+
 	if (!FPaths::FileExists(FacePipelinePython))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("NiPersona: face pipeline python missing (%s) — selfie intake unavailable on this machine"), FacePipelinePython);
@@ -469,6 +500,35 @@ void UNiceInkPersonaSubsystem::BeginSelfieIntake(const FString& SelfiePath)
 
 bool UNiceInkPersonaSubsystem::TickIntake(float /*DeltaSeconds*/)
 {
+	// 內建管線路：輪詢背景執行緒完成旗標（成功語義與行程路一致）
+	if (NativeIntake.IsValid())
+	{
+		if (IntakeState != EFaceIntakeState::Running)
+		{
+			NativeIntake.Reset();
+			IntakeTicker.Reset();
+			return false;
+		}
+		if (!NativeIntake->bDone)
+		{
+			return true;
+		}
+		const bool bOk = NativeIntake->bSuccess;
+		NativeIntake.Reset();
+		if (bOk && ActivateFace(PendingIntakeId))
+		{
+			IntakeState = EFaceIntakeState::Done;
+			UE_LOG(LogTemp, Log, TEXT("NiPersona: selfie intake DONE native ('%s', face rev %d)"), *ActiveFaceId, FaceRevision);
+		}
+		else
+		{
+			IntakeState = EFaceIntakeState::Failed;
+			UE_LOG(LogTemp, Warning, TEXT("NiPersona: selfie intake FAILED (native)"));
+		}
+		IntakeTicker.Reset();
+		return false;
+	}
+
 	if (IntakeState != EFaceIntakeState::Running || !IntakeProc.IsValid())
 	{
 		IntakeTicker.Reset();

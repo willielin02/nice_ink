@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Containers/Ticker.h"
 #include "HAL/PlatformProcess.h"
+#include "HAL/ThreadSafeBool.h"
 #include "Interfaces/OnlineUserCloudInterface.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "NiceInkPersonaSubsystem.generated.h"
@@ -120,6 +121,15 @@ private:
 	double IntakeStartTime = 0.0;
 	FString PendingIntakeId; // 本次上傳的 library id（完成後 Activate）
 	FString ActiveFaceId;
+
+	// 內建管線（SPEC #52 C1）背景執行結果——worker 寫、game thread 讀；
+	// shared 持有＝subsystem 先關閉也不懸掛
+	struct FNativeIntakeState
+	{
+		FThreadSafeBool bDone = false;
+		FThreadSafeBool bSuccess = false;
+	};
+	TSharedPtr<FNativeIntakeState, ESPMode::ThreadSafe> NativeIntake;
 
 	// 縮圖快取（UPROPERTY＝runtime 匯入貼圖的 GC 錨——Slate brush 不保 GC）
 	UPROPERTY(Transient)

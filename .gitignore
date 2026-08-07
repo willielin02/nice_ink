@@ -79,8 +79,14 @@ $RECYCLE.BIN/
 Tools/FacePipeline/models/lama_fp32.onnx
 Tools/FacePipeline/models/79999_iter.pth
 Tools/FacePipeline/models/bisenet_512.onnx
+Tools/FacePipeline/models/face_detector.onnx
+Tools/FacePipeline/models/face_landmarks.onnx
 Tools/FacePipeline/models/*.onnx.data
+Tools/FacePipeline/models/task_extract/
 Tools/FacePipeline/venv/
+
+# In-game face bakery models (copies of the above; data/ stays in git)
+Content/FaceBakery/models/
 
 # Face pipeline - per-run artifacts (regenerable)
 Tools/FacePipeline/out/
