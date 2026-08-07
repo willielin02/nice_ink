@@ -183,10 +183,17 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
         FaceRevision 遞增。**耗時：暖 88s/冷 156s**（python venv 61~107s——
         大魚已收割：TPS 107→22s、flat-field 56→26s；剩餘大頭=LaMa 推理
         ~15s/趟×2＋冷啟 session 65s）。
+  - [x] **打包驗證** ✅ 08-07：Development BuildCookRun BUILD SUCCESSFUL；
+        FaceBakery models/data 全數 NonUFS 進包＋opencv_world455.dll＋
+        NNERuntimeORT Onnxruntime binaries 就位；**包內 exe 跑 NiFaceBake
+        =DONE 34 秒**（Development 最佳化＋IntraOp=0 ini 生效——比編輯器
+        二進位快 4 倍、比 venv python 快 2~3 倍），輸出 vs python ref
+        =rgb mean 2.04（與編輯器版一字不差）。
   - 遺留（後續）：(a) fp16 量化（260MB→~130MB 入包＋冷啟砍半）；
-    (b) EXIF 方向；(c) 打包版全流程實測（staging/單線程 ini 生效）；
-    (d) **模型不在 git**（同 venv 時代）——新機器要從
-    Tools/FacePipeline/models 複製到 Content/FaceBakery/models。
+    (b) EXIF 方向（cv2.imread 會套、ImageWrapper 不套——手機直幅照）；
+    (c) **模型不在 git**（同 venv 時代）——新機器要從
+    Tools/FacePipeline/models 複製到 Content/FaceBakery/models；
+    (d) 個人檔案頁實拍手感/畫質＝以使用者 viewport 為準。
 - C2 HUD 墨刷 UI kit 三選一（現成包/AI 生成/手繪；07-15 使用者暫停討論）——
   本任務維持 token HUD 出貨形態。
 - C3 噴射出口與褌的視覺（SPEC 待定 #11）。
