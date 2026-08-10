@@ -27,7 +27,8 @@ namespace
 	const TCHAR* CloudAssetsFile = TEXT("persona_assets_v1.sav");
 	const TCHAR* CloudSettingsFile = TEXT("persona_settings_v1.sav");
 
-	// 自拍→臉管線（開發機直跑；打包版接法＝SPEC #52 三選一待裁）
+	// 自拍→臉管線 venv 對照組（正式路＝內建 C++/ONNX FNiFaceBakery，SPEC #52
+	// 定案①；此 python 路只在 -facevenv 或模型檔缺席時使用）
 	const TCHAR* FacePipelinePython = TEXT("C:/games/Unreal Engine/nice_ink_face_pipeline/venv/Scripts/python.exe");
 }
 
