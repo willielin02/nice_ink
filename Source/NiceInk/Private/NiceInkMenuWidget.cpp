@@ -175,13 +175,15 @@ void SNiMenu::CommitName()
 	{
 		return;
 	}
+	// 只有「玩家真的改了字」才落檔成自訂名——輸入框顯示的平台/保底名原樣按下
+	// Enter 不算自訂（名字繼續跟平台走）
 	const FString Clean = UNiceInkGameInstance::SanitizePlayerName(NameBox->GetText().ToString());
-	if (!Clean.IsEmpty() && Clean != Inst->PlayerDisplayName)
+	if (!Clean.IsEmpty() && Clean != Inst->GetEffectiveDisplayName())
 	{
 		Inst->PlayerDisplayName = Clean;
 		Inst->SaveSettings();
 	}
-	NameBox->SetText(FText::FromString(Inst->PlayerDisplayName));
+	NameBox->SetText(FText::FromString(Inst->GetEffectiveDisplayName()));
 }
 
 void SNiMenu::OpenJoinPage(const FString& PrefillCode)
@@ -359,6 +361,13 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 								{
 									CommitName();
 									ErrorBanner.Reset();
+									// 臉制閘門（2026-08-10 user 定案：一定要上傳照片才能開始）
+									if (!HasFace())
+									{
+										bFaceGateNudge = true;
+										OpenProfilePage();
+										return FReply::Handled();
+									}
 									if (UNiceInkSessionSubsystem* S = Sessions()) { S->HostSession(IsLan(), bPublicRoom); }
 									return FReply::Handled();
 								})
@@ -392,6 +401,13 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 								{
 									CommitName();
 									ErrorBanner.Reset();
+									// 臉制閘門：加入也要先有臉（與 Host 同一道門）
+									if (!HasFace())
+									{
+										bFaceGateNudge = true;
+										OpenProfilePage();
+										return FReply::Handled();
+									}
 									Page = EPage::Join;
 									CodeBuffer.Reset();
 									bSearchKicked = false;
@@ -848,6 +864,19 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 					[
 						SNew(SVerticalBox)
 
+						// --- 臉制閘門提示（無臉按 Host/Join 被導來時亮；有臉即滅）---
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 0, 0, 14)
+						[
+							SNew(STextBlock).Font(Font(13)).ColorAndOpacity(NiHudColor::Red)
+								.AutoWrapText(true)
+								.Visibility_Lambda([this]()
+								{
+									return (bFaceGateNudge && !HasFace())
+										? EVisibility::Visible : EVisibility::Collapsed;
+								})
+								.Text(Loc(ENiLocKey::FaceGateHint))
+						]
+
 						// --- 名字（v4.0e：辨識＝名字＋臉並列，名字欄回歸）---
 						+ SVerticalBox::Slot().AutoHeight()
 						[
@@ -924,6 +953,14 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 								.AutoWrapText(true)
 								.Text(Loc(ENiLocKey::BrowHint))
 						]
+						// 隱私如實聲明（2026-08-10 user 定案：本機處理、無伺服器、
+						// 只有同房玩家看得到——每句話都要在架構上恆真才准寫在這）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, 6, 0, 0)
+						[
+							SNew(STextBlock).Font(Font(11)).ColorAndOpacity(NiHudColor::InkDim)
+								.AutoWrapText(true)
+								.Text(Loc(ENiLocKey::PrivacyHint))
+						]
 						// 管線狀態列（Running/Done/Failed；Idle 隱藏）
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, 8, 0, 0)
 						[
@@ -998,7 +1035,7 @@ void SNiMenu::OpenProfilePage()
 	// 開頁播種名字欄（雲端偏好可能在建 UI 後才到）＋重建臉庫列
 	if (NameBox.IsValid() && GI())
 	{
-		NameBox->SetText(FText::FromString(GI()->PlayerDisplayName));
+		NameBox->SetText(FText::FromString(GI()->GetEffectiveDisplayName()));
 	}
 	RefreshFaceRow();
 }
@@ -1082,6 +1119,12 @@ UNiceInkPersonaSubsystem* SNiMenu::Persona() const
 {
 	UNiceInkGameInstance* Inst = GI();
 	return Inst ? Inst->GetSubsystem<UNiceInkPersonaSubsystem>() : nullptr;
+}
+
+bool SNiMenu::HasFace() const
+{
+	const UNiceInkPersonaSubsystem* P = Persona();
+	return P && P->HasCustomFace();
 }
 
 void SNiMenu::PickSelfieAndIntake()

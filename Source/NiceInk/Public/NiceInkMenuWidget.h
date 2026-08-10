@@ -60,6 +60,7 @@ private:
 	bool bPublicRoom = false;    // invite only（預設）／public
 	bool bSearchKicked = false;  // 進 join 頁自動搜一次
 	FString ErrorBanner;         // 斷線原因（host/join 動作時清除）
+	bool bFaceGateNudge = false; // 臉制閘門：無臉按 Host/Join＝導個人檔案頁＋亮提示
 	FString FontSample;          // 字體取樣行（robo 驗證；空=不顯示）
 	double NextListRebuildTime = 0.0;
 	int32 LastListStamp = -1;    // 房列表重建判定（數量+首名雜湊）
@@ -109,6 +110,7 @@ private:
 	TSharedRef<SWidget> BuildLanguagePage(); // 13 語母語名全列網格（「文A」鈕入口）
 	TSharedRef<SWidget> BuildProfilePage();  // 個人檔案（SPEC #52 v4.0e：名字＋自拍＋現金）
 	class UNiceInkPersonaSubsystem* Persona() const;
+	bool HasFace() const;                    // 臉制閘門（2026-08-10：無臉不開玩）
 	void PickSelfieAndIntake();              // 檔案對話框→自拍管線
 	TSharedRef<SWidget> MakeGhostButton(const FString& Label, TFunction<void()> OnClick);
 	TSharedRef<SWidget> MakeChip(const FString& Label, bool bPublicValue);

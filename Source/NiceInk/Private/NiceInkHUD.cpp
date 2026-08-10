@@ -20,6 +20,7 @@
 #include "NiceInkCharacter.h"
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
+#include "NiceInkFaceShare.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkTypes.h"
 #include "NiceInkUiTokens.h"
@@ -371,9 +372,21 @@ UTexture2D* ANiceInkHUD::GetFaceIcon(int32 AvatarIdx)
 
 float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float Size)
 {
-	// 臉像＝身分載體（SPEC #52 臉制）：紙框圓角底＋臉貼圖
+	// 臉像＝身分載體（SPEC #52 臉制）：紙框圓角底＋臉貼圖。
+	// 房內分發自訂臉優先（2026-08-10）；沒到貨前先用名冊臉墊著
 	const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
-	UTexture2D* Face = NIPS ? GetFaceIcon(NIPS->AvatarIndex) : nullptr;
+	UTexture2D* Face = nullptr;
+	if (NIPS)
+	{
+		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+		{
+			Face = Share->GetOpen(NIPS->SeatIndex);
+		}
+		if (!Face)
+		{
+			Face = GetFaceIcon(NIPS->AvatarIndex);
+		}
+	}
 	if (!Face)
 	{
 		return 0.0f;

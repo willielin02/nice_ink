@@ -18,8 +18,17 @@ public:
 
 	// --- 本機偏好（讀改後呼叫 SaveSettings 持久化）---
 
+	// 玩家自訂名（空＝從未自訂）。畫面與連線一律走 GetEffectiveDisplayName()——
+	// 自訂名 > 平台名 > session 保底；這欄只存「玩家親手輸入過的」
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
 	FString PlayerDisplayName;
+
+	// 有效顯示名（2026-08-10 user 定案：預設名直接從平台拿、減少摩擦）：
+	// ①玩家自訂名（個人檔案頁輸入）②平台帳號顯示名（現行=Epic 暱稱；B5 切
+	// Steam 票證後同一條 OSS Identity 介面自動變 Steam persona，零改動）
+	// ③離線/LAN 保底＝session 隨機 rikishiNN（transient 不落檔——別把鷹架名
+	// 寫進玩家存檔）。語言同理從 OS 偵測（Steam 語言拉取＝B5 併入）。
+	FString GetEffectiveDisplayName() const;
 
 	// INDEX_NONE＝交給席位輪派
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
@@ -73,6 +82,12 @@ public:
 	UPROPERTY(Transient)
 	FString HostRoomCode;
 
+	// robo 鉤子：延遲截圖（Shot showui＝含 Slate/HUD）。住 GameInstance＝任何
+	// 世界/任何 PC 類都路由得到（選單/道場/直連 client 通吃）、core ticker 跨
+	// ServerTravel 存活——NiMenuShot 只活在選單 PC 的補位
+	UFUNCTION(Exec)
+	void NiShot(float DelaySeconds, const FString& Name);
+
 	// 各輸入輪詢點共用的靈敏度倍率（鉗 0.2–3.0）
 	float GetMouseScale() const;
 
@@ -104,6 +119,9 @@ private:
 	float GetBgmVolume() const;
 
 	FString PendingDisconnectReason;
+
+	// 離線/LAN 的 session 保底名（不入存檔；見 GetEffectiveDisplayName）
+	FString SessionFallbackName;
 
 	void HandleNetworkFailure(UWorld* World, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& ErrorString);
 	void HandleTravelFailure(UWorld* World, ETravelFailure::Type FailureType, const FString& ErrorString);

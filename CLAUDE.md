@@ -12,8 +12,8 @@
 猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產；局內 HUD 用 canvas 畫、
 輸入用輪詢；**主選單自 08-06 起＝Slate C++ 直寫（仍零編輯器資產；user 裁決——
 canvas 做不到毛玻璃半透明）**。
-**設計的唯一權威是 `SPEC.md`**（v4.0b——2026-08-03 描圖圖案池正推八式終定案；
-v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
+**設計的唯一權威是 `SPEC.md`**（v4.0f——2026-08-10 首啟身分與強制上傳制
+#52 追記②；v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
 工作帳本與待使用者項在 `Docs/SHIP_PLAN.md`。
 
 ## 鐵律（違反任何一條都是嚴重事故）
@@ -281,8 +281,32 @@ v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心
   換行；task 解包=兩顆 tflite 純標準 op→tf2onnx 同權重直轉（索引零重標）；
   對賬儀器=mp_onnx_landmarks/gen_gold_refs/compare_parity.py＋NiFaceBake
   console 指令；遺留=fp16 量化/EXIF 方向/打包版實測；venv 路=對照組保留；
-  **待做=自訂臉雲端儲存+房內分發**（bytes 列車擴大到 MB 級；沒有它房內他人
-  仍看名冊臉）。
+  **08-10 房內分發 SHIPPED-自驗（user 質問「為什麼不修」後當場補完）**＝
+  `NiceInkFaceShare`（WorldSubsystem 登記簿：席位→臉三貼圖+膚色+版本；NIF1
+  blob=magic+tone+三段 png）＋角色 ServerFace*/ClientFace* 分塊列車（16KB+CRC
+  =B3 同款、節奏 8×16KB/0.1s 防 reliable 溢位）＋GameMode 集散地（seat→blob
+  庫、viewer 報到、晚到者補發）；套用=EnsureAvatarApplied 輪詢登記簿蓋名冊臉
+  ＋DrawFaceTok 自訂臉優先＋本人 Persona 直讀零延遲——**此前局內連本人都穿
+  名冊臉（ApplyCustomAvatar 只有選單舞台在用）＝一併修好**；WorldType==Game
+  才啟動=robo 零干擾；驗證=雙實例 log 四向對賬（server/client view×兩席）。
+  **待做只剩自訂臉雲端儲存**（跨裝置隨身；房內可見已閉環）＋blob 壓縮＋88s
+  背景烘焙 UX。
+  **08-10 首啟身分制（user 五條定案）**＝①強制上傳閘門（Host/Join 無臉→導
+  個人檔案頁+FaceGateHint 紅字；不上傳=不玩）②選單預設跳舞力士=作者本人臉
+  （Content/AuthorFace 四工件 runtime 匯入、NonUFS staging；**永不成為玩家
+  選項**=只活在舞台預設分支）③隱私如實聲明 PrivacyHint（本機處理/無伺服器/
+  僅同房可見——句句架構恆真）④平台名優先 GetEffectiveDisplayName()=自訂名>
+  平台帳號名（Epic 現行、B5 Steam 同 OSS 介面）>session 保底 rikishi 三位數
+  （**不落檔**；三位數=滿房撞名 1.5%）；語言=OS 偵測、Steam 拉取隨 B5。
+  鐵坑：**NULL/LAN 假登入暱稱=電腦名-編號（洩主機名）**→IsOnlineServiceConfigured
+  閘住只認真平台；**EOS ini 下裸 ?listen/IP 直連=network error 回選單**→直連
+  測試必帶 DefaultPlatformService=NULL（play_ingame.bat 已補）；**「誰的臉」
+  必經 user 指認永不假設**（臉庫最新上傳≠本人——08-10 誤把 CaseOh 測試照
+  當作者臉烘進 Content 的血價；user 本人=7AF4）。
+  工具：`play_full_flow_4p.bat`=四視窗四獨立身分（-saveddirsuffix=引擎原生
+  Saved_<X>/ 沙箱=乾淨玩家身分工作流、測完刪資料夾）；`NiShot`=GameInstance
+  Exec 延遲截圖（任何世界/PC 類、core ticker 跨 travel——NiMenuShot 只活在
+  選單 PC 的補位）。
   **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝
   `NiceInkMenuStage` 全程式生成（隱形地板+相機+無影平行光×2+完整
   ANiceInkCharacter 替身）：墨水 RT 壓 512 省 VRAM、臉=SetupAsMenuDummy 直指

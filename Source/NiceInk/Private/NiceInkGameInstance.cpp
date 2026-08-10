@@ -5,6 +5,7 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "IOnlineSubsystemEOS.h"
+#include "Interfaces/OnlineIdentityInterface.h"
 #include "Kismet/GameplayStatics.h"
 #include "NiceInkLocText.h"
 #include "NiceInkPersonaSubsystem.h"
@@ -162,12 +163,55 @@ void UNiceInkGameInstance::LoadSettings()
 		SavedLang, *ForcedCulture, NiLoc::DetectDefaultLang(), MenuLanguage,
 		NiLoc::LangCultureCode(MenuLanguage));
 
-	if (PlayerDisplayName.IsEmpty())
+	// 保底名只活在這個 session（2026-08-10：預設名從平台拿——鷹架名不落檔，
+	// 玩家存檔裡只該有他親手輸入的名字）。三位數＝滿房 6 人撞名 1.5%
+	//（兩位數 14%——名字要服社交叫喚，同房同名是實際干擾；2026-08-10 user 抓改）
+	SessionFallbackName = FString::Printf(TEXT("rikishi%03d"), FMath::RandRange(0, 999));
+}
+
+void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)
+{
+	// core ticker＝跨關卡存活；Shot 必走 PC->ConsoleCommand（viewport exec 鏈）
+	TWeakObjectPtr<UGameInstance> WeakGI = this;
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[WeakGI, Name](float) -> bool
 	{
-		// 首次啟動的預設名：可讀、可直接開玩、也逼著玩家看見改名入口
-		PlayerDisplayName = FString::Printf(TEXT("rikishi%02d"), FMath::RandRange(0, 99));
-		SaveSettings();
+		UGameInstance* GI = WeakGI.Get();
+		UWorld* World = GI ? GI->GetWorld() : nullptr;
+		if (APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr)
+		{
+			PC->ConsoleCommand(FString::Printf(TEXT("Shot showui filename=%s"), *Name));
+		}
+		return false; // 一次性
+	}), FMath::Max(0.1f, DelaySeconds));
+}
+
+FString UNiceInkGameInstance::GetEffectiveDisplayName() const
+{
+	// ① 玩家自訂名
+	if (!PlayerDisplayName.IsEmpty())
+	{
+		return PlayerDisplayName;
 	}
+	// ② 平台帳號顯示名（Epic 現行；B5 Steam 票證＝同介面同路）。
+	// 只認真平台：NULL/LAN 的假登入會把「電腦名-編號」當暱稱回來（實測
+	// Willie_desktop-5）＝洩漏主機名，一律落到③保底。
+	// Sanitize＝進 ?Name= 的同一道門（空白會被剝掉——URL 語法限制）
+	if (IOnlineSubsystem* OSS = UNiceInkSessionSubsystem::IsOnlineServiceConfigured()
+		? Online::GetSubsystem(GetWorld()) : nullptr)
+	{
+		IOnlineIdentityPtr Identity = OSS->GetIdentityInterface();
+		if (Identity.IsValid() && Identity->GetLoginStatus(0) == ELoginStatus::LoggedIn)
+		{
+			const FString Nick = SanitizePlayerName(Identity->GetPlayerNickname(0));
+			if (!Nick.IsEmpty())
+			{
+				return Nick;
+			}
+		}
+	}
+	// ③ 離線/LAN 保底
+	return SessionFallbackName;
 }
 
 void UNiceInkGameInstance::ApplyLanguage(int32 LangIndex)

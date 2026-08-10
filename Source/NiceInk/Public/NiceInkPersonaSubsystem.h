@@ -57,8 +57,15 @@ public:
 	// active.txt 指目前穿的那張；點選即換、換臉=FaceRevision 遞增）---
 	TArray<FString> ListLibraryFaceIds() const;  // 新→舊
 	const FString& GetActiveFaceId() const { return ActiveFaceId; }
+	FString GetActiveFaceDir() const;            // library/<active>；無臉＝空字串（房內分發打包用）
 	bool ActivateFace(const FString& Id);        // 匯入 library/<id>＋寫 active 指針
 	UTexture2D* GetFaceThumb(const FString& Id); // 縮圖懶載入（無檔＝nullptr）
+
+	// --- 作者臉（2026-08-10 user 定案）：選單舞台的預設力士＝作者本人。
+	// 工件＝Content/AuthorFace/（NonUFS 原樣入包、runtime 匯入）；只給選單舞台
+	// 穿——永不進臉庫、永不是玩家可選項（上傳自拍後即被自己的臉取代）。
+	bool GetAuthorFace(UTexture2D*& OutOpen, UTexture2D*& OutClosed,
+		UTexture2D*& OutMask, FLinearColor& OutSkin);
 
 	// 雲端資產唯讀視圖（個人檔案頁現金／選單舞台穿刺青用；無資產＝nullptr）
 	class UNiceInkSaveGame* GetCloudSaveView();
@@ -94,6 +101,9 @@ private:
 	FString LibraryDir() const;                    // <Saved>/PlayerFace/library
 	void LoadCustomFaceFromDisk();                 // 啟動載入（含舊平鋪檔遷移）
 	bool ImportFaceArtifacts(const FString& Dir);  // 三張 png＋skin_color.json → 記憶體
+	// 匯入共用核心（自訂臉／作者臉同一套工件格式）
+	static bool ImportFaceDirInto(const FString& Dir, TObjectPtr<UTexture2D>& OutOpen,
+		TObjectPtr<UTexture2D>& OutClosed, TObjectPtr<UTexture2D>& OutMask, FLinearColor& OutSkin);
 	bool TickIntake(float DeltaSeconds);           // 管線行程輪詢（FTSTicker）
 
 	EPullState AssetsPull = EPullState::NotStarted;
@@ -114,6 +124,16 @@ private:
 	TObjectPtr<UTexture2D> EyeMaskInkTex;
 	FLinearColor CustomSkinTone = FLinearColor(0.4f, 0.22f, 0.13f);
 	int32 FaceRevision = 0;
+
+	// 作者臉快取（懶載入一次；UPROPERTY＝runtime 匯入貼圖的 GC 錨）
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> AuthorFaceOpenTex;
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> AuthorFaceClosedTex;
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> AuthorEyeMaskInkTex;
+	FLinearColor AuthorSkinTone = FLinearColor(0.4f, 0.22f, 0.13f);
+	bool bAuthorFaceLoadTried = false;
 
 	EFaceIntakeState IntakeState = EFaceIntakeState::Idle;
 	FProcHandle IntakeProc;

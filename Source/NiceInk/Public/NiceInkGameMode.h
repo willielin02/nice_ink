@@ -202,7 +202,28 @@ public:
 	// bytes＝UNiceInkSaveGame 序列化；驗證→套用（錢包＋逐幅 MulticastRestoreWork）
 	void ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);
 
+	// --- 自訂臉房內分發（2026-08-10；server 端集散地）---
+	// 上行驗收終點：存原始 blob（晚到者補發用）＋入主機登記簿＋廣播給已報到 viewer
+	void OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<uint8>& Blob);
+	// 遠端 viewer 報到（Character::ServerFaceHello）：補發所有已知臉（跳過本人席位）
+	void RegisterFaceViewer(ANiceInkCharacter* Viewer);
+
 private:
+	// 自訂臉分發內部（節奏發送＝防 reliable 緩衝溢位；一次一 job 順序出貨）
+	TMap<int32, TSharedPtr<TArray<uint8>>> FaceBlobs;      // seat → 原始 blob
+	TArray<TWeakObjectPtr<ANiceInkCharacter>> FaceViewers; // 已報到的遠端收件角色
+	struct FNiFaceSendJob
+	{
+		TWeakObjectPtr<ANiceInkCharacter> Target;
+		int32 Seat = -1;
+		TSharedPtr<TArray<uint8>> Blob;
+		int32 NextOff = 0;
+		bool bBegun = false;
+	};
+	TArray<FNiFaceSendJob> FaceSendQueue;
+	FTimerHandle FaceSendTimer;
+	void EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat, const TSharedPtr<TArray<uint8>>& Blob);
+	void TickFaceSend();
 	FTimerHandle PhaseTimerHandle;
 	FTimerHandle AutoStartTimerHandle;
 

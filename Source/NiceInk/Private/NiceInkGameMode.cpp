@@ -6,7 +6,9 @@
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/Crc.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkFaceShare.h"
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
@@ -74,7 +76,8 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 			{
 				if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 				{
-					const FString Wanted = UNiceInkGameInstance::SanitizePlayerName(GI->PlayerDisplayName);
+					// 有效名＝自訂 > 平台 > session 保底（2026-08-10 平台名優先制）
+					const FString Wanted = UNiceInkGameInstance::SanitizePlayerName(GI->GetEffectiveDisplayName());
 					if (!Wanted.IsEmpty())
 					{
 						ChangeName(NewPlayer, Wanted, false);
@@ -310,6 +313,113 @@ void ANiceInkGameMode::RestoreCharacter(ANiceInkCharacter* Character)
 	for (const FInkWork& Work : Save->Tattoos)
 	{
 		Character->MulticastRestoreWork(Work); // 恩怨博物館：刺青跟著角色走
+	}
+}
+
+// --- 自訂臉房內分發（2026-08-10）---
+
+void ANiceInkGameMode::OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<uint8>& Blob)
+{
+	const ANiceInkPlayerState* PS = From ? From->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS || PS->SeatIndex < 0 || Blob.Num() <= 0)
+	{
+		return;
+	}
+	const int32 Seat = PS->SeatIndex;
+	TSharedPtr<TArray<uint8>> Shared = MakeShared<TArray<uint8>>(Blob);
+	FaceBlobs.Add(Seat, Shared);
+
+	// 主機自己也是 viewer：直接入本機登記簿（不走 RPC）
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+	{
+		Share->StoreBlob(Seat, Blob);
+	}
+
+	// 廣播給已報到的遠端 viewer（本人席位跳過——上傳前已入自己的簿）
+	for (const TWeakObjectPtr<ANiceInkCharacter>& V : FaceViewers)
+	{
+		ANiceInkCharacter* C = V.Get();
+		const ANiceInkPlayerState* VPS = C ? C->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+		if (C && (!VPS || VPS->SeatIndex != Seat))
+		{
+			EnqueueFaceJob(C, Seat, Shared);
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiFaceShare: host received face for seat %d (%d bytes, %d viewers)"),
+		Seat, Blob.Num(), FaceViewers.Num());
+}
+
+void ANiceInkGameMode::RegisterFaceViewer(ANiceInkCharacter* Viewer)
+{
+	if (!Viewer)
+	{
+		return;
+	}
+	FaceViewers.AddUnique(Viewer);
+	const ANiceInkPlayerState* VPS = Viewer->GetPlayerState<ANiceInkPlayerState>();
+	const int32 OwnSeat = VPS ? VPS->SeatIndex : INDEX_NONE;
+	for (const TPair<int32, TSharedPtr<TArray<uint8>>>& Pair : FaceBlobs)
+	{
+		if (Pair.Key != OwnSeat)
+		{
+			EnqueueFaceJob(Viewer, Pair.Key, Pair.Value);
+		}
+	}
+}
+
+void ANiceInkGameMode::EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat,
+	const TSharedPtr<TArray<uint8>>& Blob)
+{
+	if (!Target || Seat < 0 || !Blob.IsValid() || Blob->Num() <= 0)
+	{
+		return;
+	}
+	FNiFaceSendJob& Job = FaceSendQueue.AddDefaulted_GetRef();
+	Job.Target = Target;
+	Job.Seat = Seat;
+	Job.Blob = Blob;
+	if (!GetWorldTimerManager().IsTimerActive(FaceSendTimer))
+	{
+		GetWorldTimerManager().SetTimer(FaceSendTimer, this,
+			&ANiceInkGameMode::TickFaceSend, 0.1f, /*bLoop=*/true);
+	}
+}
+
+void ANiceInkGameMode::TickFaceSend()
+{
+	constexpr int32 ChunkSize = 16 * 1024;
+	int32 Budget = 8; // 8×16KB / 0.1s ≈ 1.3MB/s——與上行同節奏，防 reliable 緩衝溢位
+	while (FaceSendQueue.Num() > 0 && Budget > 0)
+	{
+		FNiFaceSendJob& Job = FaceSendQueue[0];
+		ANiceInkCharacter* C = Job.Target.Get();
+		if (!C || !Job.Blob.IsValid())
+		{
+			FaceSendQueue.RemoveAt(0); // 收件者離場：job 作廢
+			continue;
+		}
+		const TArray<uint8>& B = *Job.Blob;
+		if (!Job.bBegun)
+		{
+			C->ClientFaceBegin(Job.Seat, B.Num());
+			Job.bBegun = true;
+		}
+		while (Budget > 0 && Job.NextOff < B.Num())
+		{
+			TArray<uint8> Chunk(B.GetData() + Job.NextOff, FMath::Min(ChunkSize, B.Num() - Job.NextOff));
+			C->ClientFaceChunk(Job.Seat, Job.NextOff, Chunk);
+			Job.NextOff += Chunk.Num();
+			--Budget;
+		}
+		if (Job.NextOff >= B.Num())
+		{
+			C->ClientFaceEnd(Job.Seat, FCrc::MemCrc32(B.GetData(), B.Num()));
+			FaceSendQueue.RemoveAt(0);
+		}
+	}
+	if (FaceSendQueue.Num() == 0)
+	{
+		GetWorldTimerManager().ClearTimer(FaceSendTimer);
 	}
 }
 

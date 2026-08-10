@@ -821,6 +821,27 @@ public:
 	// server 端便利：把 bytes 切塊發下行列車給 owner
 	void SendPersonaToOwner(const TArray<uint8>& Bytes);
 
+	// --- 自訂臉房內分發（2026-08-10；登記簿＝UNiceInkFaceShare）---
+	// 上行：owner client 把本機臉工件 blob（NIF1 格式）分塊交給 server；
+	// 下行：server 把「席位 Seat 的臉」分塊發給本角色的 owner client（viewer）。
+	// LAN 與 EOS 同路（臉走房內 P2P 不走雲端）；PIE/robo（WorldType≠Game）不啟動。
+
+	UFUNCTION(Server, Reliable)
+	void ServerFaceHello(); // viewer 報到：server 補發所有已知臉（晚到者路）
+	UFUNCTION(Server, Reliable)
+	void ServerFaceBegin(int32 TotalBytes);
+	UFUNCTION(Server, Reliable)
+	void ServerFaceChunk(int32 Offset, const TArray<uint8>& Bytes);
+	UFUNCTION(Server, Reliable)
+	void ServerFaceEnd(uint32 Crc);
+
+	UFUNCTION(Client, Reliable)
+	void ClientFaceBegin(int32 Seat, int32 TotalBytes);
+	UFUNCTION(Client, Reliable)
+	void ClientFaceChunk(int32 Seat, int32 Offset, const TArray<uint8>& Bytes);
+	UFUNCTION(Client, Reliable)
+	void ClientFaceEnd(int32 Seat, uint32 Crc);
+
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
 
@@ -1004,6 +1025,24 @@ private:
 	int32 PersonaUploadTicksLeft = 0;
 	bool bPersonaUploadDone = false;
 	void MaybeUploadPersona();
+
+	// --- 自訂臉房內分發內部狀態（2026-08-10）---
+	int32 AppliedShareFaceRev = 0;   // 已套用的登記簿臉版本（0=尚未）
+	TArray<uint8> FaceUpBuf;         // server 端上行收件緩衝
+	int32 FaceUpExpected = -1;
+	int32 FaceUpReceived = 0;
+	TArray<uint8> FaceDownBuf;       // client 端下行收件（server 逐席序列發送＝單緩衝）
+	int32 FaceDownSeat = -1;
+	int32 FaceDownExpected = -1;
+	int32 FaceDownReceived = 0;
+	FTimerHandle FaceShareTimer;     // 開場輪詢：等佔有＋席位就緒
+	int32 FaceShareTicksLeft = 0;
+	bool bFaceShareStarted = false;
+	TSharedPtr<TArray<uint8>> FaceUpSendBuf; // 上行節奏發送（防 reliable 緩衝溢位）
+	int32 FaceUpSendOff = 0;
+	FTimerHandle FaceUpSendTimer;
+	void MaybeStartFaceShare();
+	void TickFaceUpload();
 
 	bool bSystemMenuOpen = false;
 	void PollSystemMenu(APlayerController* PC);

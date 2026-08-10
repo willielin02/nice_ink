@@ -83,6 +83,7 @@ private:
 
 	// persona 穿戴輪詢（SPEC #52 v4.0e：舞台力士＝自己的臉＋自己的刺青）
 	int32 AppliedFaceRev = 0;      // 已套用的自訂臉版本（0=尚未；換臉即重套）
+	bool bAuthorFaceApplied = false; // 無自訂臉時的預設＝作者臉（2026-08-10 user 定案）
 	bool bCloudTattoosApplied = false;
 	void DressDancerFromPersona();
 

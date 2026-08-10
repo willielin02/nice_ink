@@ -117,8 +117,9 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
       active.txt 指針、個人檔案頁縮圖列點選即換（酒金底線=穿著中）、舊平鋪檔
       自動遷移 library/legacy；⑤已有臉→按鈕變「重新上傳自拍」（ReuploadSelfie/
       SavedFaces ×13 語）。E2E 綠（遷移+新臉入庫+切換+文案截圖自查）。
-      **已知缺口（誠實記帳）**：(a) 自訂臉只有本人看得到——雲端儲存+房內分發
-      （MB 級 bytes 列車）未做＝房內他人仍見名冊臉（下一段工作）；(b) ~~管線=
+      **已知缺口（誠實記帳）**：(a) ~~自訂臉只有本人看得到——雲端儲存+房內分發
+      （MB 級 bytes 列車）未做＝房內他人仍見名冊臉~~（**08-10 房內分發 SHIPPED
+      ＝FaceShare 登記簿+臉列車，見 2026-08-10 進度記錄；殘=雲端儲存**）；(b) ~~管線=
       本機 venv 依賴＝正式出貨前必須裁決 SPEC #52 三選一~~（**08-07 已裁①遊戲
       內建且 C1 M1~M5 全站完成**——管線=C++/ONNX 內建、venv 退役為 -facevenv
       對照組，見 C1）；(c) legacy 遷移臉無縮圖=素塊（重上傳即有）；(d) 手感/
@@ -412,3 +413,70 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   本體=上架前必做（架構三選一分析待出：C++/ONNX / 雲端 / 外掛工具
   →**08-07 已裁①遊戲內建、C1 全站完成**）；②房主
   臉像上房間列表=待自拍上雲；③殘留名字點=迷宮亡靈 banner（封存系統）+debug HUD（開發用）。
+- **2026-08-10 首啟身分四連 BUILT-自驗（user 五條定案逐字：①選單背景預設力士
+  ＝作者臉②上傳後只能用自己的照片、作者臉永不成為可選項③一定要上傳照片才能
+  開始遊戲④隱私如實以告⑤預設名/語言從平台拿減摩擦）**：
+  - 作者臉=Content/AuthorFace/（08-10 最新管線烘的四工件、runtime 匯入、
+    DefaultGame.ini NonUFS staging 已加）；PersonaSubsystem::GetAuthorFace 懶載
+    （ImportFaceDirInto 共用核心抽出）；MenuStage 無自訂臉時穿作者臉、上傳完成
+    即被自訂臉分支蓋掉——作者臉只住選單舞台、永不進臉庫=「非選項」構造保證。
+  - 臉制閘門：SNiMenu Host/Join 按鈕無臉=導個人檔案頁+紅字 FaceGateHint
+    （13 語）；Join 頁入口被鎖=頁內鍵盤入房路徑天然在閘後；robo 鉤子
+    （NiMenuAutoHost/JoinCode 走 PC/subsystem 層）不受閘=測試 API 保留。
+  - 隱私聲明 PrivacyHint（13 語、個人檔案頁上傳鈕下）：「照片只在你的電腦上
+    處理——我們沒有伺服器，開發者永遠不會收到你的照片。只有同房間的玩家看得到
+    你的臉。」——每句在架構上恆真（本機 C++/ONNX；房內分發=同房可見本來就要）。
+  - 平台名優先：GetEffectiveDisplayName()=自訂名>平台暱稱(Epic 現行、B5 Steam
+    同 OSS Identity 介面零改動)>session 保底 rikishiNN（**不再落檔**——鷹架名
+    不進玩家存檔）；CommitName 只在「輸入≠有效名」才存自訂；?Name=/GameMode
+    主機路/名字欄播種全改走有效名。**鐵坑：NULL/LAN 假登入的暱稱=電腦名-編號
+    （實測 Willie_desktop-5）=洩漏主機名——IsOnlineServiceConfigured 閘住只認真
+    平台**。語言=OS 偵測現狀即平台行為；Steam GetCurrentGameLanguage 拉取=B5。
+  - 驗證：編譯零錯誤；-saveddirsuffix=ROBO 乾淨身分兩實例 NiMenuShot 截圖
+    （主選單=作者臉舞者✓、個人檔案頁=rikishi10 保底名+隱私聲明✓）；閘門點擊
+    路徑未上儀器（無輸入注入）=user viewport 一鍵可驗。
+  - 記帳：①強制上傳的完整價值要等「自訂臉房內分發」（C1 待做——沒有它房內
+    他人仍看名冊臉）；②烘焙 88s 在「等房期間背景跑」的 UX 前置未做；③名冊六
+    測試臉（含 caseoh/ibai 真人）出貨前要處理=閘後只剩 dev 路但資產仍在包裡。
+- **2026-08-10 自訂臉房內分發 SHIPPED-自驗（C1 待做項清掉；user 質問「為什麼
+  不修」後當場補完——強制上傳制的最後一哩）**：
+  - 架構=`UNiceInkFaceShare`（WorldSubsystem 登記簿：席位→臉貼圖三件組+膚色
+    +版本；NIF1 blob 格式=magic+tone+三段 png 原始位元組）＋角色臉列車
+    （ServerFaceHello/Begin/Chunk/End 上行、ClientFaceBegin/Chunk/End 下行；
+    16KB 塊+CRC=沿用 B3 位元組列車）＋GameMode 集散地（seat→blob 庫、viewer
+    報到名冊、節奏發送佇列 8×16KB/0.1s≈1.3MB/s=防 reliable 緩衝溢位；晚到者
+    ServerFaceHello 報到即補發全房已知臉、跳過本人席位）。
+  - 套用端：EnsureAvatarApplied 每 tick 輪詢登記簿（map find+int 比對）、
+    版本變了就 ApplyCustomAvatar 蓋名冊臉（名冊重套=版本歸零強制重疊；
+    SwapBodyMesh 換睡姿網格臉貼圖住元件成員=天然存活）；DrawFaceTok（大廳/
+    巡禮/指認全部臉像 icon）改自訂臉優先、沒到貨前名冊臉墊著；本人臉=
+    MaybeStartFaceShare 直讀 Persona 記憶體貼圖零延遲入簿（不等網路回聲）。
+  - 局內本人臉同時修好：此前 ApplyCustomAvatar 只有選單舞台在用＝**局內連
+    自己都是名冊臉**——現在四路全通。
+  - 範圍閘：WorldType==Game 才啟動（PIE/robo 全部既有測試零干擾）；LAN 與
+    EOS 同路（臉走房內列車不走雲端）。
+  - 驗證（listen+direct-connect 兩實例、兩個不同臉身分 -saveddirsuffix 沙箱、
+    NiShot 截圖+log 四向對賬）：host 端「seat 0 applied (server view)+seat 1
+    applied (server view)」／client 端「seat 1 applied (client view)+seat 0
+    applied (client view)」＝本人臉×兩端+對方臉×兩端全過；blob 1.27MB/1.60MB
+    CRC 全過；大廳席位列臉像 icon 上屏。
+  - 新工具：`NiShot`（GameInstance Exec 延遲截圖=任何世界/任何 PC 類可用、
+    core ticker 跨 travel——NiMenuShot 只活在選單 PC 的補位）。
+  - 過程鐵坑：①EOS ini 下裸 `/Game/Maps/L_Dojo?listen`+`127.0.0.1` 直連=
+    network error 回選單（EOS net driver 要 session 層；直連測試必帶
+    `-ini:Engine:[OnlineSubsystem]:DefaultPlatformService=NULL`——play_ingame.bat
+    未帶=EOS ini 下已壞，待修）；②同機 LAN 搜房 0 命中（防火牆擋 beacon）
+    =join-by-code 同機 E2E 不可用、驗證改走直連（B4 記帳原樣）。
+  - 記帳殘項：臉 blob 未壓縮（png 原樣 ~1.3MB/人；6 人房 host 上行尖峰
+    ~40MB=EOS 中繼下待實測）；換臉只在進房時上傳一次（房內不重發＝夠用，
+    選單才能換臉）；play_ingame.bat 的 EOS ini 直連壞需補 NETARG。
+- **2026-08-10 作者臉誤植事故＋修正（血價）**：我把 Saved/PlayerFace 臉庫最新
+  上傳（08-07/08-10）當成「user 本人的臉」烘進 Content/AuthorFace——實為 user
+  測試管線時餵的 **CaseOh 測試照**（對照表 Saved/face_identity_sheet.png 定罪；
+  差點把真人實況主肖像當作者臉出貨）。**user 親自指認：本人臉=7AF4**
+  （test_selfies/7AF4F8FF-*.jpg）。修正=venv intake_selfie 對該照重烘四工件
+  →替換 Content/AuthorFace→乾淨身分截圖驗證舞台=本人✓。
+  **鐵則：臉=身分資產，「誰的臉」永不假設、必經 user 指認**；臉庫≠本人
+  （開發機臉庫全是測試照）。名冊六臉來源：0=7AF4（user 本人）/1=cvd/
+  2=caseoh（實況主）/3=ibai（實況主）/4=img1/5=img0——出貨前名冊處理時
+  2/3 為肖像權硬阻斷、0 為 user 自己授權自己。

@@ -65,7 +65,8 @@ FString UNiceInkSessionSubsystem::BuildTravelOptions() const
 	FString Options;
 	if (const UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 	{
-		const FString Name = UNiceInkGameInstance::SanitizePlayerName(GI->PlayerDisplayName);
+		// 有效名＝自訂 > 平台 > session 保底（2026-08-10 平台名優先制）
+		const FString Name = UNiceInkGameInstance::SanitizePlayerName(GI->GetEffectiveDisplayName());
 		if (!Name.IsEmpty())
 		{
 			Options += FString::Printf(TEXT("?Name=%s"), *Name);

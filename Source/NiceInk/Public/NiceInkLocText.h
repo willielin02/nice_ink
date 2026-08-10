@@ -25,6 +25,8 @@ enum class ENiLocKey : uint8
 	NotSignedIn, BrowHint,
 	// 臉庫（2026-08-07：上傳過的臉全保存、點選即換）
 	ReuploadSelfie, SavedFaces,
+	// 臉制閘門＋隱私如實聲明（2026-08-10 user 定案：一定要上傳照片才能開始）
+	FaceGateHint, PrivacyHint,
 	COUNT
 };
 

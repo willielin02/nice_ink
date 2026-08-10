@@ -356,6 +356,11 @@ TArray<FString> UNiceInkPersonaSubsystem::ListLibraryFaceIds() const
 	return Ids;
 }
 
+FString UNiceInkPersonaSubsystem::GetActiveFaceDir() const
+{
+	return ActiveFaceId.IsEmpty() ? FString() : LibraryDir() / ActiveFaceId;
+}
+
 bool UNiceInkPersonaSubsystem::ActivateFace(const FString& Id)
 {
 	const FString Dir = LibraryDir() / Id;
@@ -390,7 +395,8 @@ double UNiceInkPersonaSubsystem::GetIntakeElapsedS() const
 		? FPlatformTime::Seconds() - IntakeStartTime : 0.0;
 }
 
-bool UNiceInkPersonaSubsystem::ImportFaceArtifacts(const FString& Dir)
+bool UNiceInkPersonaSubsystem::ImportFaceDirInto(const FString& Dir, TObjectPtr<UTexture2D>& OutOpen,
+	TObjectPtr<UTexture2D>& OutClosed, TObjectPtr<UTexture2D>& OutMask, FLinearColor& OutSkin)
 {
 	UTexture2D* Open = FImageUtils::ImportFileAsTexture2D(Dir / TEXT("face_open.png"));
 	UTexture2D* Closed = FImageUtils::ImportFileAsTexture2D(Dir / TEXT("face_closed.png"));
@@ -414,15 +420,48 @@ bool UNiceInkPersonaSubsystem::ImportFaceArtifacts(const FString& Dir)
 		if (FJsonSerializer::Deserialize(Reader, Root) && Root.IsValid() &&
 			Root->TryGetArrayField(TEXT("linear_rgb"), Rgb) && Rgb && Rgb->Num() >= 3)
 		{
-			CustomSkinTone = FLinearColor(
+			OutSkin = FLinearColor(
 				(*Rgb)[0]->AsNumber(), (*Rgb)[1]->AsNumber(), (*Rgb)[2]->AsNumber());
 		}
 	}
 
-	FaceOpenTex = Open;
-	FaceClosedTex = Closed;
-	EyeMaskInkTex = Mask;
+	OutOpen = Open;
+	OutClosed = Closed;
+	OutMask = Mask;
+	return true;
+}
+
+bool UNiceInkPersonaSubsystem::ImportFaceArtifacts(const FString& Dir)
+{
+	if (!ImportFaceDirInto(Dir, FaceOpenTex, FaceClosedTex, EyeMaskInkTex, CustomSkinTone))
+	{
+		return false;
+	}
 	++FaceRevision;
+	return true;
+}
+
+bool UNiceInkPersonaSubsystem::GetAuthorFace(UTexture2D*& OutOpen, UTexture2D*& OutClosed,
+	UTexture2D*& OutMask, FLinearColor& OutSkin)
+{
+	if (!bAuthorFaceLoadTried)
+	{
+		bAuthorFaceLoadTried = true; // 缺檔也只試一次（每 tick 輪詢不重複打磁碟）
+		const FString Dir = FPaths::ProjectContentDir() / TEXT("AuthorFace");
+		if (FPaths::FileExists(Dir / TEXT("face_open.png")))
+		{
+			ImportFaceDirInto(Dir, AuthorFaceOpenTex, AuthorFaceClosedTex,
+				AuthorEyeMaskInkTex, AuthorSkinTone);
+		}
+	}
+	if (!AuthorFaceOpenTex || !AuthorFaceClosedTex || !AuthorEyeMaskInkTex)
+	{
+		return false;
+	}
+	OutOpen = AuthorFaceOpenTex;
+	OutClosed = AuthorFaceClosedTex;
+	OutMask = AuthorEyeMaskInkTex;
+	OutSkin = AuthorSkinTone;
 	return true;
 }
 

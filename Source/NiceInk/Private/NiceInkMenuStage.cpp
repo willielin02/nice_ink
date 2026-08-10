@@ -149,6 +149,25 @@ void ANiceInkMenuStage::DressDancerFromPersona()
 			AppliedFaceRev = Persona->GetFaceRevision();
 		}
 	}
+	// 尚未上傳自拍＝預設力士穿作者臉（2026-08-10 user 定案；只住選單舞台——
+	// 永不進臉庫、永不是玩家選項，上傳完成即被上面的自訂臉分支蓋掉）
+	else if (!Persona->HasCustomFace() && !bAuthorFaceApplied)
+	{
+		UTexture2D* Open = nullptr; UTexture2D* Closed = nullptr; UTexture2D* Mask = nullptr;
+		FLinearColor Skin;
+		if (Persona->GetAuthorFace(Open, Closed, Mask, Skin))
+		{
+			if (UInkBodyComponent* Body = Dancer->FindComponentByClass<UInkBodyComponent>())
+			{
+				Body->ApplyCustomAvatar(Open, Closed, Mask, Skin);
+				bAuthorFaceApplied = true;
+			}
+		}
+		else
+		{
+			bAuthorFaceApplied = true; // 工件缺席＝維持名冊臉，別每 tick 重試
+		}
+	}
 
 	// 雲端刺青：靜默登入拉到資產後，把碳黑/永久重播上替身畫布（一次性）
 	if (!bCloudTattoosApplied)

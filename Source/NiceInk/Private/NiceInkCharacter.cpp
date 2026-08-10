@@ -32,6 +32,7 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
+#include "NiceInkFaceShare.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSessionSubsystem.h"
@@ -306,6 +307,16 @@ void ANiceInkCharacter::BeginPlay()
 		PersonaUploadTicksLeft = 20; // 0.5s × 20 ＝ 10s 內等到就發車
 		GetWorldTimerManager().SetTimer(PersonaUploadTimer, this,
 			&ANiceInkCharacter::MaybeUploadPersona, 0.5f, /*bLoop=*/true);
+	}
+
+	// 自訂臉房內分發（2026-08-10）：-game 世界啟動輪詢（LAN 與 EOS 同路；
+	// PIE/robo WorldType≠Game 不啟動＝既有測試零干擾）。等佔有＋席位就緒後：
+	// 本人臉入自己登記簿＋上傳 server；遠端 client 另外報到領全房已知臉。
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::Game)
+	{
+		FaceShareTicksLeft = 30; // 0.5s × 30 ＝ 15s 內等到佔有
+		GetWorldTimerManager().SetTimer(FaceShareTimer, this,
+			&ANiceInkCharacter::MaybeStartFaceShare, 0.5f, /*bLoop=*/true);
 	}
 
 	// 實體筆外觀：真資產（刺青機/麥克筆）＝實尺寸（scale 1）；圓柱退路＝縮成 1.2cm 粗 15cm 長。
@@ -931,15 +942,33 @@ void ANiceInkCharacter::SetupAsMenuDummy(int32 AvatarIdx)
 void ANiceInkCharacter::EnsureAvatarApplied()
 {
 	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
-	if (!PS || PS->AvatarIndex == AppliedAvatarIndex)
+	if (!PS)
 	{
 		return;
 	}
+	if (PS->AvatarIndex != AppliedAvatarIndex)
+	{
+		Body->ApplyAvatar(FNiceInkAvatars::Get(PS->AvatarIndex));
+		Body->BindCanvas(InkCanvas);
+		Body->SetEyesClosed(bAsleep);
+		AppliedAvatarIndex = PS->AvatarIndex;
+		AppliedShareFaceRev = 0; // 名冊重套會蓋臉——強制自訂臉重疊
+	}
 
-	Body->ApplyAvatar(FNiceInkAvatars::Get(PS->AvatarIndex));
-	Body->BindCanvas(InkCanvas);
-	Body->SetEyesClosed(bAsleep);
-	AppliedAvatarIndex = PS->AvatarIndex;
+	// 房內分發自訂臉（2026-08-10）：登記簿有這席的臉且版本變了＝蓋上名冊臉。
+	// 每 tick 輪詢（map find＋int 比對＝廉價），臉晚到/換臉都自然收斂
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+	{
+		const int32 Rev = Share->GetRevision(PS->SeatIndex);
+		if (Rev > 0 && Rev != AppliedShareFaceRev)
+		{
+			Body->ApplyCustomAvatar(Share->GetOpen(PS->SeatIndex), Share->GetClosed(PS->SeatIndex),
+				Share->GetMask(PS->SeatIndex), Share->GetTone(PS->SeatIndex));
+			AppliedShareFaceRev = Rev;
+			UE_LOG(LogTemp, Log, TEXT("NiFaceShare: body face applied (seat %d rev %d, %s)"),
+				PS->SeatIndex, Rev, HasAuthority() ? TEXT("server view") : TEXT("client view"));
+		}
+	}
 }
 
 void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
@@ -3430,6 +3459,191 @@ void ANiceInkCharacter::ClientPersonaEnd_Implementation(uint32 Crc)
 	PersonaDownBuf.Empty();
 	PersonaDownExpected = -1;
 	PersonaDownReceived = 0;
+}
+
+// --- 自訂臉房內分發（2026-08-10）---
+
+void ANiceInkCharacter::MaybeStartFaceShare()
+{
+	if (bFaceShareStarted || --FaceShareTicksLeft <= 0)
+	{
+		GetWorldTimerManager().ClearTimer(FaceShareTimer);
+		return;
+	}
+	if (!IsLocallyControlled())
+	{
+		return; // 他人角色：ticks 耗盡自然收攤
+	}
+	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
+	UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this);
+	if (!PS || PS->SeatIndex < 0 || !Persona)
+	{
+		return; // 席位/子系統未就緒：下一 tick 再看
+	}
+
+	bFaceShareStarted = true;
+	GetWorldTimerManager().ClearTimer(FaceShareTimer);
+
+	// 本人臉先入自己的登記簿（零延遲：不等網路回聲，名冊臉即刻被蓋掉）
+	if (Persona->HasCustomFace())
+	{
+		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+		{
+			Share->StoreTextures(PS->SeatIndex, Persona->GetFaceOpen(),
+				Persona->GetFaceClosed(), Persona->GetEyeMaskInk(), Persona->GetCustomSkinTone());
+		}
+	}
+
+	if (HasAuthority())
+	{
+		// listen 主機本人：blob 不過網——直接進 GameMode 集散地＋廣播
+		if (Persona->HasCustomFace())
+		{
+			TArray<uint8> Blob;
+			if (UNiceInkFaceShare::BuildBlobFromDir(Persona->GetActiveFaceDir(), Blob))
+			{
+				if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+				{
+					GM->OnFaceBlobReceived(this, Blob);
+				}
+			}
+		}
+		return;
+	}
+
+	// 遠端客戶端：報到（server 補發所有已知臉）＋節奏上傳自己的臉
+	ServerFaceHello();
+	if (Persona->HasCustomFace())
+	{
+		TSharedPtr<TArray<uint8>> Blob = MakeShared<TArray<uint8>>();
+		if (UNiceInkFaceShare::BuildBlobFromDir(Persona->GetActiveFaceDir(), *Blob) &&
+			Blob->Num() > 0 && Blob->Num() <= PersonaMaxBytes)
+		{
+			FaceUpSendBuf = Blob;
+			FaceUpSendOff = 0;
+			ServerFaceBegin(Blob->Num());
+			GetWorldTimerManager().SetTimer(FaceUpSendTimer, this,
+				&ANiceInkCharacter::TickFaceUpload, 0.1f, /*bLoop=*/true);
+		}
+	}
+}
+
+void ANiceInkCharacter::TickFaceUpload()
+{
+	if (!FaceUpSendBuf.IsValid())
+	{
+		GetWorldTimerManager().ClearTimer(FaceUpSendTimer);
+		return;
+	}
+	const TArray<uint8>& B = *FaceUpSendBuf;
+	int32 Budget = 8; // 8×16KB / 0.1s ≈ 1.3MB/s——一張臉 ~1 秒送完、不撐爆 reliable 緩衝
+	while (Budget-- > 0 && FaceUpSendOff < B.Num())
+	{
+		TArray<uint8> Chunk(B.GetData() + FaceUpSendOff, FMath::Min(PersonaChunkSize, B.Num() - FaceUpSendOff));
+		ServerFaceChunk(FaceUpSendOff, Chunk);
+		FaceUpSendOff += Chunk.Num();
+	}
+	if (FaceUpSendOff >= B.Num())
+	{
+		ServerFaceEnd(FCrc::MemCrc32(B.GetData(), B.Num()));
+		UE_LOG(LogTemp, Log, TEXT("NiFaceShare: uploaded %d bytes to host"), B.Num());
+		FaceUpSendBuf.Reset();
+		GetWorldTimerManager().ClearTimer(FaceUpSendTimer);
+	}
+}
+
+void ANiceInkCharacter::ServerFaceHello_Implementation()
+{
+	if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+	{
+		GM->RegisterFaceViewer(this);
+	}
+}
+
+void ANiceInkCharacter::ServerFaceBegin_Implementation(int32 TotalBytes)
+{
+	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
+	{
+		FaceUpExpected = -1;
+		return;
+	}
+	FaceUpExpected = TotalBytes;
+	FaceUpReceived = 0;
+	FaceUpBuf.SetNumZeroed(TotalBytes);
+}
+
+void ANiceInkCharacter::ServerFaceChunk_Implementation(int32 Offset, const TArray<uint8>& Bytes)
+{
+	if (FaceUpExpected < 0 || Offset < 0 || Bytes.Num() <= 0 ||
+		Offset + Bytes.Num() > FaceUpExpected)
+	{
+		return;
+	}
+	FMemory::Memcpy(FaceUpBuf.GetData() + Offset, Bytes.GetData(), Bytes.Num());
+	FaceUpReceived += Bytes.Num();
+}
+
+void ANiceInkCharacter::ServerFaceEnd_Implementation(uint32 Crc)
+{
+	if (FaceUpExpected > 0 && FaceUpReceived == FaceUpExpected &&
+		FCrc::MemCrc32(FaceUpBuf.GetData(), FaceUpBuf.Num()) == Crc)
+	{
+		if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+		{
+			GM->OnFaceBlobReceived(this, FaceUpBuf);
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiFaceShare: upload rejected (expected=%d received=%d)"),
+			FaceUpExpected, FaceUpReceived);
+	}
+	FaceUpBuf.Empty();
+	FaceUpExpected = -1;
+	FaceUpReceived = 0;
+}
+
+void ANiceInkCharacter::ClientFaceBegin_Implementation(int32 Seat, int32 TotalBytes)
+{
+	if (Seat < 0 || TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
+	{
+		FaceDownExpected = -1;
+		FaceDownSeat = -1;
+		return;
+	}
+	FaceDownSeat = Seat;
+	FaceDownExpected = TotalBytes;
+	FaceDownReceived = 0;
+	FaceDownBuf.SetNumZeroed(TotalBytes);
+}
+
+void ANiceInkCharacter::ClientFaceChunk_Implementation(int32 Seat, int32 Offset, const TArray<uint8>& Bytes)
+{
+	if (FaceDownExpected < 0 || Seat != FaceDownSeat || Offset < 0 || Bytes.Num() <= 0 ||
+		Offset + Bytes.Num() > FaceDownExpected)
+	{
+		return;
+	}
+	FMemory::Memcpy(FaceDownBuf.GetData() + Offset, Bytes.GetData(), Bytes.Num());
+	FaceDownReceived += Bytes.Num();
+}
+
+void ANiceInkCharacter::ClientFaceEnd_Implementation(int32 Seat, uint32 Crc)
+{
+	const bool bOk = FaceDownExpected > 0 && Seat == FaceDownSeat &&
+		FaceDownReceived == FaceDownExpected &&
+		FCrc::MemCrc32(FaceDownBuf.GetData(), FaceDownBuf.Num()) == Crc;
+	if (bOk)
+	{
+		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+		{
+			Share->StoreBlob(Seat, FaceDownBuf);
+		}
+	}
+	FaceDownBuf.Empty();
+	FaceDownExpected = -1;
+	FaceDownSeat = -1;
+	FaceDownReceived = 0;
 }
 
 void ANiceInkCharacter::OnRep_Asleep()
