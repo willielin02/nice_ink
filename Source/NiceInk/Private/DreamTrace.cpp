@@ -298,19 +298,18 @@ FDreamTraceParams FDreamTraceGen::DefaultParamsForCup(int32 Cup)
 	P.TargetTraceSeconds = 60.0f;
 	switch (FMath::Clamp(Cup, 0, 2))
 	{
-	// 08-03 user 終定案八式（正推三環：相撲神事/和彫憧憬/酒宴；淘選全史=帳本）
-	// 帶寬倍數 08-04 user 定值 2.4/2.2/2.0（原 2.0/1.8/1.6）
-	case 0: // 第一杯：簡單剪影＋帶=筆寬×2.4
-		P.BandWidthNibMult = 2.4f;
-		P.BakedPool = { Idx_Fan, Idx_Wave, Idx_Dango };
-		break;
-	case 1: // 第二杯：中等＋帶=筆寬×2.2
+	// 帶寬統一 2.2（難度純走圖案複雜度軸）；分杯依 D_shape（Σmax(0,θ−3°)²）最佳三組切分
+	case 0: // 第一杯：D_shape 1.03~1.65
 		P.BandWidthNibMult = 2.2f;
-		P.BakedPool = { Idx_Crane, Idx_Snake, Idx_Turtle };
+		P.BakedPool = { Idx_Fan, Idx_Dango, Idx_Wave, Idx_Turtle };
 		break;
-	default: // 第三杯（生死局）：複雜標的＋帶=筆寬×2.0
-		P.BandWidthNibMult = 2.0f;
-		P.BakedPool = { Idx_Sakura, Idx_Torii };
+	case 1: // 第二杯：D_shape 2.86~3.47
+		P.BandWidthNibMult = 2.2f;
+		P.BakedPool = { Idx_Crane, Idx_Torii };
+		break;
+	default: // 第三杯（生死局）：D_shape 4.29~4.44
+		P.BandWidthNibMult = 2.2f;
+		P.BakedPool = { Idx_Sakura, Idx_Snake };
 		break;
 	}
 	// 名義換算（筆寬 0.3；發夢當下 GameMode 用受害者實際筆寬重算）
