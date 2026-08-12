@@ -27,6 +27,11 @@ public:
 	UPROPERTY()
 	float MasterVolume = 1.0f;
 
+	// 渲染比例 %（r.ScreenPercentage；50~100）——弱機效能旋鈕，取代解析度選單
+	//（2026-08-11 視窗模式簡化制：無邊框/視窗二態、獨占全螢幕與解析度選單退役）
+	UPROPERTY()
+	float RenderScalePct = 100.0f;
+
 	// 選單語言（NiLoc 索引；-1＝未選過→依 OS 文化自動偵測）
 	UPROPERTY()
 	int32 LanguageIndex = -1;

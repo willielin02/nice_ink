@@ -1,5 +1,7 @@
 #include "NiceInkHUD.h"
 
+#include "NiceInkPortraitBooth.h"
+
 #include "NiceInkLocText.h"
 
 #include "CanvasItem.h"
@@ -239,10 +241,10 @@ float ANiceInkHUD::TierSize(ETextTier Tier) const
 {
 	switch (Tier)
 	{
-	case ETextTier::Display: return 34.0f;
-	case ETextTier::Title:   return 21.0f;
-	case ETextTier::Body:    return 15.0f;
-	default:                 return 12.0f;
+	case ETextTier::Display: return NiType::HudDisplay;
+	case ETextTier::Title:   return NiType::HudTitle;
+	case ETextTier::Body:    return NiType::HudBody;
+	default:                 return NiType::HudSmall;
 	}
 }
 
@@ -372,33 +374,65 @@ UTexture2D* ANiceInkHUD::GetFaceIcon(int32 AvatarIdx)
 
 float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float Size)
 {
-	// 臉像＝身分載體（SPEC #52 臉制）：紙框圓角底＋臉貼圖。
-	// 房內分發自訂臉優先（2026-08-10）；沒到貨前先用名冊臉墊著
+	// 臉像＝身分載體（SPEC #52 臉制）。2026-08-12 頭像亭肖像制：icon＝那顆頭
+	// 本人（丁髷+膚色+臉）的 3D 正面肖像——辨識對象與場上一致；亭未就緒
+	//（暖機/PIE 範圍閘）＝退回舊的貼圖裁切路墊檔。
 	const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
-	UTexture2D* Face = nullptr;
-	if (NIPS)
+	if (!NIPS)
+	{
+		return 0.0f;
+	}
+
+	UTexture* Portrait = nullptr;
+	if (ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(this))
 	{
 		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
 		{
-			Face = Share->GetOpen(NIPS->SeatIndex);
+			if (UTexture2D* Open = Share->GetOpen(NIPS->SeatIndex))
+			{
+				// 快取鍵含分發版本＝換臉自動重烘
+				Portrait = Booth->GetPortraitKeyed(
+					FString::Printf(TEXT("seat%d_v%d"), NIPS->SeatIndex, Share->GetRevision(NIPS->SeatIndex)),
+					Open, Share->GetClosed(NIPS->SeatIndex), Share->GetMask(NIPS->SeatIndex),
+					Share->GetTone(NIPS->SeatIndex));
+			}
 		}
-		if (!Face)
+		if (!Portrait)
 		{
-			Face = GetFaceIcon(NIPS->AvatarIndex);
+			Portrait = Booth->GetPortraitRoster(NIPS->AvatarIndex);
 		}
+	}
+	if (Portrait)
+	{
+		// icon＝頭的形狀（透明背景裁切成品；user 定案「不是方形照片」）——
+		// 直接畫、無框無底。AR 鏡像在此翻一次（臉本體不左右翻）
+		X = FlipXW(X, Size);
+		TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
+		Canvas->K2_DrawTexture(Portrait, FVector2D(X, Y), FVector2D(Size, Size),
+			FVector2D::ZeroVector, FVector2D::UnitVector, FLinearColor::White, BLEND_Translucent);
+		return Size;
+	}
+
+	// --- 舊路墊檔：膚色底＋臉區 UV 裁切 ---
+	UTexture2D* Face = nullptr;
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+	{
+		Face = Share->GetOpen(NIPS->SeatIndex);
+	}
+	if (!Face)
+	{
+		Face = GetFaceIcon(NIPS->AvatarIndex);
 	}
 	if (!Face)
 	{
 		return 0.0f;
 	}
-	// AR 鏡像在此翻一次、內部原語掛起（框與貼圖必須同座標系——臉不左右翻）
 	X = FlipXW(X, Size);
 	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 	FLinearColor Frame = NiHudColor::Paper;
 	Frame.A = 0.9f;
 	const float Pad = FMath::Max(1.5f, Size * 0.05f);
 	DrawRoundedBox(X - Pad, Y - Pad, Size + Pad * 2, Size + Pad * 2, Size * 0.18f, Frame);
-	// 膚色底＋臉區 UV 裁切（貼圖=FaceUV 全版面、臉只佔中上區；外圈透明要疊底）
 	DrawRoundedBox(X, Y, Size, Size, Size * 0.14f, NiHudColor::Skin);
 	Canvas->K2_DrawTexture(Face, FVector2D(X, Y), FVector2D(Size, Size),
 		FVector2D(0.30f, 0.22f), FVector2D(0.40f, 0.40f), FLinearColor::White, BLEND_Translucent);

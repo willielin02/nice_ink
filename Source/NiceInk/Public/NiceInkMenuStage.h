@@ -69,6 +69,10 @@ public:
 	float FillLux = 2.4f;         // 補光（反向；2560 實測 1.6 時腿/褌沉進黑背景）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
+	float UpLux = 1.6f;           // 仰角補光（2026-08-11：深蹲小腿/腳面朝下＝兩盞
+	                              // 俯角光全照不到→沉黑「像被遮住」；朝上補光=治本）
+
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
 	float ExposureBias = 9.6f;    // 手動曝光（鎖死＝不隨畫面泵動）
 
 private:

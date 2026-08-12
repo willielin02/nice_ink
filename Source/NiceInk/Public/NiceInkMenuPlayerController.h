@@ -49,6 +49,14 @@ public:
 	UFUNCTION(Exec)
 	void NiMenuShowLang();
 
+	// 開設定頁（robo 截圖用）
+	UFUNCTION(Exec)
+	void NiMenuShowSettings();
+
+	// 開開房設定頁（robo 截圖用）
+	UFUNCTION(Exec)
+	void NiMenuShowHost();
+
 	// 開個人檔案頁（robo 截圖用）
 	UFUNCTION(Exec)
 	void NiMenuShowProfile();

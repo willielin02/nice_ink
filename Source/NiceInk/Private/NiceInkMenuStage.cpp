@@ -129,6 +129,8 @@ void ANiceInkMenuStage::BeginPlay()
 	};
 	SpawnSun(FRotator(-28.0f, 200.0f, 0), KeyLux, 1);  // 從相機側往下打（主）
 	SpawnSun(FRotator(-40.0f, 20.0f, 0), FillLux, 0);  // 反向補（從）
+	SpawnSun(FRotator(32.0f, 200.0f, 0), UpLux, 0);    // 相機側仰角補（照亮朝下的
+	                                                   // 小腿/腳面——深蹲不再沉黑）
 }
 
 void ANiceInkMenuStage::DressDancerFromPersona()

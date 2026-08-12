@@ -40,6 +40,13 @@ public:
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
 	float MasterVolume = 1.0f;
 
+	// 渲染比例 %（50~100）：只降 3D 內部渲染解析度、UI 恆原生——立即生效零切換
+	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
+	float RenderScalePct = 100.0f;
+
+	// RenderScalePct 改動後即時生效（r.ScreenPercentage）；載入/雲端套用後也要呼叫
+	void ApplyRenderScale();
+
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Settings")
 	void SaveSettings();
 

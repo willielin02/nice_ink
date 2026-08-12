@@ -114,6 +114,30 @@ void ANiceInkMenuPlayerController::NiMenuShowLang()
 	}), 1.0f, false);
 }
 
+void ANiceInkMenuPlayerController::NiMenuShowSettings()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkMenuHUD* MenuHud = Cast<ANiceInkMenuHUD>(GetHUD()))
+		{
+			MenuHud->RoboOpenSettingsPage();
+		}
+	}), 1.0f, false);
+}
+
+void ANiceInkMenuPlayerController::NiMenuShowHost()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkMenuHUD* MenuHud = Cast<ANiceInkMenuHUD>(GetHUD()))
+		{
+			MenuHud->RoboOpenHostPage();
+		}
+	}), 1.0f, false);
+}
+
 void ANiceInkMenuPlayerController::NiMenuShowProfile()
 {
 	FTimerHandle Unused;

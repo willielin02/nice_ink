@@ -27,6 +27,23 @@ enum class ENiLocKey : uint8
 	ReuploadSelfie, SavedFaces,
 	// 臉制閘門＋隱私如實聲明（2026-08-10 user 定案：一定要上傳照片才能開始）
 	FaceGateHint, PrivacyHint,
+	// 選單邏輯修（2026-08-10 user 20 條驗收單）：門檻寫在門口、後果可預期、
+	// 狀態有出口、破壞性動作二段確認
+	CancelBtn,            // 建房/搜房/加入進行中的取消鈕
+	FaceGateDoor,         // 主卡：無臉時預告「要先上傳自拍」（按了才彈走＝因果斷裂修）
+	FaceProcessingDoor,   // 主卡：自拍處理中預告
+	SignInBrowserNote,    // 未登入：預告開房/加入會開瀏覽器登入
+	InviteOnlyDesc,       // 邀請制的後果說明
+	PublicDesc,           // 公開的後果說明
+	ConfirmQuit,          // 離開二段確認
+	TypeCodeHint,         // 加入頁：房號用鍵盤打
+	NameFallbackNote,     // 名字欄：目前是隨機名
+	NameSavedNote,        // 名字已儲存回饋
+	InstantNote,          // 設定：此組立即生效
+	BorderlessResNote,    // 設定：無邊框固定桌面解析度（解析度旋鈕停用原因）
+	UnappliedDiscardWarn, // 設定：未套用就返回的二段警告
+	RenderScale,          // 設定：畫質（渲染比例；2026-08-11 取代解析度選單的效能旋鈕）
+	CreateYourRikishi,    // 首啟創角頁標題（2026-08-12 首啟導流：無臉=開機直進創角）
 	COUNT
 };
 

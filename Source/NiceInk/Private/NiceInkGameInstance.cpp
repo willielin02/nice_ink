@@ -2,6 +2,7 @@
 
 #include "Components/AudioComponent.h"
 #include "Engine/Engine.h"
+#include "HAL/IConsoleManager.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "IOnlineSubsystemEOS.h"
@@ -142,9 +143,11 @@ void UNiceInkGameInstance::LoadSettings()
 		PreferredAvatar = Save->PreferredAvatar;
 		MouseSensitivityScale = FMath::Clamp(Save->MouseSensitivityScale, 0.2f, 3.0f);
 		MasterVolume = FMath::Clamp(Save->MasterVolume, 0.0f, 1.0f);
+		RenderScalePct = FMath::Clamp(Save->RenderScalePct, 50.0f, 100.0f);
 		SavedLang = Save->LanguageIndex;
 		SettingsRevision = Save->Revision;
 	}
+	ApplyRenderScale();
 
 	// 語言優先序：-culture= 命令列（robo/測試；引擎已套用、只跟隨不覆蓋）
 	// > 存檔 > OS 偵測
@@ -230,9 +233,20 @@ UNiceInkSettingsSave* UNiceInkGameInstance::BuildSettingsSaveObject() const
 	Save->PreferredAvatar = PreferredAvatar;
 	Save->MouseSensitivityScale = MouseSensitivityScale;
 	Save->MasterVolume = MasterVolume;
+	Save->RenderScalePct = RenderScalePct;
 	Save->LanguageIndex = MenuLanguage;
 	Save->Revision = SettingsRevision;
 	return Save;
+}
+
+void UNiceInkGameInstance::ApplyRenderScale()
+{
+	// 只動 3D 內部渲染解析度（UI/Slate 不受影響）；GameSetting 優先級＝
+	// 蓋過 scalability、讓路 console（robo/除錯手動覆寫照常有效）
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.ScreenPercentage")))
+	{
+		CVar->Set(FMath::Clamp(RenderScalePct, 50.0f, 100.0f), ECVF_SetByGameSetting);
+	}
 }
 
 void UNiceInkGameInstance::SaveSettings()

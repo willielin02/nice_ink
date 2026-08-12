@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "NiceInkLocText.h"
+#include "NiceInkUiTokens.h"
 #include "Styling/SlateBrush.h"
 #include "Styling/SlateTypes.h"
 #include "Widgets/SCompoundWidget.h"
@@ -29,6 +30,8 @@ public:
 	virtual void Tick(const FGeometry& AllottedGeometry, const double InCurrentTime, const float InDeltaTime) override;
 	virtual bool SupportsKeyboardFocus() const override { return true; }
 	virtual FReply OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEvent) override;
+	// 加入頁點空白處＝把鍵盤焦點抓回來（房號輸入靠 OnKeyDown，焦點丟了打字無聲失效）
+	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 
 	// robo 鉤子（NiMenuShowJoin/NiMenuJoinCode）：切加入頁＋預填房間碼
 	void OpenJoinPage(const FString& PrefillCode);
@@ -46,11 +49,14 @@ public:
 	// robo 鉤子（NiMenuShowLang）：開語言全列頁
 	void OpenLanguagePage() { Page = EPage::Language; }
 
+	// robo 鉤子（NiMenuShowHost）：開開房設定頁
+	void OpenHostPage() { Page = EPage::Host; }
+
 	// 開個人檔案頁（robo 鉤子 NiMenuShowProfile 與主選單按鈕共用；含名字欄播種）
 	void OpenProfilePage();
 
 private:
-	enum class EPage : uint8 { Root, Join, Settings, Credits, Language, Profile };
+	enum class EPage : uint8 { Root, Host, Join, Settings, Credits, Language, Profile };
 	EPage Page = EPage::Root;
 
 	TWeakObjectPtr<APlayerController> OwnerPC;
@@ -60,27 +66,40 @@ private:
 	bool bPublicRoom = false;    // invite only（預設）／public
 	bool bSearchKicked = false;  // 進 join 頁自動搜一次
 	FString ErrorBanner;         // 斷線原因（host/join 動作時清除）
-	bool bFaceGateNudge = false; // 臉制閘門：無臉按 Host/Join＝導個人檔案頁＋亮提示
+	// 首啟創角（2026-08-12 首啟導流）：開機無臉＝落在「創建你的力士」頁、
+	// 無返回無 ESC（強制上傳制的流程化——主選單的門檻提示字全數退役）；
+	// 臉一到手自動進主選單（你的力士戴你的臉跳舞＝第一印象）
+	bool bOnboarding = false;
 	FString FontSample;          // 字體取樣行（robo 驗證；空=不顯示）
 	double NextListRebuildTime = 0.0;
 	int32 LastListStamp = -1;    // 房列表重建判定（數量+首名雜湊）
 
-	// settings 暫存（apply 才動引擎）
-	int32 PendingWindowMode = 0;
-	int32 PendingResIndex = 2;
+	// --- 2026-08-10 選單邏輯修（20 條驗收單）---
+	EPage LangOrigin = EPage::Root;  // 語言頁從哪進（Root/Settings）＝返回與換語言後回到哪
+	double QuitArmedUntil = 0.0;     // 離開二段確認：第一擊武裝 3 秒
+	double NameSavedUntil = 0.0;     // 名字「已儲存」回饋顯示到此刻
+
+	// --- 2026-08-11 視窗模式簡化制（user 定案）：無邊框/視窗二態即點即切、
+	// 視窗＝瀏覽器式可拖拉（引擎原生）；獨占全螢幕與解析度選單退役——
+	// 黑閃/去彈跳/對賬回滾的存在理由整類消滅 ---
+
+	// settings 顯示值（1=無邊框、2=視窗；點擊即套用即存檔）
+	int32 PendingWindowMode = 1;
 	bool bSettingsSeeded = false;
 
 	// --- 樣式（brush/style 必須比 widget 長壽＝成員持有）---
 	FSlateBrush CardBrush, SlotBrush, RuleBrush, DividerBrush, UnderlineBrush;
 	FSlateBrush ChipOnBrush, ChipOffBrush;
+	FSlateBrush InsetBrush; // 卡內分組框（歸屬用「裝在同個盒子」表達，不靠間距）
+	FSlateBrush CardDividerBrush; // 卡上細分隔線（日常個人檔案頁：資產區/上傳區分家）
 	FButtonStyle PrimaryStyle, OnCardStyle, GhostStyle, RowStyle;
+	FButtonStyle FaceTileStyle; // 臉庫縮圖鈕：平常無底（icon=頭形不能再被方塊裱起來）、hover 微亮
 	FEditableTextBoxStyle NameBoxStyle;
 
 	TWeakObjectPtr<class UFont> MenuFont; // MenuHUD 持有 GC（複合 UFont）
-	// 字體系統：圓體=輔助（標籤/欄位/工具字）、明朝=標題與動作（墨字性格）
-	FSlateFontInfo Font(float Size, bool bBold = false) const;              // M PLUS Rounded
-	FSlateFontInfo Serif(float Size, bool bBlack = false, int32 Tracking = 0) const; // Zen Old Mincho
-	FSlateFontInfo Label(float Size) const;                                  // 小標籤（圓體+寬字距）
+	// 字體＝角色表制（NiType；2026-08-11 樣式源統一）：禁填裸字級——
+	// 每行字引用一個角色，改字級只准改 NiceInkUiTokens.h 的表
+	FSlateFontInfo Ty(const NiType::FRole& Role, bool bBold = false) const;
 
 	// --- 動態子區 ---
 	TSharedPtr<SEditableTextBox> NameBox;
@@ -88,6 +107,8 @@ private:
 	TSharedPtr<SHorizontalBox> FaceRowBox;              // 臉庫列（個人檔案頁）
 	TArray<TSharedPtr<FSlateBrush>> FaceThumbBrushes;   // 縮圖 brush（比 widget 長壽）
 	int32 LastFaceRowRev = -1;                          // FaceRevision 變動＝重建臉庫列
+	bool bFaceRowPending = false;                       // 有縮圖還沒烘出來（頭像亭暖機中）＝稍後重試
+	double NextFaceRowRetry = 0.0;
 	void RefreshFaceRow();
 
 	// --- helpers ---
@@ -102,13 +123,21 @@ private:
 	void RebuildRoomList();
 	FText StatusText() const;
 	FSlateColor StatusColor() const;
+	void ToggleWindowMode();       // 無邊框↔視窗（進視窗給桌面 70% 初始大小、其後用拖的）
+	TSharedRef<SWidget> MakeStatusRow(); // 狀態行＋進行中取消鈕（Root/Join 共用）
 
 	TSharedRef<SWidget> BuildRootPage();
+	TSharedRef<SWidget> BuildHostPage(); // 開房設定步（可見性二選＋確認；與加入頁對稱）
 	TSharedRef<SWidget> BuildJoinPage();
 	TSharedRef<SWidget> BuildSettingsPage();
 	TSharedRef<SWidget> BuildCreditsPage();
 	TSharedRef<SWidget> BuildLanguagePage(); // 13 語母語名全列網格（「文A」鈕入口）
 	TSharedRef<SWidget> BuildProfilePage();  // 個人檔案（SPEC #52 v4.0e：名字＋自拍＋現金）
+	// 個人檔案卡的四塊積木（創角/日常兩模式各自組裝＝順序跟任務走）
+	TSharedRef<SWidget> MakeProfileFacesBlock();
+	TSharedRef<SWidget> MakeProfileNameBlock();
+	TSharedRef<SWidget> MakeProfileCashBlock();
+	TSharedRef<SWidget> MakeProfileUploadBlock();
 	class UNiceInkPersonaSubsystem* Persona() const;
 	bool HasFace() const;                    // 臉制閘門（2026-08-10：無臉不開玩）
 	void PickSelfieAndIntake();              // 檔案對話框→自拍管線

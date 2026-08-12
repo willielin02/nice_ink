@@ -28,6 +28,12 @@ public:
 	// robo 鉤子（NiMenuShowLang）：開語言全列頁
 	void RoboOpenLanguagePage();
 
+	// robo 鉤子（NiMenuShowSettings）：開設定頁
+	void RoboOpenSettingsPage();
+
+	// robo 鉤子（NiMenuShowHost）：開開房設定頁
+	void RoboOpenHostPage();
+
 	// robo 鉤子（NiMenuShowProfile）：開個人檔案頁
 	void RoboOpenProfilePage();
 

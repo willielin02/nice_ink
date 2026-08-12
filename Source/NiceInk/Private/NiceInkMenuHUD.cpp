@@ -67,6 +67,22 @@ void ANiceInkMenuHUD::RoboOpenLanguagePage()
 	}
 }
 
+void ANiceInkMenuHUD::RoboOpenSettingsPage()
+{
+	if (Menu.IsValid())
+	{
+		Menu->OpenSettingsPage();
+	}
+}
+
+void ANiceInkMenuHUD::RoboOpenHostPage()
+{
+	if (Menu.IsValid())
+	{
+		Menu->OpenHostPage();
+	}
+}
+
 void ANiceInkMenuHUD::RoboOpenProfilePage()
 {
 	if (Menu.IsValid())

@@ -292,8 +292,8 @@ canvas 做不到毛玻璃半透明）**。
   才啟動=robo 零干擾；驗證=雙實例 log 四向對賬（server/client view×兩席）。
   **待做只剩自訂臉雲端儲存**（跨裝置隨身；房內可見已閉環）＋blob 壓縮＋88s
   背景烘焙 UX。
-  **08-10 首啟身分制（user 五條定案）**＝①強制上傳閘門（Host/Join 無臉→導
-  個人檔案頁+FaceGateHint 紅字；不上傳=不玩）②選單預設跳舞力士=作者本人臉
+  **08-10 首啟身分制（user 五條定案）**＝①強制上傳閘門（不上傳=不玩；
+  08-12 起實裝形式=首啟導流頁、FaceGateHint 紅字制退役）②選單預設跳舞力士=作者本人臉
   （Content/AuthorFace 四工件 runtime 匯入、NonUFS staging；**永不成為玩家
   選項**=只活在舞台預設分支）③隱私如實聲明 PrivacyHint（本機處理/無伺服器/
   僅同房可見——句句架構恆真）④平台名優先 GetEffectiveDisplayName()=自訂名>
@@ -308,12 +308,34 @@ canvas 做不到毛玻璃半透明）**。
   Saved_<X>/ 沙箱=乾淨玩家身分工作流、測完刪資料夾）；`NiShot`=GameInstance
   Exec 延遲截圖（任何世界/PC 類、core ticker 跨 travel——NiMenuShot 只活在
   選單 PC 的補位）。
+  **08-11~12 選單邏輯與樣式總修（user 逐輪驗收；帳本=SHIP_PLAN 追記①~⑭）**：
+  ①20 條互動邏輯修單＋**兩步開房**（頂層只放動詞：開房/加入相鄰、可見性
+  chips+確認移入開房頁）②設定頁=4 列**即點即套**（視窗模式=無邊框↔視窗
+  二態 ToggleWindowMode、畫質=RenderScalePct 50~100 走 r.ScreenPercentage；
+  獨占全螢幕/解析度選單/套用鈕全退役）③**TAA 效能定罪**：UE5.7 預設 TSR
+  @1440p 3060 吃 ~37ms=全遊戲一直在 20fps 下跑；ini 改 TAA+關 Lumen GI/反射
+  /VSM=4×（78fps、iGPU 1080p 50fps）；veil robo_veilflicker 待 TAA 下重跑、
+  打包版待實測④**樣式源統一**=NiType 角色表+NiSpace 4px 網格（NiceInkUiTokens.h
+  唯一字級來源、禁裸數字；階層鐵則=相鄰角色 ≥2 軸差異、改一值必查相鄰層）
+  ⑤**首啟導流**=開機無臉落「創建你的力士」頁（個人檔案頁雙模式：創角=上傳
+  →名字、無返回無 ESC；臉到手自動進主選單）＋文案總審（白話行動句、房號
+  全站統一、15 鍵×13 語新增）＋日常個人檔案序=名字→現金→分隔→臉庫→提示
+  →重新上傳⑥**頭像亭** `NiceInkPortraitBooth`（隱形攝影棚：正交+
+  SceneColorHDR 透明底+CPU 裁切=頭形 icon 非方形；**量測曝光**（直方圖
+  clipped 29.7%→0.8%、高光軟膝蓋 Reinhard）+**SceneDepth 深度遮罩上下分域**
+  （殺肩保髷；輪廓啟發式對「臉頰比肩寬」體型必敗）；消費端=DrawFaceTok+
+  GetFaceThumb、亭缺席走舊 UV 裁切墊檔；WorldType==Game 閘）⑦進行中動作
+  取消鈕=CancelMenuAction（bCancelRequested 由完成回呼消化）。
+  工具：`play_fresh.bat`（全新玩家沙箱；**EOS persistentauth cache=機器全域
+  ＝沙箱裝不下、靜默登入照樣回來**）、`reset_4p_sandboxes.bat`（只清
+  Saved_P2/3/4）。鐵則：icon 驗收必看頁面原位；視覺缺陷先用數字定罪再修。
   **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝
   `NiceInkMenuStage` 全程式生成（隱形地板+相機+無影平行光×2+完整
   ANiceInkCharacter 替身）：墨水 RT 壓 512 省 VRAM、臉=SetupAsMenuDummy 直指
   avatar（繞過 PlayerState）、AIController MoveToLocation 直驅（無 navmesh）→
   現有摺り足步態+Jiggle 自然發生；對拍=GameInstance.GetBgmStartAudioTime＋
-  BeatSec 旋鈕（0.62 待耳測校準）；每 2 拍換邊橫移、每 16 拍轉圈。
+  BeatSec 旋鈕（0.62 待耳測校準）；每 2 拍換邊橫移、每 16 拍轉圈；08-11 補
+  第三仰角平行光 UpLux=1.6（後腳暗判＝原雙光都從前上方來、腳背無光）。
   鐵坑：mesh 前向=actor -X（面向鏡頭=yaw 180）、UE FOV=水平角（36°@16:9=望遠
   壓臉）、橫移角色必關 MotionBlur、雙平行光要設 ForwardShadingPriority、
   BGM 喚起原掛在 ANiceInkHUD::BeginPlay（MenuHUD 改繼承 AHUD 後要自己叫）。

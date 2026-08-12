@@ -182,6 +182,16 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 	}
 	bSilentLoginAttempt = false;
 
+	// 玩家已取消且無待跑動作：不開 portal、不報錯；登入若成功則照走成功路
+	//（persona 照拉——取消的是「動作」不是登入本身）
+	if (bCancelRequested && !PendingAfterLogin && !bWasSuccessful)
+	{
+		bCancelRequested = false;
+		bLoginInFlight = false;
+		UE_LOG(LogTemp, Log, TEXT("NiSession: login result discarded (user cancelled)"));
+		return;
+	}
+
 	// 首次/快取過期＝persistentauth 必 EOS_InvalidAuth → 開 Account Portal 瀏覽器登入重試一次
 	if (!bWasSuccessful && !bPortalRetryUsed && Identity.IsValid())
 	{
@@ -229,6 +239,7 @@ void UNiceInkSessionSubsystem::HostSession(bool bLan, bool bPublicListed)
 	// 先佔狀態再登入：登入期間（可能開瀏覽器）選單顯示進行中、殘留點擊被護欄擋
 	UiState = ENiSessionUiState::Hosting;
 	LastError.Reset();
+	bCancelRequested = false;
 	bPendingPublicListed = bPublicListed;
 	EnsureLoggedInThen([this, bLan]() { HostSessionInternal(bLan); });
 }
@@ -284,6 +295,18 @@ void UNiceInkSessionSubsystem::OnCreateSessionComplete(FName SessionName, bool b
 		Sessions->ClearOnCreateSessionCompleteDelegate_Handle(CreateHandle);
 	}
 	UE_LOG(LogTemp, Log, TEXT("CreateSession %s: %s"), *SessionName.ToString(), bWasSuccessful ? TEXT("OK") : TEXT("FAILED"));
+	if (bCancelRequested)
+	{
+		// 玩家已取消：建成的房當場拆掉、不旅行；失敗則安靜歸位
+		bCancelRequested = false;
+		if (bWasSuccessful)
+		{
+			DestroySession();
+		}
+		UiState = ENiSessionUiState::Idle;
+		UE_LOG(LogTemp, Log, TEXT("NiSession: host cancelled by user — result discarded"));
+		return;
+	}
 	if (!bWasSuccessful)
 	{
 		SetFailed(TEXT("could not create the room"), static_cast<int32>(ENiLocKey::ErrCreateFailed));
@@ -310,6 +333,7 @@ void UNiceInkSessionSubsystem::SearchSessions(bool bLan)
 	PendingJoinCode.Reset(); // 瀏覽搜尋不帶碼
 	UiState = ENiSessionUiState::Searching; // 先佔狀態再登入（同 HostSession）
 	LastError.Reset();
+	bCancelRequested = false;
 	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
 }
 
@@ -329,6 +353,7 @@ void UNiceInkSessionSubsystem::JoinRoomByCode(const FString& RawCode, bool bLan)
 	PendingJoinCode = Code;
 	UiState = ENiSessionUiState::Searching;
 	LastError.Reset();
+	bCancelRequested = false;
 	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
 }
 
@@ -370,6 +395,16 @@ void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 	if (Sessions.IsValid())
 	{
 		Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindHandle);
+	}
+
+	if (bCancelRequested)
+	{
+		// 玩家已取消：結果丟棄（列表不更新也無妨——下次搜尋整組重來）
+		bCancelRequested = false;
+		bAutoJoinFirst = false;
+		PendingJoinCode.Reset();
+		UiState = ENiSessionUiState::Idle;
+		return;
 	}
 
 	const bool bWantedAutoJoin = bAutoJoinFirst;
@@ -446,6 +481,7 @@ void UNiceInkSessionSubsystem::JoinFoundSession(int32 Index)
 
 	UiState = ENiSessionUiState::Joining;
 	LastError.Reset();
+	bCancelRequested = false;
 	JoinHandle = Sessions->AddOnJoinSessionCompleteDelegate_Handle(
 		FOnJoinSessionCompleteDelegate::CreateUObject(this, &UNiceInkSessionSubsystem::OnJoinSessionComplete));
 	Sessions->JoinSession(0, NAME_GameSession, SessionSearch->SearchResults[Index]);
@@ -457,6 +493,19 @@ void UNiceInkSessionSubsystem::OnJoinSessionComplete(FName SessionName, EOnJoinS
 	if (Sessions.IsValid())
 	{
 		Sessions->ClearOnJoinSessionCompleteDelegate_Handle(JoinHandle);
+	}
+
+	if (bCancelRequested)
+	{
+		// 玩家已取消：加成了也不旅行，退掉 session 安靜歸位
+		bCancelRequested = false;
+		if (Result == EOnJoinSessionCompleteResult::Success)
+		{
+			DestroySession();
+		}
+		UiState = ENiSessionUiState::Idle;
+		UE_LOG(LogTemp, Log, TEXT("NiSession: join cancelled by user — result discarded"));
+		return;
 	}
 
 	if (Result != EOnJoinSessionCompleteResult::Success || !Sessions.IsValid())
@@ -493,4 +542,22 @@ void UNiceInkSessionSubsystem::DestroySession()
 		GI->HostRoomCode.Reset();
 	}
 	UiState = ENiSessionUiState::Idle;
+}
+
+void UNiceInkSessionSubsystem::CancelMenuAction()
+{
+	if (UiState != ENiSessionUiState::Hosting && UiState != ENiSessionUiState::Searching &&
+		UiState != ENiSessionUiState::Joining)
+	{
+		return;
+	}
+	// 完成回呼可能已在飛行：旗標留給回呼消費（各動作起點會重置）；
+	// 登入等待中（可能開著瀏覽器）＝清待跑動作，登入結果落地時不再補跑
+	bCancelRequested = true;
+	PendingAfterLogin = nullptr;
+	PendingJoinCode.Reset();
+	bAutoJoinFirst = false;
+	UiState = ENiSessionUiState::Idle;
+	LastError.Reset();
+	UE_LOG(LogTemp, Log, TEXT("NiSession: menu action cancelled by user"));
 }

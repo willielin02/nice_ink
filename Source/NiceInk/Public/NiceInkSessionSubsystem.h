@@ -83,6 +83,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
 	void DestroySession();
 
+	// 取消進行中的建房/搜房/加入（2026-08-10 UI 邏輯修：進行中狀態要有出口）。
+	// 完成回呼可能已在飛行——旗標讓回呼落地時丟棄結果（建成/加成則拆房、不旅行）；
+	// 登入等待中（可能開著瀏覽器）＝清掉待跑動作，登入結果照收但不再補跑。
+	void CancelMenuAction();
+
 	// 選單開場的純靜默登入（persistentauth；失敗絕不開 Account Portal、不進
 	// Failed UI）——目的＝進房前就把雲端 persona（現金/刺青/偏好/名字）拉下來
 	// 給個人檔案頁與舞台力士。每 session 只試一次；真登入仍由 Host/Join 觸發。
@@ -120,6 +125,7 @@ private:
 	int32 LastErrorKey = -1;
 	FString LastErrorParam;
 	bool bAutoJoinFirst = false;
+	bool bCancelRequested = false; // CancelMenuAction 設；各動作起點與完成回呼消費
 
 	// 碼直達流程中待比對的房間碼（OnFindSessionsComplete 消費後清除）
 	FString PendingJoinCode;

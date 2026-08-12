@@ -1,5 +1,7 @@
 #include "NiceInkPersonaSubsystem.h"
 
+#include "NiceInkPortraitBooth.h"
+
 #include "Async/Async.h"
 #include "Dom/JsonObject.h"
 #include "Face/NiceInkFaceBakery.h"
@@ -218,6 +220,8 @@ void UNiceInkPersonaSubsystem::ApplyCloudSettings(const TArray<uint8>& Bytes)
 	GI->PreferredAvatar = CloudSave->PreferredAvatar;
 	GI->MouseSensitivityScale = FMath::Clamp(CloudSave->MouseSensitivityScale, 0.2f, 3.0f);
 	GI->MasterVolume = FMath::Clamp(CloudSave->MasterVolume, 0.0f, 1.0f);
+	GI->RenderScalePct = FMath::Clamp(CloudSave->RenderScalePct, 50.0f, 100.0f);
+	GI->ApplyRenderScale();
 	GI->SettingsRevision = CloudSave->Revision;
 
 	// 語言：robo/測試的 -culture= 命令列恆優先（與 LoadSettings 同規則）
@@ -373,20 +377,39 @@ bool UNiceInkPersonaSubsystem::ActivateFace(const FString& Id)
 	return true;
 }
 
-UTexture2D* UNiceInkPersonaSubsystem::GetFaceThumb(const FString& Id)
+UTexture* UNiceInkPersonaSubsystem::GetFaceThumb(const FString& Id)
 {
-	if (const TObjectPtr<UTexture2D>* Found = ThumbCache.Find(Id))
+	if (const TObjectPtr<UTexture>* Found = ThumbCache.Find(Id))
 	{
 		return *Found;
 	}
-	UTexture2D* Tex = nullptr;
-	const FString ThumbPath = LibraryDir() / Id / TEXT("thumb.png");
-	if (FPaths::FileExists(ThumbPath))
+	// 頭像亭 3D 肖像（2026-08-12：取代 thumb.png 的貼圖裁切「膚色豆腐」）。
+	// 工件缺席＝記 nullptr 不重試；亭未就緒＝不記快取（下次再來）
+	const FString Dir = LibraryDir() / Id;
+	if (!FPaths::FileExists(Dir / TEXT("face_open.png")))
 	{
-		Tex = FImageUtils::ImportFileAsTexture2D(ThumbPath);
+		ThumbCache.Add(Id, nullptr);
+		return nullptr;
 	}
-	ThumbCache.Add(Id, Tex); // nullptr 也記＝不重複嘗試（legacy 遷移臉無縮圖）
-	return Tex;
+	ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(
+		GetGameInstance() ? GetGameInstance()->GetWorld() : nullptr);
+	if (!Booth)
+	{
+		return nullptr;
+	}
+	TObjectPtr<UTexture2D> Open, Closed, Mask;
+	FLinearColor Skin = FLinearColor(0.4f, 0.22f, 0.13f);
+	if (!ImportFaceDirInto(Dir, Open, Closed, Mask, Skin))
+	{
+		ThumbCache.Add(Id, nullptr);
+		return nullptr;
+	}
+	UTexture* Portrait = Booth->GetPortraitKeyed(TEXT("lib_") + Id, Open, Closed, Mask, Skin);
+	if (Portrait)
+	{
+		ThumbCache.Add(Id, Portrait);
+	}
+	return Portrait;
 }
 
 double UNiceInkPersonaSubsystem::GetIntakeElapsedS() const

@@ -59,7 +59,9 @@ public:
 	const FString& GetActiveFaceId() const { return ActiveFaceId; }
 	FString GetActiveFaceDir() const;            // library/<active>；無臉＝空字串（房內分發打包用）
 	bool ActivateFace(const FString& Id);        // 匯入 library/<id>＋寫 active 指針
-	UTexture2D* GetFaceThumb(const FString& Id); // 縮圖懶載入（無檔＝nullptr）
+	// 臉庫縮圖＝頭像亭 3D 肖像（2026-08-12 取代 thumb.png 貼圖裁切）；
+	// 亭未就緒＝暫回 nullptr 不記快取（呼叫端稍後重試）、工件缺席＝記 nullptr
+	UTexture* GetFaceThumb(const FString& Id);
 
 	// --- 作者臉（2026-08-10 user 定案）：選單舞台的預設力士＝作者本人。
 	// 工件＝Content/AuthorFace/（NonUFS 原樣入包、runtime 匯入）；只給選單舞台
@@ -151,9 +153,9 @@ private:
 	};
 	TSharedPtr<FNativeIntakeState, ESPMode::ThreadSafe> NativeIntake;
 
-	// 縮圖快取（UPROPERTY＝runtime 匯入貼圖的 GC 錨——Slate brush 不保 GC）
+	// 縮圖快取（UPROPERTY＝GC 錨——Slate brush 不保 GC；值＝頭像亭肖像 RT）
 	UPROPERTY(Transient)
-	TMap<FString, TObjectPtr<UTexture2D>> ThumbCache;
+	TMap<FString, TObjectPtr<UTexture>> ThumbCache;
 
 	// 雲端資產反序列化快取（CachedAssets 變動即失效）
 	UPROPERTY(Transient)
