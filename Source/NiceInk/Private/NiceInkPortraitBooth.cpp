@@ -3,13 +3,17 @@
 #include "ImageUtils.h"
 #include "TextureResource.h"
 #include "Components/BoxComponent.h"
-#include "Components/PointLightComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SceneCaptureComponent2D.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/SkyLightComponent.h"
+#include "Engine/TextureCube.h"
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "Misc/ScopeExit.h"
+#include "UObject/ConstructorHelpers.h"
+#include "UObject/UObjectIterator.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
@@ -29,32 +33,23 @@ ANiceInkPortraitBooth::ANiceInkPortraitBooth()
 	Floor->SetCollisionResponseToAllChannels(ECR_Block);
 	Floor->SetHiddenInGame(true);
 
-	// 亭燈：平坦無衰減點光＝fullbright 讀感的局部版；只走通道 2（不漏進世界）
-	KeyLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("KeyLight"));
-	KeyLight->SetupAttachment(Floor);
-	KeyLight->SetCastShadows(false);
-	KeyLight->SetAttenuationRadius(1200.0f);
-	KeyLight->bUseInverseSquaredFalloff = false;
-	KeyLight->LightFalloffExponent = 0.01f;
-	KeyLight->SetLightingChannels(false, false, true);
-
-	// 下前補光：下巴底/頸窩朝下的面（key 從上打不到、頭燈假光只顧朝鏡頭面）
-	FillLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("FillLight"));
-	FillLight->SetupAttachment(Floor);
-	FillLight->SetCastShadows(false);
-	FillLight->SetAttenuationRadius(1200.0f);
-	FillLight->bUseInverseSquaredFalloff = false;
-	FillLight->LightFalloffExponent = 0.01f;
-	FillLight->SetLightingChannels(false, false, true);
-
-	// 背光：從主體後上方打輪廓（黑髮不溶進黑底）；同樣只走通道 2
-	RimLight = CreateDefaultSubobject<UPointLightComponent>(TEXT("RimLight"));
-	RimLight->SetupAttachment(Floor);
-	RimLight->SetCastShadows(false);
-	RimLight->SetAttenuationRadius(1200.0f);
-	RimLight->bUseInverseSquaredFalloff = false;
-	RimLight->LightFalloffExponent = 0.01f;
-	RimLight->SetLightingChannels(false, false, true);
+	// 均勻環境光＝真天光（與道場同制）。天光是全世界級光源、無 LightingChannels
+	//（USkyLightComponent 是 ULightComponentBase 旁系）且 shader 不理通道——
+	// 通道隔離不可用，改「時間隔離」：平時隱藏，只在 CaptureNow 的同步捕捉
+	// 瞬間亮起、拍完立即隱回＝主視口永不渲染到開著的一幀（見 CaptureNow）。
+	// 光源＝指定灰 cubemap（全方向恆定；亭在地下、SLS_CapturedScene 捕到虛空）
+	Sky = CreateDefaultSubobject<USkyLightComponent>(TEXT("Sky"));
+	Sky->SetupAttachment(Floor);
+	Sky->Mobility = EComponentMobility::Movable;
+	Sky->SourceType = SLS_SpecifiedCubemap;
+	Sky->bLowerHemisphereIsBlack = false; // 下半球也要光（下巴底/髷底）
+	static ConstructorHelpers::FObjectFinder<UTextureCube> GrayCube(
+		TEXT("/Engine/EngineResources/GrayLightTextureCube.GrayLightTextureCube"));
+	if (GrayCube.Succeeded())
+	{
+		Sky->Cubemap = GrayCube.Object;
+	}
+	Sky->SetVisibility(false);
 
 	Capture = CreateDefaultSubobject<USceneCaptureComponent2D>(TEXT("Capture"));
 	Capture->SetupAttachment(Floor);
@@ -129,7 +124,7 @@ void ANiceInkPortraitBooth::EnsureDummy()
 	}
 }
 
-UTexture2D* ANiceInkPortraitBooth::CaptureNow()
+UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 {
 	if (!Dummy)
 	{
@@ -140,12 +135,32 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow()
 	const FVector CamPos = Aim + FVector(-200.0f, 0, 0); // 正交＝距離不影響構圖
 	Capture->SetWorldLocationAndRotation(CamPos, (Aim - CamPos).Rotation());
 	Capture->OrthoWidth = OrthoWidthCm;
-	KeyLight->SetWorldLocation(Aim + FVector(-80.0f, 0, 40.0f)); // 相機側上方
-	KeyLight->SetIntensity(KeyIntensity);
-	FillLight->SetWorldLocation(Aim + FVector(-70.0f, 0, -55.0f)); // 相機側下方（打下巴底）
-	FillLight->SetIntensity(FillIntensity);
-	RimLight->SetWorldLocation(Aim + FVector(90.0f, 0, 70.0f)); // 主體後上方（臉朝 -X＝後方為 +X）
-	RimLight->SetIntensity(RimIntensity);
+
+	// 時間隔離開燈（本函式全同步、主視口在幀尾才渲染＝世界看不到）：
+	// ①世界自己的天光先藏（道場 SaunaSkyLight 會污染肖像——天光不理通道）
+	// ②亭天光亮起；ON_SCOPE_EXIT 保證任何 return 路徑都還原
+	TArray<USkyLightComponent*> HiddenWorldSkies;
+	for (TObjectIterator<USkyLightComponent> It; It; ++It)
+	{
+		if (*It != Sky && It->GetWorld() == GetWorld() && It->IsVisible())
+		{
+			It->SetVisibility(false);
+			HiddenWorldSkies.Add(*It);
+		}
+	}
+	Sky->SetIntensity(AmbientIntensity);
+	Sky->SetVisibility(true);
+	ON_SCOPE_EXIT
+	{
+		Sky->SetVisibility(false);
+		for (USkyLightComponent* S : HiddenWorldSkies)
+		{
+			S->SetVisibility(true);
+		}
+	};
+	// 指定 cubemap 的濾波處理是排隊制——捕捉前強制出隊（首烘不吃黑片）
+	USkyLightComponent::UpdateSkyCaptureContents(GetWorld());
+
 	Capture->ShowOnlyActors.Reset();
 	Capture->ShowOnlyActors.Add(Dummy);
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
@@ -349,6 +364,38 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow()
 		return nullptr;
 	}
 
+	// 膚色錨定自動曝光（過曝根治）：SceneColorHDR＝無 tonemapper 無曝光的
+	// 原始輻射，亮度=光強×cubemap×材質裸乘積——手動 gain 每換光就得重校
+	//（天光 5.0 直接撞頂實錘）。均勻光下 輻射≈albedo×K（K=光場常數）：
+	// 頭部像素中位亮度÷已知膚色亮度=K，除回＝還原 albedo＝亮度與光強徹底
+	// 解耦；每張臉各自對自己的膚色錨＝膚色深淺（身分特徵）原樣保留
+	float Gain = ColorGain; // 量測失敗＝退回手動保底
+	{
+		TArray<float> Lums;
+		for (int32 Y = MinY; Y <= MaxY; ++Y)
+		{
+			for (int32 X = MinX; X <= MaxX; ++X)
+			{
+				const FLinearColor& C = Pixels[Y * PortraitSize + X];
+				if (1.0f - C.A > 0.1f)
+				{
+					Lums.Add(C.GetLuminance());
+				}
+			}
+		}
+		const float ToneLum = Tone.GetLuminance();
+		if (Lums.Num() > 16 && ToneLum > 0.005f)
+		{
+			Lums.Sort();
+			// 中位＝膚（相撲頭膚占多數；髷/眉是少數派拉不動 p50）
+			const float MedianLum = Lums[Lums.Num() / 2];
+			if (MedianLum > KINDA_SMALL_NUMBER)
+			{
+				Gain = ToneLum / MedianLum;
+			}
+		}
+	}
+
 	// 方形裁切：以頭界的長邊為邊、置中、加 4% 邊距（成品仍方形貼圖＝
 	// 消費端零改動；頭以外全透明＝畫出來就是頭形）
 	const int32 BW = MaxX - MinX + 1, BH = MaxY - MinY + 1;
@@ -357,8 +404,8 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow()
 	int32 X0 = FMath::Clamp(CX - Side / 2, 0, PortraitSize - Side);
 	int32 Y0 = FMath::Clamp(CY - Side / 2, 0, PortraitSize - Side);
 
-	TArray<FColor> Out;
-	Out.SetNumUninitialized(Side * Side);
+	TArray<FLinearColor> Lin;
+	Lin.SetNumUninitialized(Side * Side);
 	for (int32 Y = 0; Y < Side; ++Y)
 	{
 		const int32 SrcY = Y0 + Y;
@@ -368,20 +415,83 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow()
 		{
 			FLinearColor C = Pixels[SrcY * PortraitSize + (X0 + X)];
 			const float A = bRowKept ? FMath::Clamp(1.0f - C.A, 0.0f, 1.0f) : 0.0f;
-			C *= ColorGain; // HDR→sRGB 的手動曝光
-			// 高光軟膝蓋（量測定罪：鼻樑熱斑 R 撞頂 6.3%、p50=189 全臉正常——
-			// 再壓 gain=整臉拖暗；只把膝蓋 0.8 以上 Reinhard 壓進 [0.8,1) 零撞頂）
-			const float Knee = 0.8f;
-			auto SoftKnee = [Knee](float V)
+			C *= Gain; // 膚色錨定自動曝光（見上）
+			// 色調映射（偏灰根治）：主畫面的「不灰」來自引擎 ACES filmic
+			// tonemapper（暗部收 toe、中段提對比）——SceneColorHDR 繞過整條
+			// 後處理鏈，裸線性→sRGB 天生平灰。補 ACES 擬合曲線（Narkowicz）
+			// ＋飽和度旋鈕＝與局內讀感對齊；曲線自帶高光滾降＝軟膝蓋退役
+			auto Aces = [](float V)
 			{
-				if (V <= Knee) return V;
-				const float E = (V - Knee) / (1.0f - Knee);
-				return Knee + (1.0f - Knee) * (E / (1.0f + E));
+				return FMath::Clamp(
+					V * (2.51f * V + 0.03f) / (V * (2.43f * V + 0.59f) + 0.14f), 0.0f, 1.0f);
 			};
-			C.R = SoftKnee(C.R); C.G = SoftKnee(C.G); C.B = SoftKnee(C.B);
+			C.R = Aces(C.R); C.G = Aces(C.G); C.B = Aces(C.B);
+			const float Lum = C.GetLuminance();
+			C.R = FMath::Clamp(Lum + (C.R - Lum) * Saturation, 0.0f, 1.0f);
+			C.G = FMath::Clamp(Lum + (C.G - Lum) * Saturation, 0.0f, 1.0f);
+			C.B = FMath::Clamp(Lum + (C.B - Lum) * Saturation, 0.0f, 1.0f);
 			C.A = A;
-			Out[Y * Side + X] = C.ToFColor(/*bSRGB=*/true);
+			Lin[Y * Side + X] = C;
 		}
+	}
+
+	// 五官增顯 unsharp（見標頭旋鈕註）：亮度通道箱式可分離模糊、alpha 預乘
+	// 加權（透明區不參與＝輪廓邊不吃黑底暈）；只縮放 RGB 不動色相
+	if (DetailAmount > 0.0f)
+	{
+		const int32 N = Side * Side;
+		const int32 R = FMath::Clamp(FMath::RoundToInt(DetailRadiusPx), 1, 32);
+		TArray<float> PLum, W, Tmp;
+		PLum.SetNumUninitialized(N);
+		W.SetNumUninitialized(N);
+		Tmp.SetNumUninitialized(N);
+		for (int32 i = 0; i < N; ++i)
+		{
+			W[i] = Lin[i].A;
+			PLum[i] = Lin[i].GetLuminance() * W[i];
+		}
+		auto BlurPass = [Side, R](const TArray<float>& Src, TArray<float>& Dst, bool bHoriz)
+		{
+			const float InvW = 1.0f / static_cast<float>(2 * R + 1);
+			for (int32 A0 = 0; A0 < Side; ++A0)
+			{
+				for (int32 B0 = 0; B0 < Side; ++B0)
+				{
+					float Sum = 0.0f;
+					for (int32 K = -R; K <= R; ++K)
+					{
+						const int32 B1 = FMath::Clamp(B0 + K, 0, Side - 1);
+						Sum += bHoriz ? Src[A0 * Side + B1] : Src[B1 * Side + A0];
+					}
+					(bHoriz ? Dst[A0 * Side + B0] : Dst[B0 * Side + A0]) = Sum * InvW;
+				}
+			}
+		};
+		BlurPass(PLum, Tmp, true);
+		BlurPass(Tmp, PLum, false);
+		BlurPass(W, Tmp, true);
+		BlurPass(Tmp, W, false);
+		for (int32 i = 0; i < N; ++i)
+		{
+			FLinearColor& C = Lin[i];
+			if (C.A > 0.05f)
+			{
+				const float Blur = PLum[i] / FMath::Max(W[i], KINDA_SMALL_NUMBER);
+				const float Lum = C.GetLuminance();
+				const float S = FMath::Clamp(
+					1.0f + DetailAmount * (Lum - Blur) / FMath::Max(Lum, 0.02f), 0.4f, 2.5f);
+				C.R = FMath::Clamp(C.R * S, 0.0f, 1.0f);
+				C.G = FMath::Clamp(C.G * S, 0.0f, 1.0f);
+				C.B = FMath::Clamp(C.B * S, 0.0f, 1.0f);
+			}
+		}
+	}
+
+	TArray<FColor> Out;
+	Out.SetNumUninitialized(Side * Side);
+	for (int32 i = 0; i < Side * Side; ++i)
+	{
+		Out[i] = Lin[i].ToFColor(/*bSRGB=*/true);
 	}
 
 	FCreateTexture2DParameters Params;
@@ -411,7 +521,7 @@ UTexture* ANiceInkPortraitBooth::GetPortraitKeyed(const FString& Key, UTexture2D
 		// 肖像睜眼、無墨＝Closed/Mask 純補位（缺席以 Open 頂）
 		Body->ApplyCustomAvatar(Open, Closed ? Closed : Open, Mask ? Mask : Open, Tone);
 	}
-	UTexture2D* Portrait = CaptureNow();
+	UTexture2D* Portrait = CaptureNow(Tone);
 	if (Portrait)
 	{
 		Cache.Add(Key, Portrait);

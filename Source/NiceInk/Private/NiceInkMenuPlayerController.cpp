@@ -43,14 +43,15 @@ void ANiceInkMenuPlayerController::NiMenuJoin()
 
 // --- 房間碼自動化（timer-deferred：-ExecCmds 在首幀觸發，讓子系統/HUD 完全就緒）---
 
-void ANiceInkMenuPlayerController::NiMenuAutoHost(int32 bPublic)
+void ANiceInkMenuPlayerController::NiMenuAutoHost(int32 bPublic, const FString& RoomName)
 {
 	FTimerHandle Unused;
-	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, bPublic]()
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this, bPublic, RoomName]()
 	{
 		if (UNiceInkSessionSubsystem* Sessions = GetGameInstance() ? GetGameInstance()->GetSubsystem<UNiceInkSessionSubsystem>() : nullptr)
 		{
-			Sessions->HostSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured(), bPublic != 0);
+			Sessions->HostSession(/*bLan=*/!UNiceInkSessionSubsystem::IsOnlineServiceConfigured(), bPublic != 0,
+				/*MaxPlayers=*/6, /*LangIndex=*/-1, RoomName);
 		}
 	}), 1.0f, false);
 }

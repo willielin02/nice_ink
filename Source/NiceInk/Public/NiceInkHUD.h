@@ -88,6 +88,10 @@ protected:
 	FVector2D DrawTok(const FString& Text, float X, float Y, ETextTier Tier,
 		const FLinearColor& Color, EHAlign Align = EHAlign::Left, bool bBold = false);
 	FVector2D MeasureTok(const FString& Text, ETextTier Tier, bool bBold);
+	// 寬度截斷（名字類自由文字的顯示保險）：超寬裁字尾補「…」。
+	// SanitizePlayerName 的 16 字上限是碼元數——CJK 全形 16 字≈拉丁 32 字寬，
+	// 碼元截斷擋不住版面衝突，顯示端一律走量測截斷
+	FString FitTok(const FString& Text, ETextTier Tier, float MaxWidthPx, bool bBold = false);
 	void DrawPanelBox(float X, float Y, float W, float H, float Alpha = 0.72f);
 	void DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, const FLinearColor& Tint);
 	void DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align = EHAlign::Left);

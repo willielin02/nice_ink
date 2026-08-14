@@ -32,6 +32,16 @@ public:
 	virtual void Logout(AController* Exiting) override;
 	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
 		const FString& Options, const FString& Portal = TEXT("")) override;
+
+	// 房主踢人（2026-08-13：ESC 選單房主段呼叫——listen server 上 HUD 就在
+	// 伺服器行程、免 RPC）；斷線＋記入本場拒再入名單
+	void HostKickPlayer(class ANiceInkPlayerState* PS);
+
+	// session 狀態鏡射遊戲真相（2026-08-14）：真開局=StartSession（session 層
+	// 擋中途加入）、回大廳/場間=EndSession（重新可搜可加入）。引擎 AGameMode
+	// 的 match 開場即 StartSession＝大廳期間 LAN beacon 無聲拒答的根因——
+	// GameSession 已換 no-op 版（NiceInkGameSession），狀態只從這裡走
+	void SetSessionInProgress(bool bInProgress);
 	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 
 	// --- 場地配置（座標系沿用桑拿房實測；L_Dojo 道場已以地板探針驗證全席位落在開放地板，
@@ -230,6 +240,12 @@ private:
 	int32 NextSeatIndex = 0;
 	TArray<int32> TourWorkIds;
 	int32 TourCursor = 0;
+
+	// 被踢玩家的 net id（本場拒再入；LAN NULL id 無效時只斷線不記名——記帳）
+	TSet<FString> KickedNetIds;
+
+	// session 是否已標記 InProgress（SetSessionInProgress 冪等用）
+	bool bSessionInProgress = false;
 
 	// Resolution 演出後要接的分支
 	int32 PendingNextVictimId = INDEX_NONE;

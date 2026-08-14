@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/Ticker.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "NiceInkSessionSubsystem.generated.h"
@@ -44,6 +45,16 @@ struct FNiFoundSession
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
 	bool bPublic = true;
 
+	// 房主語言（NILANG＝主選單語言索引；2026-08-14 user 定案：這遊戲的配對
+	// 邊界是語言/文化不是地理——哏要看得懂、語音要能聊才有指認的情報流。
+	// 列表同語言優先；INDEX_NONE＝舊房無屬性）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
+	int32 LangIndex = INDEX_NONE;
+
+	// 公開房房名（NINAME＝徵人啟事：讓瀏覽者知道這房在找怎樣的人；可空）
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
+	FString RoomName;
+
 	// 對應 SearchResults 的原始索引（列表過濾後 JoinFoundSession 要用它）
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Session")
 	int32 SearchIndex = INDEX_NONE;
@@ -61,12 +72,24 @@ public:
 	// 建房並以 listen server 載入道場。每房生成一個 4 字母房間碼（進 session
 	// 廣告屬性＋GameInstance→GameState 複製給大廳顯示）；bPublicListed=false＝
 	// 私房：不進瀏覽列表、只有碼能進。
+	// LangIndex=INDEX_NONE＝跟介面語言（公開房的社群邊界；邀請制無作用）；
+	// RoomName＝公開房徵人啟事（可空；只在公開房上廣告）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
-	void HostSession(bool bLan = true, bool bPublicListed = true);
+	void HostSession(bool bLan = true, bool bPublicListed = true, int32 MaxPlayers = 6,
+		int32 LangIndex = -1, const FString& RoomName = TEXT(""));
 
-	// 搜房（結果進 GetFoundSessions；主選單列表用）
+	// 搜房（結果進 GetFoundSessions；主選單列表用）。LangFilter＝語言過濾
+	//（-1=全部；EOS 走查詢端屬性過濾＝規模化正解、LAN 由顯示層過濾——
+	// LAN beacon 回應本子網全部房、天然小規模）。bBackground＝背景自動更新：
+	// UI 全程靜音（狀態列不講話、按鈕不變灰、舊列表掛著等新結果＝零閃爍）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
-	void SearchSessions(bool bLan = true);
+	void SearchSessions(bool bLan = true, int32 LangFilter = -1, bool bBackground = false);
+
+	// 背景自動更新搜尋進行中（UI 靜音判準）
+	bool IsBackgroundSearching() const
+	{
+		return bBackgroundSearch && UiState == ENiSessionUiState::Searching;
+	}
 
 	// 按房間碼直達（朋友局主通道）：搜房→比對 NICODE→加入；公開私房都吃
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Session")
@@ -131,6 +154,28 @@ private:
 	FString PendingJoinCode;
 	// 本次建房是否公開列出（HostSessionInternal 讀）
 	bool bPendingPublicListed = true;
+	// 本次建房房間人數（4~6；HostSessionInternal 讀）
+	int32 PendingMaxPlayers = 6;
+	// 本次建房語言（INDEX_NONE=跟介面語言）
+	int32 PendingLangIndex = INDEX_NONE;
+	// 本次建房房名（公開房徵人啟事；已消毒）
+	FString PendingRoomName;
+	// 本次搜尋的語言過濾（INDEX_NONE=全部；碼路恆全部——房號可能是任何語言的房）
+	int32 PendingSearchLang = INDEX_NONE;
+	// 上一輪搜尋的過濾狀態＋模式（碼路搭便車撞上過濾搜尋漏接時重搜保底用）
+	int32 LastSearchLang = INDEX_NONE;
+	bool bLastSearchLan = true;
+	// 本輪搜尋是否背景自動更新（UI 靜音；完成/取消即清）
+	bool bBackgroundSearch = false;
+
+	// 即時串流輪詢（2026-08-14 搜尋 5s 窗根治）：LAN 回應毫秒級進
+	// SearchResults、完成回呼卻死等 LAN_QUERY_TIMEOUT=5（引擎 #define 不可
+	// 配置）——搜尋中每 0.2s 把現況倒進 FoundSummaries（房即到即上桌）＋
+	// 碼路命中即早退加入（不等窗）
+	FTSTicker::FDelegateHandle SearchPollTicker;
+	bool TickSearchPoll(float DeltaSeconds);
+	// SearchResults→FoundSummaries 映射＋三鍵排序（串流輪詢與完成回呼共用）
+	void RebuildSummariesFromSearch();
 
 	// 4 字母房間碼；字元集剔除易混形（I/L/O）
 	static FString MakeRoomCode();

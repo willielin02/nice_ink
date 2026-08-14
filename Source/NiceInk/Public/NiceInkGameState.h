@@ -31,6 +31,11 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	FString RoomCode;
 
+	// 房間人數（2026-08-14 定案：房主建房時直接決定這房幾個人 4~6、坐滿關門；
+	// PreLogin 執法＋大廳「n/max」顯示。開局門檻 4 是另一顆閘門＝藏在開始鈕）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	int32 MaxPlayers = 6;
+
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 VictimPlayerId = INDEX_NONE;
 

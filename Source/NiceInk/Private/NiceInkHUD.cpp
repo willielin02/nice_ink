@@ -21,6 +21,7 @@
 #include "NiceInkAudio.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkPlayerState.h"
@@ -450,6 +451,24 @@ void ANiceInkHUD::DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, con
 		FVector2D::ZeroVector, FVector2D::UnitVector, Tint, BLEND_Translucent);
 }
 
+FString ANiceInkHUD::FitTok(const FString& Text, ETextTier Tier, float MaxWidthPx, bool bBold)
+{
+	if (MeasureTok(Text, Tier, bBold).X <= MaxWidthPx)
+	{
+		return Text;
+	}
+	const FString Ellipsis = TEXT("…");
+	for (int32 Len = Text.Len() - 1; Len > 0; --Len)
+	{
+		const FString Candidate = Text.Left(Len) + Ellipsis;
+		if (MeasureTok(Candidate, Tier, bBold).X <= MaxWidthPx)
+		{
+			return Candidate;
+		}
+	}
+	return Ellipsis;
+}
+
 // ---- 即時模式 UI 互動（主選單／ESC 選單共用）----
 
 void ANiceInkHUD::BeginUiFrame()
@@ -755,7 +774,8 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 		if (VictimPS)
 		{
 			// v4.0e：臉像＋名字並列（辨識雙載體）
-			SubText = FString::Printf(TEXT("%s is asleep"), *VictimPS->GetPlayerName());
+			SubText = FString::Printf(TEXT("%s is asleep"),
+				*FitTok(VictimPS->GetPlayerName(), ETextTier::Body, 240.0f * UiScale));
 			SubFacePS = VictimPS;
 			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
 		}
@@ -766,7 +786,8 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	case ENiceInkPhase::Accusation:
 		if (VictimPS)
 		{
-			SubText = FString::Printf(TEXT("%s is choosing..."), *VictimPS->GetPlayerName());
+			SubText = FString::Printf(TEXT("%s is choosing..."),
+				*FitTok(VictimPS->GetPlayerName(), ETextTier::Body, 240.0f * UiScale));
 			SubFacePS = VictimPS;
 			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
 		}
@@ -836,7 +857,8 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 		if (AuthorPS)
 		{
 			// v4.0e：臉像＋名字並列——揭曉的臉下方跟名字
-			DrawTok(AuthorPS->GetPlayerName(), W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+			DrawTok(FitTok(AuthorPS->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
+				W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 			RevealY += 22.0f * UiScale;
 		}
 		DrawTok(bCorrect ? TEXT("takes the seat") : TEXT("inks the picked work  ·  +1 cup"),
@@ -851,7 +873,8 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 			const float LoserFace = 72.0f * UiScale;
 			DrawFaceTok(LoserPS, W * 0.5f - LoserFace * 0.5f, H * 0.2f + 52.0f * UiScale, LoserFace);
 			float LoserY = H * 0.2f + 52.0f * UiScale + LoserFace + 8.0f * UiScale;
-			DrawTok(LoserPS->GetPlayerName(), W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+			DrawTok(FitTok(LoserPS->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
+				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 			LoserY += 22.0f * UiScale;
 			DrawTok(TEXT("cash is split  ·  ink locked forever"),
 				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
@@ -950,11 +973,20 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 	Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
 	for (const ANiceInkPlayerState* PS : Sorted)
 	{
-		// v4.0e：名列＝席位＋臉像＋名字＋現金（辨識雙載體）
+		// v4.0e：名列＝席位＋臉像＋名字＋現金（辨識雙載體）；名字＝量測截斷
+		//（.Left(14) 碼元截斷退役——CJK 全形名照樣撐爆版面的實錘修）
 		DrawTok(FString::Printf(TEXT("seat %d"), PS->SeatIndex + 1),
 			CX - 150.0f * UiScale, LineY, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Left, false);
 		DrawFaceTok(PS, CX - 52.0f * UiScale, LineY - 2.0f * UiScale, RowH - 6.0f * UiScale);
-		DrawTok(PS->GetPlayerName().Left(14), CX - 12.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
+		const float NameBudget = (PS->bIsRoomHost ? 96.0f : 136.0f) * UiScale;
+		const FVector2D NameSize = DrawTok(FitTok(PS->GetPlayerName(), ETextTier::Body, NameBudget),
+			CX - 12.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
+		if (PS->bIsRoomHost)
+		{
+			// 房主標示（2026-08-13）：名字後綴酒金小字
+			DrawTok(TEXT("host"), CX - 12.0f * UiScale + NameSize.X + 8.0f * UiScale,
+				LineY + 3.0f * UiScale, ETextTier::Small, NiHudColor::Amber, EHAlign::Left, false);
+		}
 		DrawTok(FText::AsNumber(PS->Cash).ToString(), CX + 190.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Right, false);
 		LineY += RowH;
 	}
@@ -963,16 +995,19 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 
 	// 主機（listen server 本人）手動開始；其他人等待——自動開局只活在 PIE（robo）；
 	// 人數併進底部提示（面板頂不再放「x / 6」標題行）
+	// 人數顯示「n/房間人數」（2026-08-14 房間人數制；{0} 自帶完整計數）；
+	// 開局門檻 4＝遊戲規則（PIE 維持 2 服務 robo——與 RequestStartMatch 同判準）
+	const FString CountText = FString::Printf(TEXT("%d/%d"), NumIn, FMath::Clamp(GS->MaxPlayers, 4, 6));
+	const int32 MinStart = (GetWorld() && GetWorld()->WorldType == EWorldType::PIE) ? 2 : 4;
 	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
 	if (bIsHost)
 	{
-		DrawBottomHint(NiLoc::TFmt(this, NumIn >= 2 ? ENiLocKey::LobbyStart : ENiLocKey::LobbyWaiting,
-			FString::FromInt(NumIn)),
-			NumIn >= 2 ? NiHudColor::Amber : NiHudColor::PaperDim);
+		DrawBottomHint(NiLoc::TFmt(this, NumIn >= MinStart ? ENiLocKey::LobbyStart : ENiLocKey::LobbyWaiting, CountText),
+			NumIn >= MinStart ? NiHudColor::Amber : NiHudColor::PaperDim);
 	}
 	else
 	{
-		DrawBottomHint(NiLoc::TFmt(this, ENiLocKey::LobbyWaitingHost, FString::FromInt(NumIn)), NiHudColor::PaperDim);
+		DrawBottomHint(NiLoc::TFmt(this, ENiLocKey::LobbyWaitingHost, CountText), NiHudColor::PaperDim);
 	}
 }
 
@@ -1037,6 +1072,50 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 		}
 	}
 	Y += BtnH + 18.0f * UiScale;
+
+	// 房主管理段（2026-08-13 踢人制）：listen server 上 HUD 就在伺服器行程
+	// ＝直呼 GameMode 免 RPC；踢出＋本場拒再入（公開房搗亂管理）
+	if (GetWorld() && GetWorld()->GetNetMode() != NM_Client)
+	{
+		if (ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>())
+		{
+			TArray<ANiceInkPlayerState*> Others;
+			for (APlayerState* PS : GS->PlayerArray)
+			{
+				if (ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+				{
+					if (!NIPS->bIsRoomHost)
+					{
+						Others.Add(NIPS);
+					}
+				}
+			}
+			if (Others.Num() > 0)
+			{
+				Others.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
+					{ return A.SeatIndex < B.SeatIndex; });
+				DrawTok(TEXT("players"), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
+				Y += 26.0f * UiScale;
+				const float KickW = 84.0f * UiScale;
+				const float KickH = 34.0f * UiScale;
+				for (ANiceInkPlayerState* NIPS : Others)
+				{
+					DrawTok(FitTok(NIPS->GetPlayerName(), ETextTier::Body, 200.0f * UiScale),
+						CX - 150.0f * UiScale, Y + 5.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
+					if (Button(TEXT("kick"), CX + 110.0f * UiScale, Y, KickW, KickH))
+					{
+						if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+						{
+							GM->HostKickPlayer(NIPS);
+						}
+					}
+					Y += KickH + 8.0f * UiScale;
+				}
+				Y += 10.0f * UiScale;
+			}
+		}
+	}
+
 	DrawTok(TEXT("esc — resume"), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
 
@@ -1065,7 +1144,8 @@ void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter
 	if (Suspect)
 	{
 		// v4.0e：嫌疑人大臉像下方跟名字（辨識雙載體）
-		DrawTok(Suspect->GetPlayerName(), W * 0.5f, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
+		DrawTok(FitTok(Suspect->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
+			W * 0.5f, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 	}
 	LineY += 24.0f * UiScale;
 	DrawTok(TEXT("1-9 view work   ·   TAB suspect   ·   ENTER accuse"),
@@ -1239,7 +1319,8 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 			const float TextY = PanelCenter.Y - PanelRadius * 0.52f;
 			const float IconS = 64.0f * UiScale;
 			DrawIconTok(IconTrap, PanelCenter.X - IconS * 0.5f, TextY - IconS - 12.0f * UiScale, IconS, NiHudColor::Red);
-			DrawTok(FString::Printf(TEXT("TRAPPED BY %s !"), KillerPS ? *KillerPS->GetPlayerName().ToUpper() : TEXT("???")),
+			DrawTok(FString::Printf(TEXT("TRAPPED BY %s !"),
+				KillerPS ? *FitTok(KillerPS->GetPlayerName().ToUpper(), ETextTier::Display, 380.0f * UiScale, true) : TEXT("???")),
 				PanelCenter.X, TextY, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
 			break;
 		}

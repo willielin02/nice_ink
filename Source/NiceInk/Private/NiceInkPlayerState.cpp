@@ -14,6 +14,7 @@ void ANiceInkPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ANiceInkPlayerState, SeatIndex);
 	DOREPLIFETIME(ANiceInkPlayerState, AvatarIndex);
+	DOREPLIFETIME(ANiceInkPlayerState, bIsRoomHost);
 	DOREPLIFETIME(ANiceInkPlayerState, PenaltyCups);
 	DOREPLIFETIME(ANiceInkPlayerState, Cash);
 }

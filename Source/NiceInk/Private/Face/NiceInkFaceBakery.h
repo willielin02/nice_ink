@@ -30,6 +30,11 @@ public:
 	/** 模型/資料根目錄有效性（決定 Persona 走內建或 venv 對照組）。 */
 	static bool IsAvailable();
 
+	/** 背景預熱模型快取（選單待機時呼叫，背景執行緒）：LaMa 的 ORT session
+	 *  建立 ~60s＝首次上傳的冷啟大頭——先建好＝首上傳直接走暖路。與
+	 *  RunIntake 同鎖同快取：上傳撞上預熱只會等鎖、永不重載。 */
+	static bool WarmupModels(FString& OutError);
+
 	/** 跑完整 intake。回 false 時 OutError 帶原因（同 python 的 stderr 語義），
 	 *  intake_log.txt 一樣會寫（驗屍管道）。 */
 	static bool RunIntake(const FString& SelfiePath, const FString& OutDir,

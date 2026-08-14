@@ -180,6 +180,43 @@ bool FNiFaceBakery::IsAvailable()
 	return true;
 }
 
+// 模型常駐（SHIP_PLAN C1 紅利：NNE 資產載一次＝冷啟大頭只付首次；LaMa 的
+// ORT session 建立實測 ~60s）。RunIntake（首用）與 WarmupModels（選單預熱）
+// 共用同一鎖同一快取：預熱撞上上傳＝上傳等鎖後接暖模型，永不重載。
+namespace
+{
+struct FModelCache
+{
+	FCriticalSection Mutex;
+	TUniquePtr<FNiFaceOnnxModel> Bisenet, Det, Lm, Lama;
+};
+FModelCache GModelCache;
+
+// 呼叫端須持 GModelCache.Mutex
+bool EnsureModelsLocked(FString& OutErr)
+{
+	if (GModelCache.Bisenet && GModelCache.Det && GModelCache.Lm && GModelCache.Lama)
+	{
+		return true;
+	}
+	const FString Models = NiFace::BakeryRoot() / TEXT("models");
+	GModelCache.Bisenet = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("bisenet_512.onnx"), OutErr);
+	if (!GModelCache.Bisenet) { return false; }
+	GModelCache.Det = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("face_detector.onnx"), OutErr);
+	if (!GModelCache.Det) { return false; }
+	GModelCache.Lm = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("face_landmarks.onnx"), OutErr);
+	if (!GModelCache.Lm) { return false; }
+	GModelCache.Lama = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("lama_fp32.onnx"), OutErr);
+	return GModelCache.Lama.IsValid();
+}
+} // namespace
+
+bool FNiFaceBakery::WarmupModels(FString& OutError)
+{
+	FScopeLock Lock(&GModelCache.Mutex);
+	return EnsureModelsLocked(OutError);
+}
+
 bool FNiFaceBakery::RunIntake(const FString& SelfiePath, const FString& OutDir,
                               FString& OutError, const FOptions& Options)
 {
@@ -212,33 +249,20 @@ bool FNiFaceBakery::RunIntake(const FString& SelfiePath, const FString& OutDir,
 		return Fail(FString::Printf(TEXT("ERROR: Cannot read %s"), *SelfiePath));
 	}
 
-	// 模型常駐（SHIP_PLAN C1 紅利：NNE 資產載一次＝冷啟大頭只付首次；
-	// LaMa 的 ORT session 建立實測 ~60s）。整趟 RunIntake 互斥＝單工。
-	struct FModelCache
-	{
-		FCriticalSection Mutex;
-		TUniquePtr<FNiFaceOnnxModel> Bisenet, Det, Lm, Lama;
-	};
-	static FModelCache GCache;
-	FScopeLock Lock(&GCache.Mutex);
-
-	const FString Models = NiFace::BakeryRoot() / TEXT("models");
+	// 模型常駐快取（見 GModelCache）：整趟 RunIntake 互斥＝單工
+	FScopeLock Lock(&GModelCache.Mutex);
 	FString Err;
-	if (!GCache.Bisenet || !GCache.Det || !GCache.Lm || !GCache.Lama)
+	if (!GModelCache.Lama)
 	{
 		C.Say(TEXT("loading models (bisenet/lama/detector/landmarks)..."));
-		GCache.Bisenet = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("bisenet_512.onnx"), Err);
-		if (!GCache.Bisenet) { return Fail(Err); }
-		GCache.Det = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("face_detector.onnx"), Err);
-		if (!GCache.Det) { return Fail(Err); }
-		GCache.Lm = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("face_landmarks.onnx"), Err);
-		if (!GCache.Lm) { return Fail(Err); }
-		GCache.Lama = FNiFaceOnnxModel::CreateFromFile(Models / TEXT("lama_fp32.onnx"), Err);
-		if (!GCache.Lama) { return Fail(Err); }
 	}
-	FNiFaceLandmarks Landmarks(GCache.Det.Get(), GCache.Lm.Get());
-	C.Bisenet = GCache.Bisenet.Get();
-	C.Lama = GCache.Lama.Get();
+	if (!EnsureModelsLocked(Err))
+	{
+		return Fail(Err);
+	}
+	FNiFaceLandmarks Landmarks(GModelCache.Det.Get(), GModelCache.Lm.Get());
+	C.Bisenet = GModelCache.Bisenet.Get();
+	C.Lama = GModelCache.Lama.Get();
 	C.Landmarks = &Landmarks;
 
 	// 主管線

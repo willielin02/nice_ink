@@ -2,6 +2,7 @@
 
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "GameFramework/GameSession.h"
 #include "GameFramework/PlayerController.h"
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
@@ -10,12 +11,14 @@
 #include "NiceInkCharacter.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkGameSession.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSaveGame.h"
 #include "NiceInkSessionSubsystem.h"
+#include "OnlineSubsystemUtils.h"
 #include "TimerManager.h"
 
 ANiceInkGameMode::ANiceInkGameMode()
@@ -24,6 +27,9 @@ ANiceInkGameMode::ANiceInkGameMode()
 	PlayerStateClass = ANiceInkPlayerState::StaticClass();
 	HUDClass = ANiceInkHUD::StaticClass();
 	DefaultPawnClass = ANiceInkCharacter::StaticClass();
+	// 引擎 match≠我們的局：預設 GameSession 開場即 StartSession＝LAN beacon
+	// 無聲拒答（2026-08-14 定罪）——換 no-op 版、session 狀態走 SetSessionInProgress
+	GameSessionClass = ANiceInkGameSession::StaticClass();
 
 	// 醉夢迷宮難度檔：每杯一組（ini 有覆寫時 config 載入會蓋掉這裡）
 	MazeParamsPerCup.Add(FDreamMazeGen::DefaultParamsForCup(0));
@@ -58,6 +64,9 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 			if (const UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 			{
 				GS->RoomCode = GI->HostRoomCode;
+				// 房間人數同批播種（2026-08-14 定案：房主直接決定這房幾個人）：
+				// 建房頁選的值經 GameInstance 轉進 GameState 複製全員；直連/PIE＝6
+				GS->MaxPlayers = FMath::Clamp(GI->HostMaxPlayers, 4, 6);
 			}
 		}
 	}
@@ -69,6 +78,12 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 		if (PS->SeatIndex == INDEX_NONE)
 		{
 			PS->SeatIndex = NextSeatIndex++;
+
+			// 房主標示（大廳名冊＋ESC 踢人 UI 的依據）：listen server 本人
+			if (NewPlayer->IsLocalController())
+			{
+				PS->bIsRoomHost = true;
+			}
 
 			// listen 主機本人不經 ?Name=（沒有重登入）：從 GameInstance 讀主選單設定。
 			// 只在 standalone/packaged（Game world）生效——PIE 維持引擎派名，robo 不受擾。
@@ -117,6 +132,13 @@ void ANiceInkGameMode::PreLogin(const FString& Options, const FString& Address,
 		return;
 	}
 
+	// 被踢名單（2026-08-13 踢人制）：本場拒再入——踢出後拿房號重連直接擋門
+	if (UniqueId.IsValid() && KickedNetIds.Contains(UniqueId->ToString()))
+	{
+		ErrorMessage = TEXT("you were removed from this room");
+		return;
+	}
+
 	// 開賽中不收新客（session 層 bAllowJoinInProgress=false 已擋；
 	// 這裡防直連 IP 繞過 session 的路徑）
 	const ANiceInkGameState* GS = NIState();
@@ -125,9 +147,81 @@ void ANiceInkGameMode::PreLogin(const FString& Options, const FString& Address,
 		ErrorMessage = TEXT("match in progress");
 		return;
 	}
-	if (GS && GS->PlayerArray.Num() >= 6)
+	// 房間人數＝房主建房時選的值（坐滿關門；直連/PIE 預設 6）
+	if (GS && GS->PlayerArray.Num() >= FMath::Clamp(GS->MaxPlayers, 4, 6))
 	{
 		ErrorMessage = TEXT("room is full");
+		return;
+	}
+
+	// 同機 loopback 保底路（-nilanloopback 直連）帶碼＝必須驗房號：
+	// 誤碼不得靜默連進本機恰好開著的別的房。無 NiCode 的直連（play_ingame/
+	// robo）不受此檢查影響。
+	if (UGameplayStatics::HasOption(Options, TEXT("NiCode")))
+	{
+		const FString Wanted = UGameplayStatics::ParseOption(Options, TEXT("NiCode"));
+		const FString Have = GS ? GS->RoomCode : FString();
+		if (!Wanted.Equals(Have, ESearchCase::IgnoreCase))
+		{
+			ErrorMessage = TEXT("no room with that code on this host");
+		}
+	}
+}
+
+void ANiceInkGameMode::SetSessionInProgress(bool bInProgress)
+{
+	if (bSessionInProgress == bInProgress)
+	{
+		return; // 冪等（回大廳的多個路徑都會呼叫）
+	}
+	bSessionInProgress = bInProgress;
+
+	IOnlineSessionPtr Sessions = Online::GetSessionInterface(GetWorld());
+	if (!Sessions.IsValid() || !Sessions->GetNamedSession(NAME_GameSession))
+	{
+		return; // 無 session 流程（PIE/robo/直連）＝無事可做
+	}
+	// 遠端 client 的本地 session 記錄同步（引擎 AGameSession 同款通知）
+	for (FConstPlayerControllerIterator It = GetWorld()->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* PC = It->Get();
+		if (PC && !PC->IsLocalController())
+		{
+			if (bInProgress) { PC->ClientStartOnlineSession(); }
+			else { PC->ClientEndOnlineSession(); }
+		}
+	}
+	if (bInProgress)
+	{
+		Sessions->StartSession(NAME_GameSession);
+	}
+	else
+	{
+		Sessions->EndSession(NAME_GameSession);
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiSession: match session -> %s"),
+		bInProgress ? TEXT("InProgress") : TEXT("Ended (joinable)"));
+}
+
+void ANiceInkGameMode::HostKickPlayer(ANiceInkPlayerState* PS)
+{
+	APlayerController* PC = PS ? Cast<APlayerController>(PS->GetOwner()) : nullptr;
+	if (!PC || PC->IsLocalController())
+	{
+		return; // 主機本人不可踢（也擋 null）
+	}
+	// 記入本場拒再入名單（LAN NULL id 可能無效＝只斷線不記名，重連可回——
+	// 正式 EOS 路 id 恆有效；記帳於 header）
+	if (PS->GetUniqueId().IsValid())
+	{
+		KickedNetIds.Add(PS->GetUniqueId()->ToString());
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiKick: host kicked %s (seat %d)"), *PS->GetPlayerName(), PS->SeatIndex);
+	if (GameSession)
+	{
+		// 引擎標準踢流程：ClientWasKicked＋關連線→客戶端走 NetworkFailure 回選單；
+		// 我方 Logout 既有離場處理（持久化/AbortRound 防護）原樣接手
+		GameSession->KickPlayer(PC, FText::FromString(TEXT("removed by the host")));
 	}
 }
 
@@ -212,6 +306,7 @@ void ANiceInkGameMode::AbortRound(bool bEnoughPlayers)
 	else
 	{
 		GS->SetPhase(ENiceInkPhase::Lobby, 0.0f); // 人不夠：回大廳等人
+		SetSessionInProgress(false); // 回大廳＝重新可搜可加入
 	}
 }
 
@@ -651,8 +746,11 @@ void ANiceInkGameMode::MaybeScheduleAutoStart()
 
 void ANiceInkGameMode::RequestStartMatch()
 {
+	// 開局門檻＝遊戲規則 4 人（設計人數 4~6；「下限」不是房間設定、藏在開始
+	// 鈕裡——2026-08-14 房間人數制）。PIE 維持 2＝robo 少人探針不受擾
+	const int32 MinStart = (GetWorld() && GetWorld()->WorldType == EWorldType::PIE) ? 2 : 4;
 	ANiceInkGameState* GS = NIState();
-	if (!GS || GS->PlayerArray.Num() < 2)
+	if (!GS || GS->PlayerArray.Num() < MinStart)
 	{
 		return;
 	}
@@ -675,6 +773,7 @@ void ANiceInkGameMode::RequestStartMatch()
 		}
 	}
 
+	SetSessionInProgress(true); // 真開局＝session 才進 InProgress（擋中途加入）
 	EnterBottleSpin();
 }
 
@@ -715,6 +814,7 @@ void ANiceInkGameMode::OnBottleSpinDone()
 	if (GS->PlayerArray.Num() == 0)
 	{
 		GS->SetPhase(ENiceInkPhase::Lobby, 0.0f);
+		SetSessionInProgress(false);
 		return;
 	}
 
@@ -748,6 +848,7 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 		if (GS->PlayerArray.Num() == 0)
 		{
 			GS->SetPhase(ENiceInkPhase::Lobby, 0.0f);
+			SetSessionInProgress(false);
 			return;
 		}
 		VictimPlayerId = GS->PlayerArray[FMath::RandRange(0, GS->PlayerArray.Num() - 1)]->GetPlayerId();
@@ -1065,6 +1166,7 @@ void ANiceInkGameMode::OnFinaleDone()
 	PersistAllCharacters();
 
 	GS->SetPhase(ENiceInkPhase::PostGame, 0.0f);
+	SetSessionInProgress(false); // 場間大廳＝重新可搜可加入
 	SetPhaseTimer(0.0f, nullptr);
 }
 

@@ -12,6 +12,7 @@ class UNiceInkGameInstance;
 class UNiceInkSessionSubsystem;
 class SEditableTextBox;
 class SVerticalBox;
+class SWrapBox;
 
 // 主選單 Slate 本體（2026-08-06 白卡制：素色半透明＝毛玻璃白卡＋墨字；
 // user 定案 Meccha/Schedule I 式）。全 C++ 直寫、零 UMG/Blueprint 資產——
@@ -64,7 +65,13 @@ private:
 	// --- 狀態 ---
 	FString CodeBuffer;          // 房間碼輸入（4 字母）
 	bool bPublicRoom = false;    // invite only（預設）／public
+	int32 HostMaxPlayers = 6;    // 房間人數（4~6；2026-08-14 定案：房主直接決定這房幾個人）
+	int32 HostLangIndex = INDEX_NONE; // 公開房語言（INDEX_NONE=跟介面語言；只在公開時顯示）
+	FString HostRoomName;        // 公開房房名（徵人啟事；可空；只在公開時顯示）
 	bool bSearchKicked = false;  // 進 join 頁自動搜一次
+	double NextAutoSearchTime = 0.0; // 列表自動更新（12s；打房號中不干擾）
+	int32 JoinLangFilter = INDEX_NONE; // 列表語言過濾（-1=全部；Construct 播種=我的語言）
+	bool bJoinLangOpen = false;  // 語言選擇器展開中
 	FString ErrorBanner;         // 斷線原因（host/join 動作時清除）
 	// 首啟創角（2026-08-12 首啟導流）：開機無臉＝落在「創建你的力士」頁、
 	// 無返回無 ESC（強制上傳制的流程化——主選單的門檻提示字全數退役）；
@@ -104,7 +111,7 @@ private:
 	// --- 動態子區 ---
 	TSharedPtr<SEditableTextBox> NameBox;
 	TSharedPtr<SVerticalBox> RoomListBox;
-	TSharedPtr<SHorizontalBox> FaceRowBox;              // 臉庫列（個人檔案頁）
+	TSharedPtr<SWrapBox> FaceRowBox;                    // 臉庫列（個人檔案頁；wrap＝放大後自動換行）
 	TArray<TSharedPtr<FSlateBrush>> FaceThumbBrushes;   // 縮圖 brush（比 widget 長壽）
 	int32 LastFaceRowRev = -1;                          // FaceRevision 變動＝重建臉庫列
 	bool bFaceRowPending = false;                       // 有縮圖還沒烘出來（頭像亭暖機中）＝稍後重試
@@ -143,5 +150,8 @@ private:
 	void PickSelfieAndIntake();              // 檔案對話框→自拍管線
 	TSharedRef<SWidget> MakeGhostButton(const FString& Label, TFunction<void()> OnClick);
 	TSharedRef<SWidget> MakeChip(const FString& Label, bool bPublicValue);
+	TSharedRef<SWidget> MakeMaxPlayersRow(); // 建房頁人數 2~6 chips
+	TSharedRef<SWidget> MakeHostLangRow();   // 建房頁公開房語言 chips（13 語 wrap）
+	TSharedRef<SWidget> MakeJoinLangRow();   // 加入頁列表語言過濾 chips（全部+13 語 wrap）
 	EVisibility PageVis(EPage P) const { return Page == P ? EVisibility::Visible : EVisibility::Collapsed; }
 };

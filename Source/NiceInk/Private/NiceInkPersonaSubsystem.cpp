@@ -38,6 +38,25 @@ void UNiceInkPersonaSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	LoadCustomFaceFromDisk(); // 上一次上傳的臉＝本機正本，開遊戲即穿上
+
+	// 模型預熱（2026-08-12 user 定案「盡可能縮短等待」）：首啟強制上傳閘
+	// ＝無臉玩家必走臉管線，而冷啟大頭（LaMa ORT session ~60s）跟選單待機
+	// 完全重疊——開機就背景建好，首次上傳直接走暖路。已有臉＝多半不再
+	// 上傳，不預熱（四顆 session 常駐 RAM 不白付）；GIsEditor 閘＝PIE/robo
+	// 零干擾（與亭/FaceShare 同精神）
+	const bool bForceVenv = FParse::Param(FCommandLine::Get(), TEXT("facevenv"));
+	if (!GIsEditor && !HasCustomFace() && !bForceVenv && FNiFaceBakery::IsAvailable())
+	{
+		Async(EAsyncExecution::Thread, []()
+		{
+			const double T0 = FPlatformTime::Seconds();
+			FString Err;
+			const bool bOk = FNiFaceBakery::WarmupModels(Err);
+			UE_LOG(LogTemp, Log, TEXT("NiPersona: face model warmup %s in %.1fs%s%s"),
+				bOk ? TEXT("done") : TEXT("FAILED"), FPlatformTime::Seconds() - T0,
+				bOk ? TEXT("") : TEXT(" — "), bOk ? TEXT("") : *Err);
+		});
+	}
 }
 
 void UNiceInkPersonaSubsystem::Deinitialize()

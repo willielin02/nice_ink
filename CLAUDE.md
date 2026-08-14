@@ -118,6 +118,16 @@ canvas 做不到毛玻璃半透明）**。
   量化）、GameStateBase 10Hz、**PlayerState 1Hz**——相位切換頓/罰酒慢一秒的隱形真兇
   （07-26 已調：ini 60Hz＋ctor SetNetUpdateFrequency）。「主機視窗手感好、客戶端鈍」
   ＝缺本地預測的簽名（listen server RPC 同幀本地執行）。
+- **引擎的 match≠遊戲的局**：`AGameMode` 開場即自動 StartSession→session 進
+  InProgress，配 bAllowJoinInProgress=false＝大廳期間 LAN beacon 對搜房查詢
+  **無聲拒答**（IsSessionJoinable 靜默假；08-14 verbose log 活體定罪——查詢
+  抵達主機、主機零回應）。任何自製大廳住在 AGameMode 相位機之上，session
+  可加入性必須自己接管（NiceInkGameSession no-op＋SetSessionInProgress）。
+  連帶教訓：**量測為真≠歸因為真**——防火牆缺規則與共用 port 單播只送先綁者
+  都量測屬實，但都是紅鯡魚；宣判前先驗「失敗環節本人」（引擎回應其實是廣播）。
+- **LAN 搜尋恆等滿 5 秒**＝`LAN_QUERY_TIMEOUT 5` 引擎 #define（不可配置、
+  installed build 不可改）；回應毫秒級就在 SearchResults——要快就 0.2s 輪詢
+  串流＋碼命中早退，別等完成回呼交卷。
 
 ## 技術地圖
 
@@ -329,6 +339,24 @@ canvas 做不到毛玻璃半透明）**。
   工具：`play_fresh.bat`（全新玩家沙箱；**EOS persistentauth cache=機器全域
   ＝沙箱裝不下、靜默登入照樣回來**）、`reset_4p_sandboxes.bat`（只清
   Saved_P2/3/4）。鐵則：icon 驗收必看頁面原位；視覺缺陷先用數字定罪再修。
+  **08-12~14 頭像亭 v4＋大廳配對規模版（帳本=SHIP_PLAN 追記⑮~⑰）**：亭燈
+  =±XYZ 六面均勻點光（SkyLight 三重不可用定罪：無 LightingChannels/桌面天光
+  shader 不理通道/地下捕捉虛空）＋膚色錨定自動曝光（裸輻射÷已知膚色=還原
+  albedo、亮度與光強解耦）＋ACES+Saturation 1.15＋unsharp 五官增顯；ONNX
+  模型開機背景預熱（無臉玩家才預熱、GIsEditor 閘、與 RunIntake 同鎖；實測
+  14.4s）；大廳=名字 FitTok 寬度截斷（七繪製點、.Left 碼元截斷退役）/房主
+  host 金綴（PlayerState.bIsRoomHost）/房間人數 4~6（房主直接決定、坐滿關門；
+  開局門檻 4=規則藏開始鈕、PIE 維持 2 服務 robo）/ESC 房主踢人＋KickedNetIds
+  本場拒再入；**LAN 搜房真兇修**（見陷阱年鑑「引擎的 match≠遊戲的局」）=
+  NiceInkGameSession no-op＋GameMode::SetSessionInProgress 鏡射真開局/回大廳；
+  公開房規模版=房名 NINAME（徵人啟事、24 碼元、公開限定）＋語言 NILANG
+  （**user 定案：配對邊界=語言/文化非地理**；建房頁 13 語選擇器預設跟介面、
+  EOS 查詢端過濾+LAN 顯示層+列表過濾 chip 預設我的語言）＋列表 UX（左房名
+  （無名公開房顯房號）右人數點點●○+ping、三鍵排序=同語言→人多→ping、無上限
+  捲動、空狀態「自己開一間」、12s 靜音自動重搜）＋搜尋體感（雙緩衝防閃爍/
+  0.2s 串流即到即上桌/碼路早退 5s→<1s/可點判準=只擋 Joining/Hosting）；
+  MaxSearchResults 100；robo 鉤子 NiMenuAutoHost 增房名參數；**DIAG 自駕流**
+  =兩實例 -saveddirsuffix=DIAG*+ExecCmds+NiMenuShot 截圖（本批全部自驗走此流）。
   **選單舞台（user 定案：半透明按鈕後面=自己的力士跟 BGM 跳舞）**＝
   `NiceInkMenuStage` 全程式生成（隱形地板+相機+無影平行光×2+完整
   ANiceInkCharacter 替身）：墨水 RT 壓 512 省 VRAM、臉=SetupAsMenuDummy 直指

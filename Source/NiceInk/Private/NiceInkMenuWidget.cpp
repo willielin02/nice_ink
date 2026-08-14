@@ -31,8 +31,10 @@
 #include "Widgets/Layout/SBackgroundBlur.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SUniformGridPanel.h"
+#include "Widgets/Layout/SWrapBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SOverlay.h"
 #include "Widgets/Text/STextBlock.h"
@@ -131,6 +133,10 @@ bool SNiMenu::IsBusy() const
 		return false;
 	}
 	const ENiSessionUiState St = S->GetUiState();
+	if (St == ENiSessionUiState::Searching && S->IsBackgroundSearching())
+	{
+		return false; // 背景自動更新＝UI 靜音（按鈕不變灰、狀態列不講話）
+	}
 	return St == ENiSessionUiState::Hosting || St == ENiSessionUiState::Searching ||
 		St == ENiSessionUiState::Joining;
 }
@@ -177,6 +183,8 @@ void SNiMenu::Construct(const FArguments& InArgs)
 
 	if (UNiceInkGameInstance* Inst = GI())
 	{
+		// 列表語言過濾預設＝我的語言（配對邊界=語言；「全部」是雙語者的顯式出口）
+		JoinLangFilter = Inst->GetMenuLanguage();
 		ErrorBanner = Inst->ConsumeDisconnectReason();
 	}
 
@@ -518,6 +526,107 @@ FReply SNiMenu::OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEve
 	return FReply::Unhandled();
 }
 
+TSharedRef<SWidget> SNiMenu::MakeMaxPlayersRow()
+{
+	// 房間人數 4~6（2026-08-14 user 裁決「房主直接決定這房幾個人」：一個數字
+	// 一個語義——坐滿關門；「至少 4 人開局」是規則不是設定、藏在開始鈕）
+	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+	for (int32 N = 4; N <= 6; ++N)
+	{
+		Row->AddSlot().FillWidth(1).Padding(N == 4 ? 0.0f : 6.0f, 0, 0, 0)
+		[
+			SNew(SBorder)
+				.BorderImage_Lambda([this, N]() -> const FSlateBrush*
+					{ return HostMaxPlayers == N ? &ChipOnBrush : &ChipOffBrush; })
+				.HAlign(HAlign_Center).VAlign(VAlign_Center)
+				.Padding(FMargin(0, 9))
+				.OnMouseButtonDown_Lambda([this, N](const FGeometry&, const FPointerEvent&)
+					{ HostMaxPlayers = N; return FReply::Handled(); })
+			[
+				SNew(STextBlock).Font(Ty(NiType::Body))
+					.ColorAndOpacity_Lambda([this, N]()
+						{ return HostMaxPlayers == N ? FSlateColor(NiHudColor::Paper) : FSlateColor(NiHudColor::InkDim); })
+					.Text(FText::AsNumber(N))
+			]
+		];
+	}
+	return Row;
+}
+
+TSharedRef<SWidget> SNiMenu::MakeHostLangRow()
+{
+	// 公開房語言（2026-08-14 user 定案「做」）：預設跟介面語言、可改——
+	// 介面語言≠想玩的語言的人（英文介面開繁中房/雙語玩家開外語房）有出口。
+	// 13 語母語名 chips wrap 排列（與文A 頁同「母語名自己會說話」原則）
+	TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true);
+	for (int32 i = 0; i < NiLoc::NumLangs; ++i)
+	{
+		Row->AddSlot().Padding(0, 0, 6, 6)
+		[
+			SNew(SBorder)
+				.BorderImage_Lambda([this, i]() -> const FSlateBrush*
+				{
+					const int32 Cur = HostLangIndex != INDEX_NONE ? HostLangIndex
+						: (GI() ? GI()->GetMenuLanguage() : 0);
+					return Cur == i ? &ChipOnBrush : &ChipOffBrush;
+				})
+				.HAlign(HAlign_Center).VAlign(VAlign_Center)
+				.Padding(FMargin(12, 6))
+				.OnMouseButtonDown_Lambda([this, i](const FGeometry&, const FPointerEvent&)
+					{ HostLangIndex = i; return FReply::Handled(); })
+			[
+				SNew(STextBlock).Font(Ty(NiType::Note))
+					.ColorAndOpacity_Lambda([this, i]()
+					{
+						const int32 Cur = HostLangIndex != INDEX_NONE ? HostLangIndex
+							: (GI() ? GI()->GetMenuLanguage() : 0);
+						return Cur == i ? FSlateColor(NiHudColor::Paper) : FSlateColor(NiHudColor::InkDim);
+					})
+					.Text(FText::FromString(NiLoc::LangNativeName(i)))
+			]
+		];
+	}
+	return Row;
+}
+
+TSharedRef<SWidget> SNiMenu::MakeJoinLangRow()
+{
+	// 列表語言過濾（規模版）：[全部語言]+13 母語名 chips；選定即重搜收合。
+	// EOS 走查詢端過濾（SearchSessions LangFilter）、LAN 顯示層過濾
+	auto PickLang = [this](int32 Lang)
+	{
+		JoinLangFilter = Lang;
+		bJoinLangOpen = false;
+		if (UNiceInkSessionSubsystem* S = Sessions())
+		{
+			S->SearchSessions(IsLan(), JoinLangFilter); // 忙碌中=重入護欄自擋，12s 自動更新會補
+		}
+	};
+	auto MakeLangChip = [this, PickLang](int32 Lang, const FText& Label) -> TSharedRef<SWidget>
+	{
+		return SNew(SBorder)
+			.BorderImage_Lambda([this, Lang]() -> const FSlateBrush*
+				{ return JoinLangFilter == Lang ? &ChipOnBrush : &ChipOffBrush; })
+			.HAlign(HAlign_Center).VAlign(VAlign_Center)
+			.Padding(FMargin(12, 6))
+			.OnMouseButtonDown_Lambda([PickLang, Lang](const FGeometry&, const FPointerEvent&)
+				{ PickLang(Lang); return FReply::Handled(); })
+			[
+				SNew(STextBlock).Font(Ty(NiType::Note))
+					.ColorAndOpacity_Lambda([this, Lang]()
+						{ return JoinLangFilter == Lang ? FSlateColor(NiHudColor::Paper) : FSlateColor(NiHudColor::InkDim); })
+					.Text(Label)
+			];
+	};
+	TSharedRef<SWrapBox> Row = SNew(SWrapBox).UseAllottedSize(true);
+	Row->AddSlot().Padding(0, 0, 6, 6)[MakeLangChip(INDEX_NONE, Loc(ENiLocKey::AllLanguages))];
+	for (int32 i = 0; i < NiLoc::NumLangs; ++i)
+	{
+		Row->AddSlot().Padding(0, 0, 6, 6)[MakeLangChip(i, FText::FromString(NiLoc::LangNativeName(i)))];
+	}
+	return Row;
+}
+
 TSharedRef<SWidget> SNiMenu::BuildHostPage()
 {
 	// 開房設定步（2026-08-11 user 裁決兩步流「頂層只放動詞」）：
@@ -565,6 +674,61 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 									return Loc(bPublicRoom ? ENiLocKey::PublicDesc : ENiLocKey::InviteOnlyDesc);
 								})
 						]
+						// 人數上限 2~6（2026-08-13 房主人數設定；chips 同可見性語彙）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::M, 0, 0)
+						[
+							SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::InkDim)
+								.Text(Loc(ENiLocKey::MaxPlayersLabel))
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
+						[
+							MakeMaxPlayersRow()
+						]
+						// 公開房語言（只在公開時展開——邀請制房語言無作用不佔版面）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::M, 0, 0)
+						[
+							SNew(SBox).Visibility_Lambda([this]()
+								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
+							[
+								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::InkDim)
+									.Text(Loc(ENiLocKey::Language))
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
+						[
+							SNew(SBox).Visibility_Lambda([this]()
+								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
+							[
+								MakeHostLangRow()
+							]
+						]
+						// 公開房房名＝徵人啟事（2026-08-14 user 定案：讓瀏覽者
+						// 知道這房在找怎樣的人；可空、只在公開時展開）
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::M, 0, 0)
+						[
+							SNew(SBox).Visibility_Lambda([this]()
+								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
+							[
+								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::InkDim)
+									.Text(Loc(ENiLocKey::RoomNameLabel))
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
+						[
+							SNew(SBox).Visibility_Lambda([this]()
+								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
+							[
+								SNew(SEditableTextBox)
+									.Style(&NameBoxStyle)
+									.HintText(Loc(ENiLocKey::RoomNameHint))
+									// 打字即截 24＋即時入袋（不等 commit——按開房間
+									// 時焦點可能還在框裡）
+									.OnTextChanged_Lambda([this](const FText& T)
+									{
+										HostRoomName = T.ToString().Left(24);
+									})
+							]
+						]
 					]
 				]
 			]
@@ -582,7 +746,7 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 					.OnClicked_Lambda([this]()
 					{
 						ErrorBanner.Reset();
-						if (UNiceInkSessionSubsystem* S = Sessions()) { S->HostSession(IsLan(), bPublicRoom); }
+						if (UNiceInkSessionSubsystem* S = Sessions()) { S->HostSession(IsLan(), bPublicRoom, HostMaxPlayers, HostLangIndex, HostRoomName); }
 						return FReply::Handled();
 					})
 				[
@@ -679,7 +843,16 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 				SNew(SButton).ButtonStyle(&PrimaryStyle).IsFocusable(false)
 					.HAlign(HAlign_Center).VAlign(VAlign_Center)
 					.ContentPadding(FMargin(0.0f, NiSpace::BtnPadV))
-					.IsEnabled_Lambda([this]() { return !IsBusy() && CodeBuffer.Len() == 4; })
+					// 搜尋中也可按（JoinRoomByCode 的搭便車機制受理）；只擋
+					// Joining/Hosting
+					.IsEnabled_Lambda([this]()
+					{
+						if (CodeBuffer.Len() != 4) { return false; }
+						const UNiceInkSessionSubsystem* S = Sessions();
+						if (!S) { return false; }
+						const ENiSessionUiState St = S->GetUiState();
+						return St != ENiSessionUiState::Joining && St != ENiSessionUiState::Hosting;
+					})
 					.OnClicked_Lambda([this]()
 					{
 						CommitName();
@@ -706,13 +879,16 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 			.Visibility_Lambda([this]()
 			{
 				const UNiceInkSessionSubsystem* S = Sessions();
-				if (!S || S->GetUiState() != ENiSessionUiState::Idle)
+				if (!S || (S->GetUiState() != ENiSessionUiState::Idle && !S->IsBackgroundSearching()))
 				{
-					return EVisibility::Collapsed; // 搜尋中＝狀態行在講話
+					return EVisibility::Collapsed; // 前景搜尋中＝狀態行在講話；背景更新不藏
 				}
 				for (const FNiFoundSession& F : S->GetFoundSessions())
 				{
-					if (F.bPublic) { return EVisibility::Collapsed; }
+					if (F.bPublic && (JoinLangFilter == INDEX_NONE || F.LangIndex == JoinLangFilter))
+					{
+						return EVisibility::Collapsed;
+					}
 				}
 				return EVisibility::Visible;
 			})
@@ -728,6 +904,15 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan()); }
 				})
 			]
+			// 空狀態出口（2026-08-14 列表 UX）：死路變轉化——沒房就自己開
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::S, 0, 0, 0)
+			[
+				MakeGhostButton(LocS(ENiLocKey::OpenPublicShortcut), [this]()
+				{
+					bPublicRoom = true; // 從公開列表來＝預選公開
+					Page = EPage::Host;
+				})
+			]
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
 		[
@@ -738,7 +923,10 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					if (!S) { return EVisibility::Collapsed; }
 					for (const FNiFoundSession& F : S->GetFoundSessions())
 					{
-						if (F.bPublic) { return EVisibility::Visible; }
+						if (F.bPublic && (JoinLangFilter == INDEX_NONE || F.LangIndex == JoinLangFilter))
+						{
+							return EVisibility::Visible;
+						}
 					}
 					return EVisibility::Collapsed;
 				})
@@ -748,7 +936,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					SNew(SBorder).BorderImage(&CardBrush).Padding(FMargin(NiSpace::CardPadH, NiSpace::CardPadV))
 					[
 						SNew(SVerticalBox)
-						// 標籤列＋重新整理（刷新鈕住在它管的列表旁＝歸屬歸位）
+						// 標籤列＋語言過濾 chip＋重新整理（鈕住在它管的列表旁）
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							SNew(SHorizontalBox)
@@ -757,6 +945,26 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::InkDim)
 									.Text(Loc(ENiLocKey::PublicRooms))
 							]
+							// 語言過濾 chip：顯示現值（母語名/全部語言）、點開選擇列
+							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, NiSpace::S, 0)
+							[
+								SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
+									.ContentPadding(FMargin(14, 4))
+									.OnClicked_Lambda([this]()
+									{
+										bJoinLangOpen = !bJoinLangOpen;
+										return FReply::Handled();
+									})
+								[
+									SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Ink)
+										.Text_Lambda([this]()
+										{
+											return JoinLangFilter == INDEX_NONE
+												? Loc(ENiLocKey::AllLanguages)
+												: FText::FromString(NiLoc::LangNativeName(JoinLangFilter));
+										})
+								]
+							]
 							+ SHorizontalBox::Slot().AutoWidth()
 							[
 								SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
@@ -764,7 +972,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 									.IsEnabled_Lambda([this]() { return !IsBusy(); })
 									.OnClicked_Lambda([this]()
 									{
-										if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan()); }
+										if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan(), JoinLangFilter); }
 										return FReply::Handled();
 									})
 								[
@@ -773,9 +981,26 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 								]
 							]
 						]
+						// 語言選擇列（chip 點開才展；選定即重搜收合）
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 						[
-							SAssignNew(RoomListBox, SVerticalBox)
+							SNew(SBox).Visibility_Lambda([this]()
+								{ return bJoinLangOpen ? EVisibility::Visible : EVisibility::Collapsed; })
+							[
+								MakeJoinLangRow()
+							]
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
+						[
+							// 超過約 5 列由捲動接手（上限 8 列；卡片高度封頂）
+							SNew(SBox).MaxDesiredHeight(300)
+							[
+								SNew(SScrollBox)
+								+ SScrollBox::Slot()
+								[
+									SAssignNew(RoomListBox, SVerticalBox)
+								]
+							]
 						]
 					]
 				]
@@ -1062,14 +1287,14 @@ TSharedRef<SWidget> SNiMenu::MakeProfileFacesBlock()
 			SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::InkDim)
 				.Visibility_Lambda([this]()
 				{
-					return (FaceRowBox.IsValid() && FaceRowBox->NumSlots() > 0)
+					return (FaceRowBox.IsValid() && FaceRowBox->GetChildren()->Num() > 0)
 						? EVisibility::Visible : EVisibility::Collapsed;
 				})
 				.Text(Loc(ENiLocKey::SavedFaces))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 		[
-			SAssignNew(FaceRowBox, SHorizontalBox)
+			SAssignNew(FaceRowBox, SWrapBox).UseAllottedSize(true)
 		];
 }
 
@@ -1093,6 +1318,16 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 					const UNiceInkGameInstance* I = GI();
 					return I ? FText::FromString(I->GetEffectiveDisplayName())
 						: Loc(ENiLocKey::ClickToType);
+				})
+				// 打字即截斷（SanitizePlayerName 的 16 碼元上限只在 commit 後
+				// 生效——輸入框裡先擋，玩家不會打一長串然後被無聲砍掉）
+				.OnTextChanged_Lambda([this](const FText& T)
+				{
+					const FString S = T.ToString();
+					if (S.Len() > 16 && NameBox.IsValid())
+					{
+						NameBox->SetText(FText::FromString(S.Left(16)));
+					}
 				})
 				.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type)
 				{
@@ -1403,9 +1638,11 @@ void SNiMenu::RefreshFaceRow()
 		{
 			break; // 版面上限：最新六張（更舊的仍在磁碟，未做翻頁）
 		}
+		// 縮圖尺寸（2026-08-12 user「太小」→ 56→84；wrap 列自動換行 4+2）
+		constexpr float TilePx = 84.0f;
 		UTexture* Thumb = P->GetFaceThumb(Id);
 		TSharedPtr<FSlateBrush> Brush = MakeShared<FSlateBrush>();
-		Brush->ImageSize = FVector2D(56, 56);
+		Brush->ImageSize = FVector2D(TilePx, TilePx);
 		if (Thumb)
 		{
 			Brush->SetResourceObject(Thumb); // GC 錨在 Persona 的 ThumbCache（UPROPERTY）
@@ -1418,7 +1655,7 @@ void SNiMenu::RefreshFaceRow()
 		}
 		FaceThumbBrushes.Add(Brush);
 
-		FaceRowBox->AddSlot().AutoWidth().Padding(Shown == 0 ? 0.0f : 8.0f, 0, 0, 0)
+		FaceRowBox->AddSlot().Padding(0, 0, 8, 8)
 		[
 			SNew(SButton).ButtonStyle(&FaceTileStyle).IsFocusable(false)
 				.ContentPadding(FMargin(3))
@@ -1435,14 +1672,14 @@ void SNiMenu::RefreshFaceRow()
 				SNew(SVerticalBox)
 				+ SVerticalBox::Slot().AutoHeight()
 				[
-					SNew(SBox).WidthOverride(56).HeightOverride(56)
+					SNew(SBox).WidthOverride(TilePx).HeightOverride(TilePx)
 					[
 						SNew(SImage).Image(Brush.Get())
 					]
 				]
 				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, 2, 0, 0)
 				[
-					SNew(SBox).WidthOverride(40).HeightOverride(3)
+					SNew(SBox).WidthOverride(60).HeightOverride(3)
 					[
 						SNew(SImage).Image(&UnderlineBrush)
 							.Visibility_Lambda([this, Id]()
@@ -1520,7 +1757,9 @@ FText SNiMenu::StatusText() const
 	switch (S->GetUiState())
 	{
 	case ENiSessionUiState::Hosting:   return Loc(ENiLocKey::StatusCreating);
-	case ENiSessionUiState::Searching: return Loc(ENiLocKey::StatusLooking);
+	case ENiSessionUiState::Searching:
+		// 背景自動更新＝靜音（不講「搜尋中」——列表掛著舊內容等新結果）
+		return S->IsBackgroundSearching() ? FText::GetEmpty() : Loc(ENiLocKey::StatusLooking);
 	case ENiSessionUiState::Joining:   return Loc(ENiLocKey::StatusJoining);
 	case ENiSessionUiState::Failed:
 	{
@@ -1554,18 +1793,39 @@ void SNiMenu::RebuildRoomList()
 	int32 Shown = 0;
 	for (const FNiFoundSession& F : S->GetFoundSessions())
 	{
-		if (!F.bPublic || Shown >= 5)
+		if (!F.bPublic)
 		{
-			continue; // 私房永不列出；版面上限 5 列
+			continue; // 私房永不列出
 		}
-		++Shown;
+		// 語言過濾（顯示層＝LAN 的過濾點；EOS 已在查詢端過濾、此處恆過）：
+		// 指定語言時，異語言與無屬性舊房都不上桌
+		if (JoinLangFilter != INDEX_NONE && F.LangIndex != JoinLangFilter)
+		{
+			continue;
+		}
+		++Shown; // 無上限（規模版）：高度由捲動盒接手
 		const int32 Taken = FMath::Clamp(F.MaxSlots - F.OpenSlots, 0, F.MaxSlots);
 		const int32 JoinIndex = F.SearchIndex;
+		const int32 MyLang = GI() ? GI()->GetMenuLanguage() : 0;
+		const bool bDiffLang = F.LangIndex >= 0 && F.LangIndex < NiLoc::NumLangs && F.LangIndex != MyLang;
+		// 人數點點：酒金實心=已入座、暗色空心=空位——「幾缺幾」掃一眼可讀
+		FString DotsFilled, DotsEmpty;
+		for (int32 D = 0; D < Taken; ++D) { DotsFilled += TEXT("●"); }
+		for (int32 D = Taken; D < F.MaxSlots; ++D) { DotsEmpty += TEXT("○"); }
 		RoomListBox->AddSlot().AutoHeight().Padding(0, NiSpace::XS)
 		[
 			SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
 				.ContentPadding(FMargin(22, 12))
-				.IsEnabled_Lambda([this]() { return !IsBusy(); })
+				// 可點判準＝「加入流程能否受理」而非「有沒有搜尋在跑」——
+				// 串流讓房 0.2s 就上桌，前景搜尋窗內也要能點（JoinFoundSession
+				// 受理 Searching；淡化 5 秒才能點=兩規則打架的舊病）
+				.IsEnabled_Lambda([this]()
+				{
+					const UNiceInkSessionSubsystem* S = Sessions();
+					if (!S) { return false; }
+					const ENiSessionUiState St = S->GetUiState();
+					return St != ENiSessionUiState::Joining && St != ENiSessionUiState::Hosting;
+				})
 				.OnClicked_Lambda([this, JoinIndex]()
 				{
 					CommitName();
@@ -1573,14 +1833,53 @@ void SNiMenu::RebuildRoomList()
 					return FReply::Handled();
 				})
 			[
-				// 臉制（SPEC #52）：房主名退場——陌生人本來就不認識名字；
-				// 房主臉像待自拍上雲（PlayerDataStorage）後補（記帳）。
-				// 在那之前補 ping＝至少多一個可區辨/可判斷的訊號
-				SNew(STextBlock).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(NiHudColor::Ink)
-					.Justification(ETextJustify::Center)
-					.Text(FText::FromString(F.PingMs > 0
-						? FString::Printf(TEXT("%d / %d   ·   %d ms"), Taken, F.MaxSlots, F.PingMs)
-						: FString::Printf(TEXT("%d / %d"), Taken, F.MaxSlots)))
+				// 2026-08-14 列表 UX 重製（玩家掃視序：這房找誰→講什麼話→
+				// 幾缺幾→ping）。臉制（SPEC #52）：房主名退場；房主臉像待
+				// 自拍上雲後補（記帳）。
+				SNew(SHorizontalBox)
+				// 左欄：房名主行（無名公開房＝顯示房號——公開房任人可入、
+				// 碼無私密性，反成可唸出口的身分錨；「不顯他房碼」規則的
+				// 保護對象=私房，私房永不上列表＝意圖不變）＋異語言母語名副行
+				+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Ink)
+							.Text(FText::FromString(F.RoomName.IsEmpty() ? F.Code : F.RoomName))
+					]
+					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::InkDim)
+							.Visibility(bDiffLang ? EVisibility::Visible : EVisibility::Collapsed)
+							.Text(FText::FromString(bDiffLang ? NiLoc::LangNativeName(F.LangIndex) : FString()))
+					]
+				]
+				// 右欄：人數點點＋ping 副行（右對齊＝數字欄語義）
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right)
+					[
+						SNew(SHorizontalBox)
+						+ SHorizontalBox::Slot().AutoWidth()
+						[
+							SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Amber)
+								.Text(FText::FromString(DotsFilled))
+						]
+						+ SHorizontalBox::Slot().AutoWidth()
+						[
+							SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::InkDim)
+								.Text(FText::FromString(DotsEmpty))
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0, 2, 0, 0)
+					[
+						SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::InkDim)
+							.Visibility(F.PingMs > 0 ? EVisibility::Visible : EVisibility::Collapsed)
+							.Text(FText::FromString(FString::Printf(TEXT("%d ms"), F.PingMs)))
+					]
+				]
 			]
 		];
 	}
@@ -1631,8 +1930,23 @@ void SNiMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime
 		{
 			if (UNiceInkSessionSubsystem* S = Sessions())
 			{
-				S->SearchSessions(IsLan());
+				S->SearchSessions(IsLan(), JoinLangFilter);
 				bSearchKicked = true;
+				NextAutoSearchTime = InCurrentTime + 12.0;
+			}
+		}
+		// 列表自動更新（2026-08-14 列表 UX）：留在頁上每 12s 背景重搜——
+		// 陳舊列表=按了進不去。打房號中（CodeBuffer 非空）＝走碼路不干擾；
+		// 撞上手動搜尋/加入中＝跳過（JoinRoomByCode 另有搭便車護欄）
+		else if (CodeBuffer.IsEmpty() && InCurrentTime >= NextAutoSearchTime)
+		{
+			NextAutoSearchTime = InCurrentTime + 12.0;
+			if (UNiceInkSessionSubsystem* S = Sessions())
+			{
+				if (S->GetUiState() == ENiSessionUiState::Idle)
+				{
+					S->SearchSessions(IsLan(), JoinLangFilter, /*bBackground=*/true);
+				}
 			}
 		}
 		// 房列表：內容戳記變了才重建（每 0.5s 檢查一次）
@@ -1644,8 +1958,10 @@ void SNiMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime
 			{
 				for (const FNiFoundSession& F : S->GetFoundSessions())
 				{
-					Stamp = Stamp * 31 + GetTypeHash(F.OwnerName) + F.OpenSlots + (F.bPublic ? 7 : 0);
+					Stamp = Stamp * 31 + GetTypeHash(F.OwnerName) + F.OpenSlots + (F.bPublic ? 7 : 0)
+						+ F.LangIndex * 13 + GetTypeHash(F.RoomName) + GetTypeHash(F.Code);
 				}
+				Stamp = Stamp * 31 + JoinLangFilter; // 換過濾值＝重建（LAN 顯示層過濾）
 				Stamp = Stamp * 31 + S->GetFoundSessions().Num();
 			}
 			if (Stamp != LastListStamp)

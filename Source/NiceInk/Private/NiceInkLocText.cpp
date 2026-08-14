@@ -214,30 +214,31 @@ namespace
 		TEXT("gli amici entrano con questo codice"), TEXT("Freunde treten mit diesem Code bei"),
 		TEXT("amigos entram com este código"), TEXT("друзья входят по этому коду"),
 		TEXT("arkadaşlar bu kodla katılır"), TEXT("ينضم الأصدقاء بهذا الرمز") } },
-	// LobbyStart（{0}=人數）
-	{ { TEXT("ENTER — start the match  ·  {0} / 6 in"), TEXT("ENTER — 試合開始  ·  {0} / 6 人"),
-		TEXT("ENTER — 開始遊戲  ·  {0} / 6 人"), TEXT("ENTER — 开始游戏  ·  {0} / 6 人"),
-		TEXT("ENTER — 게임 시작  ·  {0} / 6 명"), TEXT("ENTER — empezar la partida  ·  {0} / 6"),
-		TEXT("ENTRÉE — lancer la partie  ·  {0} / 6"), TEXT("INVIO — inizia la partita  ·  {0} / 6"),
-		TEXT("ENTER — Spiel starten  ·  {0} / 6"), TEXT("ENTER — começar a partida  ·  {0} / 6"),
-		TEXT("ENTER — начать матч  ·  {0} / 6"), TEXT("ENTER — maçı başlat  ·  {0} / 6"),
-		TEXT("ENTER — ابدأ المباراة  ·  {0} / 6") } },
-	// LobbyWaiting（{0}=人數）
-	{ { TEXT("waiting for players — {0} / 6, need at least 2"), TEXT("プレイヤー待ち — {0} / 6、最低2人"),
-		TEXT("等待玩家 — {0} / 6，至少要 2 人"), TEXT("等待玩家 — {0} / 6，至少要 2 人"),
-		TEXT("플레이어 대기 중 — {0} / 6, 최소 2명"), TEXT("esperando jugadores — {0} / 6, mínimo 2"),
-		TEXT("en attente de joueurs — {0} / 6, minimum 2"), TEXT("in attesa di giocatori — {0} / 6, minimo 2"),
-		TEXT("warte auf Spieler — {0} / 6, mindestens 2"), TEXT("aguardando jogadores — {0} / 6, mínimo 2"),
-		TEXT("ожидание игроков — {0} / 6, нужно минимум 2"), TEXT("oyuncular bekleniyor — {0} / 6, en az 2"),
-		TEXT("بانتظار اللاعبين — {0} / 6، على الأقل 2") } },
-	// LobbyWaitingHost（{0}=人數）
-	{ { TEXT("waiting for the host to start  ·  {0} / 6 in"), TEXT("ホストの開始待ち  ·  {0} / 6 人"),
-		TEXT("等待房主開始  ·  {0} / 6 人"), TEXT("等待房主开始  ·  {0} / 6 人"),
-		TEXT("호스트 시작 대기 중  ·  {0} / 6 명"), TEXT("esperando al anfitrión  ·  {0} / 6"),
-		TEXT("en attente du créateur  ·  {0} / 6"), TEXT("in attesa dell'host  ·  {0} / 6"),
-		TEXT("warte auf den Host  ·  {0} / 6"), TEXT("aguardando o anfitrião  ·  {0} / 6"),
-		TEXT("ожидание хоста  ·  {0} / 6"), TEXT("oda sahibi bekleniyor  ·  {0} / 6"),
-		TEXT("بانتظار المضيف  ·  {0} / 6") } },
+	// LobbyStart（{0}=「目前/上限」——2026-08-13 房主人數設定：上限隨房走，
+	// 寫死「/ 6」退役、{0} 自帶完整計數）
+	{ { TEXT("ENTER — start the match  ·  {0} in"), TEXT("ENTER — 試合開始  ·  {0} 人"),
+		TEXT("ENTER — 開始遊戲  ·  {0} 人"), TEXT("ENTER — 开始游戏  ·  {0} 人"),
+		TEXT("ENTER — 게임 시작  ·  {0} 명"), TEXT("ENTER — empezar la partida  ·  {0}"),
+		TEXT("ENTRÉE — lancer la partie  ·  {0}"), TEXT("INVIO — inizia la partita  ·  {0}"),
+		TEXT("ENTER — Spiel starten  ·  {0}"), TEXT("ENTER — começar a partida  ·  {0}"),
+		TEXT("ENTER — начать матч  ·  {0}"), TEXT("ENTER — maçı başlat  ·  {0}"),
+		TEXT("ENTER — ابدأ المباراة  ·  {0}") } },
+	// LobbyWaiting（{0}=「目前/房間人數」；開局門檻=遊戲規則 4 人）
+	{ { TEXT("waiting for players — {0}, need at least 4"), TEXT("プレイヤー待ち — {0}、最低4人"),
+		TEXT("等待玩家 — {0}，至少要 4 人"), TEXT("等待玩家 — {0}，至少要 4 人"),
+		TEXT("플레이어 대기 중 — {0}, 최소 4명"), TEXT("esperando jugadores — {0}, mínimo 4"),
+		TEXT("en attente de joueurs — {0}, minimum 4"), TEXT("in attesa di giocatori — {0}, minimo 4"),
+		TEXT("warte auf Spieler — {0}, mindestens 4"), TEXT("aguardando jogadores — {0}, mínimo 4"),
+		TEXT("ожидание игроков — {0}, нужно минимум 4"), TEXT("oyuncular bekleniyor — {0}, en az 4"),
+		TEXT("بانتظار اللاعبين — {0}، على الأقل 4") } },
+	// LobbyWaitingHost（{0}=「目前/上限」）
+	{ { TEXT("waiting for the host to start  ·  {0} in"), TEXT("ホストの開始待ち  ·  {0} 人"),
+		TEXT("等待房主開始  ·  {0} 人"), TEXT("等待房主开始  ·  {0} 人"),
+		TEXT("호스트 시작 대기 중  ·  {0} 명"), TEXT("esperando al anfitrión  ·  {0}"),
+		TEXT("en attente du créateur  ·  {0}"), TEXT("in attesa dell'host  ·  {0}"),
+		TEXT("warte auf den Host  ·  {0}"), TEXT("aguardando o anfitrião  ·  {0}"),
+		TEXT("ожидание хоста  ·  {0}"), TEXT("oda sahibi bekleniyor  ·  {0}"),
+		TEXT("بانتظار المضيف  ·  {0}") } },
 	// Profile
 	{ { TEXT("Profile"), TEXT("プロフィール"), TEXT("個人檔案"), TEXT("个人档案"), TEXT("프로필"),
 		TEXT("Perfil"), TEXT("Profil"), TEXT("Profilo"), TEXT("Profil"),
@@ -456,6 +457,33 @@ namespace
 		TEXT("당신의 리키시 만들기"), TEXT("Crea tu luchador"), TEXT("Crée ton rikishi"),
 		TEXT("Crea il tuo rikishi"), TEXT("Erstelle deinen Rikishi"), TEXT("Crie seu rikishi"),
 		TEXT("Создайте своего рикиси"), TEXT("Rikişini Oluştur"), TEXT("أنشئ المصارع الخاص بك") } },
+	// MaxPlayersLabel（建房頁「房間人數」段標——房主直接決定這房幾個人；
+	// 「上限/下限」概念退役；譯文=Claude 初稿待母語校對）
+	{ { TEXT("PLAYERS"), TEXT("人数"), TEXT("房間人數"), TEXT("房间人数"), TEXT("인원"),
+		TEXT("JUGADORES"), TEXT("JOUEURS"), TEXT("GIOCATORI"), TEXT("SPIELER"),
+		TEXT("JOGADORES"), TEXT("ИГРОКИ"), TEXT("OYUNCU"), TEXT("عدد اللاعبين") } },
+	// RoomNameLabel（公開房房名＝徵人啟事；譯文=Claude 初稿待母語校對）
+	{ { TEXT("ROOM NAME"), TEXT("部屋の名前"), TEXT("房間名稱"), TEXT("房间名称"), TEXT("방 이름"),
+		TEXT("NOMBRE DE LA SALA"), TEXT("NOM DU SALON"), TEXT("NOME DELLA STANZA"), TEXT("RAUMNAME"),
+		TEXT("NOME DA SALA"), TEXT("НАЗВАНИЕ КОМНАТЫ"), TEXT("ODA ADI"), TEXT("اسم الغرفة") } },
+	// RoomNameHint（房名輸入框 hint：讓別人知道你在找怎樣的玩家）
+	{ { TEXT("tell strangers who you're looking for"), TEXT("どんな人を探してるか伝えよう"),
+		TEXT("讓別人知道你在找怎樣的玩家"), TEXT("让别人知道你在找怎样的玩家"),
+		TEXT("어떤 플레이어를 찾는지 알려주세요"), TEXT("di qué jugadores buscas"),
+		TEXT("dis quels joueurs tu cherches"), TEXT("di' che giocatori cerchi"),
+		TEXT("sag, wen du suchst"), TEXT("diga que jogadores procura"),
+		TEXT("скажите, кого вы ищете"), TEXT("kimi aradığını söyle"),
+		TEXT("أخبر الآخرين عمن تبحث") } },
+	// OpenPublicShortcut（空列表捷徑：死路變轉化）
+	{ { TEXT("host one yourself"), TEXT("自分で部屋を作る"), TEXT("自己開一間"), TEXT("自己开一间"),
+		TEXT("직접 방 만들기"), TEXT("crea una tú mismo"), TEXT("crée le tien"), TEXT("creane una tu"),
+		TEXT("mach selbst eins auf"), TEXT("crie uma você mesmo"), TEXT("создайте свою"),
+		TEXT("kendin kur"), TEXT("أنشئ واحدة بنفسك") } },
+	// AllLanguages（加入頁語言過濾）
+	{ { TEXT("all languages"), TEXT("すべての言語"), TEXT("全部語言"), TEXT("全部语言"),
+		TEXT("모든 언어"), TEXT("todos los idiomas"), TEXT("toutes les langues"), TEXT("tutte le lingue"),
+		TEXT("alle Sprachen"), TEXT("todos os idiomas"), TEXT("все языки"),
+		TEXT("tüm diller"), TEXT("كل اللغات") } },
 	};
 
 	static const TCHAR* GNativeNames[NiLoc::NumLangs] = {

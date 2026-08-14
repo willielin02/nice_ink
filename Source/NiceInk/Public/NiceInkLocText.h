@@ -44,6 +44,11 @@ enum class ENiLocKey : uint8
 	UnappliedDiscardWarn, // 設定：未套用就返回的二段警告
 	RenderScale,          // 設定：畫質（渲染比例；2026-08-11 取代解析度選單的效能旋鈕）
 	CreateYourRikishi,    // 首啟創角頁標題（2026-08-12 首啟導流：無臉=開機直進創角）
+	MaxPlayersLabel,      // 建房頁「房間人數」段標（2026-08-14 房間人數制）
+	RoomNameLabel,        // 建房頁公開房房名段標（2026-08-14 徵人啟事）
+	RoomNameHint,         // 房名輸入框 hint（說明用途：讓別人知道你在找怎樣的玩家）
+	OpenPublicShortcut,   // 加入頁空狀態捷徑「自己開一間」（死路變轉化）
+	AllLanguages,         // 加入頁語言過濾「全部語言」選項
 	COUNT
 };
 

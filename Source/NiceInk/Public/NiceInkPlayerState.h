@@ -29,6 +29,10 @@ public:
 	// 防雙重還原（上行與逾時 fallback 是兩條並行路）
 	bool bAssetsRestored = false;
 
+	// 房主（listen server 本人；2026-08-13 大廳房主標示＋ESC 踢人 UI 的依據）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	bool bIsRoomHost = false;
+
 	// 連續罰酒杯數（只數罰酒；猜對離座歸零；第三杯＝終局）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 PenaltyCups = 0;

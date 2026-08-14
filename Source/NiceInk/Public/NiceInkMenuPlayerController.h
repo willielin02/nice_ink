@@ -25,9 +25,10 @@ public:
 
 	// --- 房間碼自動化（-ExecCmds 開機直呼用，timer-deferred 讓引擎完全就緒）---
 
-	// 建房（跟隨服務自選 LAN/EOS；bPublic 0=私房 invite only）
+	// 建房（跟隨服務自選 LAN/EOS；bPublic 0=私房 invite only；RoomName＝
+	// 公開房徵人啟事——exec 單 token、驗證用）
 	UFUNCTION(Exec)
-	void NiMenuAutoHost(int32 bPublic = 0);
+	void NiMenuAutoHost(int32 bPublic = 0, const FString& RoomName = TEXT(""));
 
 	// 開加入頁並預填房間碼（只擺畫面不加入——截圖自查用）
 	UFUNCTION(Exec)

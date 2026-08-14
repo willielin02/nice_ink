@@ -694,3 +694,49 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   驗證=booth_v17 量測（clipped 0.8%、p50 189）＋原位整頁圖（頭形乾淨、
   髷完整、無肩無黑帶）。教訓：**視覺缺陷用數字定罪再修**（直方圖>目測）；
   **輪廓啟發式對「臉頰比肩寬」的體型必敗＝幾何問題用幾何資料（深度）解**。
+- **2026-08-12~13 追記⑮＝頭像亭 v4 均勻光制＋模型預熱＋縮圖放大**：①亭燈
+  三點光（Key/Fill/Rim）退役→**±XYZ 六面同強度點光＝全方向均勻**（user
+  「不產生陰影的打光」；SkyLight 不可用=USkyLightComponent 無 LightingChannels
+  （ULightComponentBase 旁系）＋桌面 deferred 天光 shader 不理通道＋地下
+  SLS_CapturedScene 捕到虛空——三重定罪後六面點光=隔離架構下唯一解）；
+  ②過曝根治=**膚色錨定自動曝光**（SceneColorHDR=無 tonemapper 的裸輻射、
+  手動 gain 每換光重校一次=錯誤架構→量頭部像素中位亮度÷已知膚色亮度=光場
+  常數 K 除回＝還原 albedo；亮度與光強解耦、膚色深淺身分特徵保留）；
+  ③偏灰根治=**ACES 擬合曲線（Narkowicz）＋Saturation 1.15**（主畫面的不灰
+  來自引擎 tonemapper、capture 繞過整條後處理鏈）；④五官增顯=**unsharp**
+  （均勻光把形狀陰影歸零、五官只剩貼圖色差→亮度 6px 模糊差放大 0.8、alpha
+  加權防輪廓黑暈；DetailAmount/DetailRadiusPx 旋鈕）；⑤ONNX 模型預熱=開機
+  背景建四模型（LaMa session ~60s 與創角頁待機重疊；無臉玩家才預熱、GIsEditor
+  閘 robo 零干擾、與 RunIntake 同鎖永不重載；實測 14.4s 完成）；⑥臉庫縮圖
+  56→84+SWrapBox 換行（4+2）。
+- **2026-08-13~14 追記⑯＝大廳配對補完＋LAN session 真兇翻案**：Meccha UX
+  web 考證（房名+密碼+地區+tags 瀏覽器制；「我們的 4 字母房碼=更新一代」）
+  →user 點名六缺口：①名字寬度截斷 FitTok（16 碼元≠顯示寬、CJK 爆版面；
+  七繪製點全套用、.Left(14) 退役）＋輸入框打字即截；②房主標示
+  （PlayerState.bIsRoomHost＋大廳「host」金綴）；③房間人數 4~6（「上限/下限」
+  官僚概念退役=房主直接決定這房幾個人、坐滿關門；開局門檻 4=規則藏在開始鈕、
+  PIE 維持 2 服務 robo；lobby 三字串寫死「/ 6」退役）；④ESC 踢人（listen
+  server 上 HUD 免 RPC 直呼 GameMode→GameSession::KickPlayer＋KickedNetIds
+  本場拒再入）；⑤地區/tags 不採用→**語言=配對邊界**（user 定案：哏要看得懂
+  語音要能聊才有指認情報流）。**LAN 搜房真兇**（user 拒收「結構性解不了」）：
+  防火牆與共用 port 單播（量測皆真）都是紅鯡魚——verbose log 活體定罪=查詢
+  抵達主機、主機零回應＝`AGameMode` 開場自動 StartSession→session InProgress
+  ＋bAllowJoinInProgress=false→IsSessionJoinable 靜默假。修=NiceInkGameSession
+  no-op＋SetSessionInProgress 在真開局/回大廳鏡射 session 狀態（場間大廳
+  重新可搜=順帶更正確）；驗證=同機自駕 E2E FindSessions 1 found→travel 進
+  道場。-nilanloopback 降級保底留置（play_full_flow*.bat 帶旗標）。
+- **2026-08-14 追記⑰＝公開房規模版（user 爆粗定案「一切按規模設計」）**：
+  ①房名=徵人啟事（NINAME 屬性、24 碼元、控制字元消毒保空白、公開限定；
+  hint「讓別人知道你在找怎樣的玩家」）；②語言全鏈=NILANG 屬性（建房頁公開
+  限定 13 語選擇器、預設跟介面語言）＋列表過濾（EOS=查詢端屬性過濾=規模正解、
+  LAN=顯示層）＋過濾 chip UI（預設我的語言/全部/指定）；③列表 UX=左房名
+  （無名公開房顯房號=可唸身分錨；「不顯他房碼」限縮至私房）右人數點點●○
+  ＋ping、排序三鍵（同語言→人多=快成局→ping）、上限拆除+捲動、空狀態
+  「自己開一間」捷徑、12s 自動重搜；④MaxSearchResults 32→100（隨機子集病）；
+  ⑤搜尋體感三連修=雙緩衝（開搜不清列表=閃爍根治）＋背景搜尋靜音（狀態列/
+  按鈕/取消全不動；碼路搭上轉前景）＋**即時串流+碼路早退**（LAN_QUERY_TIMEOUT
+  =5 引擎 #define 不可配置、但回應毫秒級就在 SearchResults——0.2s 輪詢即到
+  即上桌、碼命中退訂回呼直接加入=5s→<1s，量測 early join→1.3s Welcomed）
+  ＋可點判準改「加入流程能否受理」（只擋 Joining/Hosting；完成回呼見 Joining
+  不踩狀態機）。碼路護欄=永不過濾＋搭便車搭上過濾搜尋漏接=重搜一次不過濾。
+  待實機=EOS 查詢端過濾（併 B4）、選擇器點選手感。

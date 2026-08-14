@@ -5,7 +5,9 @@
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Interfaces/OnlineIdentityInterface.h"
+#include "Misc/CommandLine.h"
 #include "Misc/ConfigCacheIni.h"
+#include "Misc/Parse.h"
 #include "NiceInkGameInstance.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "OnlineSessionSettings.h"
@@ -17,6 +19,8 @@ namespace
 	// session 廣告屬性鍵：房間碼／公開列出
 	const FName NiCodeKey(TEXT("NICODE"));
 	const FName NiPublicKey(TEXT("NIPUB"));
+	const FName NiLangKey(TEXT("NILANG")); // 房主語言索引（配對邊界=語言/文化）
+	const FName NiNameKey(TEXT("NINAME")); // 公開房房名（徵人啟事）
 }
 
 FString UNiceInkSessionSubsystem::MakeRoomCode()
@@ -230,7 +234,8 @@ void UNiceInkSessionSubsystem::OnLoginComplete(int32 LocalUserNum, bool bWasSucc
 	}
 }
 
-void UNiceInkSessionSubsystem::HostSession(bool bLan, bool bPublicListed)
+void UNiceInkSessionSubsystem::HostSession(bool bLan, bool bPublicListed, int32 MaxPlayers,
+	int32 LangIndex, const FString& RoomName)
 {
 	if (UiState == ENiSessionUiState::Hosting || UiState == ENiSessionUiState::Joining)
 	{
@@ -241,6 +246,21 @@ void UNiceInkSessionSubsystem::HostSession(bool bLan, bool bPublicListed)
 	LastError.Reset();
 	bCancelRequested = false;
 	bPendingPublicListed = bPublicListed;
+	PendingMaxPlayers = FMath::Clamp(MaxPlayers, 4, 6); // 房間人數＝設計人數 4~6
+	PendingLangIndex = LangIndex >= 0 && LangIndex < NiLoc::NumLangs ? LangIndex : INDEX_NONE;
+	// 房名消毒：控制字元剔除（空白保留——房名要能寫句子）＋截 24 碼元
+	PendingRoomName.Reset();
+	for (const TCHAR C : RoomName.TrimStartAndEnd())
+	{
+		if (C >= 0x20 && C != 0x7F)
+		{
+			PendingRoomName.AppendChar(C);
+		}
+		if (PendingRoomName.Len() >= 24)
+		{
+			break;
+		}
+	}
 	EnsureLoggedInThen([this, bLan]() { HostSessionInternal(bLan); });
 }
 
@@ -259,7 +279,7 @@ void UNiceInkSessionSubsystem::HostSessionInternal(bool bLan)
 	}
 
 	FOnlineSessionSettings Settings;
-	Settings.NumPublicConnections = 6;
+	Settings.NumPublicConnections = PendingMaxPlayers; // 房主人數上限（session 層滿房擋）
 	Settings.bIsLANMatch = bLan;
 	Settings.bShouldAdvertise = true;
 	Settings.bAllowJoinInProgress = false; // 開賽中不收新客（回合狀態機不支援中途加入）
@@ -277,6 +297,15 @@ void UNiceInkSessionSubsystem::HostSessionInternal(bool bLan)
 	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 	{
 		GI->HostRoomCode = RoomCode;
+		GI->HostMaxPlayers = PendingMaxPlayers; // GameMode PostLogin 轉進 GameState
+		// 房主語言上廣告（社群邊界）：建房頁可改、預設跟介面語言
+		const int32 Lang = PendingLangIndex != INDEX_NONE ? PendingLangIndex : GI->GetMenuLanguage();
+		Settings.Set(NiLangKey, Lang, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+		// 公開房房名（徵人啟事；私房不上——列表永不顯示私房）
+		if (bPendingPublicListed && !PendingRoomName.IsEmpty())
+		{
+			Settings.Set(NiNameKey, PendingRoomName, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+		}
 	}
 	UE_LOG(LogTemp, Log, TEXT("NiSession: room code %s (%s)"), *RoomCode,
 		bPendingPublicListed ? TEXT("public") : TEXT("invite only"));
@@ -323,7 +352,7 @@ void UNiceInkSessionSubsystem::OnCreateSessionComplete(FName SessionName, bool b
 	}
 }
 
-void UNiceInkSessionSubsystem::SearchSessions(bool bLan)
+void UNiceInkSessionSubsystem::SearchSessions(bool bLan, int32 LangFilter, bool bBackground)
 {
 	if (UiState == ENiSessionUiState::Searching || UiState == ENiSessionUiState::Joining ||
 		UiState == ENiSessionUiState::Hosting)
@@ -331,16 +360,33 @@ void UNiceInkSessionSubsystem::SearchSessions(bool bLan)
 		return; // 重入護欄
 	}
 	PendingJoinCode.Reset(); // 瀏覽搜尋不帶碼
+	PendingSearchLang = LangFilter >= 0 && LangFilter < NiLoc::NumLangs ? LangFilter : INDEX_NONE;
+	bBackgroundSearch = bBackground; // 背景=UI 靜音（狀態列/按鈕/列表全不動）
 	UiState = ENiSessionUiState::Searching; // 先佔狀態再登入（同 HostSession）
-	LastError.Reset();
+	if (!bBackground)
+	{
+		LastError.Reset();
+	}
 	bCancelRequested = false;
 	EnsureLoggedInThen([this, bLan]() { SearchSessionsInternal(bLan); });
 }
 
 void UNiceInkSessionSubsystem::JoinRoomByCode(const FString& RawCode, bool bLan)
 {
-	if (UiState == ENiSessionUiState::Searching || UiState == ENiSessionUiState::Joining ||
-		UiState == ENiSessionUiState::Hosting)
+	if (UiState == ENiSessionUiState::Searching)
+	{
+		// 列表自動更新的搜尋在飛（2026-08-14）：碼路搭便車——掛上待比對碼，
+		// 完成回呼吃同一批結果照樣配對加入（不取消不重搜=零競態）。
+		// 玩家在等了＝背景搜尋轉前景（狀態列開講）
+		const FString Ride = RawCode.TrimStartAndEnd().ToUpper();
+		if (Ride.Len() == 4)
+		{
+			PendingJoinCode = Ride;
+			bBackgroundSearch = false;
+		}
+		return;
+	}
+	if (UiState == ENiSessionUiState::Joining || UiState == ENiSessionUiState::Hosting)
 	{
 		return; // 重入護欄
 	}
@@ -351,6 +397,8 @@ void UNiceInkSessionSubsystem::JoinRoomByCode(const FString& RawCode, bool bLan)
 		return;
 	}
 	PendingJoinCode = Code;
+	PendingSearchLang = INDEX_NONE; // 碼路恆不過濾——朋友的房可能是任何語言
+	bBackgroundSearch = false;      // 玩家在等＝前景
 	UiState = ENiSessionUiState::Searching;
 	LastError.Reset();
 	bCancelRequested = false;
@@ -367,20 +415,36 @@ void UNiceInkSessionSubsystem::SearchSessionsInternal(bool bLan)
 	}
 
 	SessionSearch = MakeShared<FOnlineSessionSearch>();
-	SessionSearch->MaxSearchResults = 32;
+	SessionSearch->MaxSearchResults = 100; // 規模版（32 的隨機子集病拆除）
 	SessionSearch->bIsLanQuery = bLan;
 	if (!bLan)
 	{
 		// EOS presence session 搜尋鍵（SEARCH_PRESENCE 常數在 5.7 移進 FName 字面值）
 		SessionSearch->QuerySettings.Set(FName(TEXT("PRESENCESEARCH")), true, EOnlineComparisonOp::Equals);
+		// 語言過濾＝查詢端（規模化正解：撈回來的就已經是要的語言，不在
+		// 隨機子集上做客戶端過濾）；LAN 無查詢過濾＝顯示層處理（子網天然小）
+		if (PendingSearchLang != INDEX_NONE)
+		{
+			SessionSearch->QuerySettings.Set(NiLangKey, PendingSearchLang, EOnlineComparisonOp::Equals);
+		}
 	}
+	LastSearchLang = PendingSearchLang;
+	bLastSearchLan = bLan;
 
 	UiState = ENiSessionUiState::Searching;
-	LastError.Reset();
-	FoundSummaries.Reset();
+	// 雙緩衝（2026-08-14 列表閃爍根治）：搜尋開始「不」清 FoundSummaries——
+	// 舊列表掛著等新結果到貨整批替換（OnFindSessionsComplete 重建），
+	// 清單不再每 12s 消失兩秒
 	FindHandle = Sessions->AddOnFindSessionsCompleteDelegate_Handle(
 		FOnFindSessionsCompleteDelegate::CreateUObject(this, &UNiceInkSessionSubsystem::OnFindSessionsComplete));
 	Sessions->FindSessions(0, SessionSearch.ToSharedRef());
+
+	// 即時串流輪詢開跑（結束/早退/取消時自拆）
+	if (!SearchPollTicker.IsValid())
+	{
+		SearchPollTicker = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateWeakLambda(this, [this](float Dt) { return TickSearchPoll(Dt); }), 0.2f);
+	}
 }
 
 void UNiceInkSessionSubsystem::JoinFirstFoundSession(bool bLan)
@@ -389,35 +453,12 @@ void UNiceInkSessionSubsystem::JoinFirstFoundSession(bool bLan)
 	SearchSessions(bLan);
 }
 
-void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
+void UNiceInkSessionSubsystem::RebuildSummariesFromSearch()
 {
-	IOnlineSessionPtr Sessions = GetSessionInterface();
-	if (Sessions.IsValid())
+	if (!SessionSearch.IsValid())
 	{
-		Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindHandle);
-	}
-
-	if (bCancelRequested)
-	{
-		// 玩家已取消：結果丟棄（列表不更新也無妨——下次搜尋整組重來）
-		bCancelRequested = false;
-		bAutoJoinFirst = false;
-		PendingJoinCode.Reset();
-		UiState = ENiSessionUiState::Idle;
 		return;
 	}
-
-	const bool bWantedAutoJoin = bAutoJoinFirst;
-	bAutoJoinFirst = false;
-	const FString WantedCode = PendingJoinCode;
-	PendingJoinCode.Reset();
-
-	if (!bWasSuccessful || !SessionSearch.IsValid())
-	{
-		SetFailed(TEXT("search failed"), static_cast<int32>(ENiLocKey::ErrSearchFailed));
-		return;
-	}
-
 	FoundSummaries.Reset();
 	for (int32 i = 0; i < SessionSearch->SearchResults.Num(); ++i)
 	{
@@ -432,8 +473,115 @@ void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 		int32 Pub = 1; // 舊版房（無旗標）當公開
 		R.Session.SessionSettings.Get(NiPublicKey, Pub);
 		S.bPublic = Pub != 0;
+		S.LangIndex = INDEX_NONE; // 舊房無屬性＝未知
+		R.Session.SessionSettings.Get(NiLangKey, S.LangIndex);
+		R.Session.SessionSettings.Get(NiNameKey, S.RoomName);
 		FoundSummaries.Add(S);
 	}
+	// 同語言優先（配對邊界=語言/文化）→人多優先（快成局）→ping 低。
+	// SearchIndex 指回原始 SearchResults＝排序不影響加入
+	int32 MyLang = 0;
+	if (const UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
+	{
+		MyLang = GI->GetMenuLanguage();
+	}
+	FoundSummaries.StableSort([MyLang](const FNiFoundSession& A, const FNiFoundSession& B)
+	{
+		const bool bAMine = A.LangIndex == MyLang;
+		const bool bBMine = B.LangIndex == MyLang;
+		if (bAMine != bBMine)
+		{
+			return bAMine;
+		}
+		const int32 TakenA = A.MaxSlots - A.OpenSlots;
+		const int32 TakenB = B.MaxSlots - B.OpenSlots;
+		if (TakenA != TakenB)
+		{
+			return TakenA > TakenB;
+		}
+		const int32 PA = A.PingMs > 0 ? A.PingMs : MAX_int32;
+		const int32 PB = B.PingMs > 0 ? B.PingMs : MAX_int32;
+		return PA < PB;
+	});
+}
+
+bool UNiceInkSessionSubsystem::TickSearchPoll(float /*DeltaSeconds*/)
+{
+	if (UiState != ENiSessionUiState::Searching || !SessionSearch.IsValid())
+	{
+		SearchPollTicker.Reset();
+		return false; // 搜尋結束＝自拆
+	}
+	// 即時串流：已到貨結果直接上桌（LAN 回應毫秒級、完成回呼死等 5s 窗）
+	RebuildSummariesFromSearch();
+
+	// 碼路早退：命中即加入、不等窗。退訂完成回呼＝被棄搜尋在引擎內跑完
+	// 剩餘窗（期間新 FindSessions 會被 OSS 拒一次——早退後在旅行、無感；
+	// 極端失敗回選單也有 12s 自動更新自癒）
+	if (!PendingJoinCode.IsEmpty())
+	{
+		for (const FNiFoundSession& F : FoundSummaries)
+		{
+			if (F.Code.Equals(PendingJoinCode, ESearchCase::IgnoreCase))
+			{
+				const int32 Index = F.SearchIndex;
+				PendingJoinCode.Reset();
+				if (IOnlineSessionPtr Sessions = GetSessionInterface())
+				{
+					Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindHandle);
+				}
+				UE_LOG(LogTemp, Log, TEXT("NiSession: code matched mid-search — early join"));
+				UiState = ENiSessionUiState::Idle;
+				SearchPollTicker.Reset();
+				JoinFoundSession(Index);
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
+{
+	IOnlineSessionPtr Sessions = GetSessionInterface();
+	if (Sessions.IsValid())
+	{
+		Sessions->ClearOnFindSessionsCompleteDelegate_Handle(FindHandle);
+	}
+	bBackgroundSearch = false; // 本輪結束（碼路漏接重搜=玩家在等=前景）
+
+	if (bCancelRequested)
+	{
+		// 玩家已取消：結果丟棄（列表不更新也無妨——下次搜尋整組重來）
+		bCancelRequested = false;
+		bAutoJoinFirst = false;
+		PendingJoinCode.Reset();
+		UiState = ENiSessionUiState::Idle;
+		return;
+	}
+
+	if (UiState == ENiSessionUiState::Joining)
+	{
+		// 搜尋窗內玩家已點列加入（串流列表可點制）：本輪結果只更新列表、
+		// 不動狀態機——Joining 的殘留點擊防護不得被踩回 Idle
+		RebuildSummariesFromSearch();
+		bAutoJoinFirst = false;
+		PendingJoinCode.Reset();
+		return;
+	}
+
+	const bool bWantedAutoJoin = bAutoJoinFirst;
+	bAutoJoinFirst = false;
+	const FString WantedCode = PendingJoinCode;
+	PendingJoinCode.Reset();
+
+	if (!bWasSuccessful || !SessionSearch.IsValid())
+	{
+		SetFailed(TEXT("search failed"), static_cast<int32>(ENiLocKey::ErrSearchFailed));
+		return;
+	}
+
+	RebuildSummariesFromSearch();
 	UE_LOG(LogTemp, Log, TEXT("FindSessions: %d found"), FoundSummaries.Num());
 
 	// 碼直達：比對 NICODE（公開私房都吃），命中即加入
@@ -445,6 +593,34 @@ void UNiceInkSessionSubsystem::OnFindSessionsComplete(bool bWasSuccessful)
 			{
 				UiState = ENiSessionUiState::Idle;
 				JoinFoundSession(S.SearchIndex);
+				return;
+			}
+		}
+		// 搭便車搭上了「被語言過濾的搜尋」（EOS 查詢端過濾＝結果可能根本
+		// 不含朋友的房）：重搜一次不過濾、碼續掛——第二輪 LastSearchLang
+		// 必為 INDEX_NONE＝不會迴圈
+		if (LastSearchLang != INDEX_NONE)
+		{
+			UE_LOG(LogTemp, Log, TEXT("NiSession: code %s missed filtered search — retrying unfiltered"), *WantedCode);
+			PendingJoinCode = WantedCode;
+			PendingSearchLang = INDEX_NONE;
+			UiState = ENiSessionUiState::Searching;
+			SearchSessionsInternal(bLastSearchLan);
+			return;
+		}
+		// 同機開發保底（-nilanloopback，play_full_flow*.bat 帶旗標）：Windows 上
+		// 主機與搜房端同綁 UDP 14001（LANBeacon 設計）、主機回覆的單播只送達
+		// 「先綁的」socket（2026-08-13 本機量測實錘）＝同一台電腦房號搜尋結構性
+		// 收不到回應；兩台真機各綁各的不受影響。保底＝直連 127.0.0.1、房號帶上
+		// URL 由主機 PreLogin 驗證（誤碼不得靜默連進本機別的房）。
+		if (SessionSearch->bIsLanQuery && FParse::Param(FCommandLine::Get(), TEXT("nilanloopback")))
+		{
+			if (APlayerController* PC = GetGameInstance()->GetFirstLocalPlayerController())
+			{
+				UE_LOG(LogTemp, Log, TEXT("NiSession: LAN search dry — loopback fallback with code %s"), *WantedCode);
+				UiState = ENiSessionUiState::Joining; // 失敗＝TravelFailure→ReturnToMainMenu→DestroySession 歸位
+				PC->ClientTravel(TEXT("127.0.0.1") + BuildTravelOptions() +
+					FString::Printf(TEXT("?NiCode=%s"), *WantedCode), TRAVEL_Absolute);
 				return;
 			}
 		}
@@ -540,6 +716,7 @@ void UNiceInkSessionSubsystem::DestroySession()
 	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 	{
 		GI->HostRoomCode.Reset();
+		GI->HostMaxPlayers = 6;
 	}
 	UiState = ENiSessionUiState::Idle;
 }

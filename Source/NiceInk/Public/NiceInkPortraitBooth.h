@@ -6,7 +6,7 @@
 
 class ANiceInkCharacter;
 class UBoxComponent;
-class UPointLightComponent;
+class USkyLightComponent;
 class USceneCaptureComponent2D;
 class UTexture2D;
 class UTextureRenderTarget2D;
@@ -47,16 +47,25 @@ public:
 	float OrthoWidthCm = 46.0f;   // 正交取景寬≈頭寬＋餘裕（肩膀擠出框＝裁切恰好頭部）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float KeyIntensity = 7.0f;    // 亭燈（量測定值：12 時臉 29.7% 撞頂 255）
+	float AmbientIntensity = 5.0f; // 均勻環境光＝天光強度（灰 cubemap 全方向恆定；
+	                               // 天光無通道可隔離→改「時間隔離」：只在 CaptureScene
+	                               // 的同步瞬間亮、拍完即關＝世界永不渲染到開著的一幀）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float FillIntensity = 5.0f;   // 下前補光（下巴底朝下面兩頭不著光＝黑影帶）
+	float ColorGain = 0.62f;      // 手動增益（保底路：膚色錨定自動曝光量測失敗時才用）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float RimIntensity = 20.0f;   // 背光（輪廓分離）
+	float Saturation = 1.15f;     // 肖像飽和度（SceneColorHDR 繞過 tonemapper＝
+	                              // 裸線性→sRGB 天生平灰；ACES 曲線＋此旋鈕補齊）
+
+	// 五官增顯（均勻光的代價＝形狀陰影歸零、五官只剩貼圖色差——unsharp
+	// 把「五官 vs 周圍膚」的局部對比放大；只動亮度不動色相、alpha 加權
+	// 模糊＝輪廓邊不吃黑底暈）
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
+	float DetailAmount = 0.8f;    // 局部對比強度（0=關）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float ColorGain = 0.62f;      // HDR→sRGB 的手動增益（量測迭代收斂：0.7 仍 6.6% 撞頂）
+	float DetailRadiusPx = 6.0f;  // 特徵尺度（256px 成品上的模糊半徑）
 
 	// 深度遮罩上下分域（單一閾值血價：16=髷被砍、26=肩楔活著——髷與肩的
 	// 深度重疊，但高度不重疊：肩不可能在頭頂）：上域寬鬆保髷、下域緊殺肩
@@ -75,9 +84,7 @@ public:
 private:
 	UPROPERTY() TObjectPtr<UBoxComponent> Floor;                  // 替身落腳（世界下方無地板）
 	UPROPERTY() TObjectPtr<ANiceInkCharacter> Dummy;
-	UPROPERTY() TObjectPtr<UPointLightComponent> KeyLight;
-	UPROPERTY() TObjectPtr<UPointLightComponent> FillLight;
-	UPROPERTY() TObjectPtr<UPointLightComponent> RimLight;
+	UPROPERTY() TObjectPtr<USkyLightComponent> Sky; // 平時隱藏（天光是全世界級光源）
 	UPROPERTY() TObjectPtr<USceneCaptureComponent2D> Capture;
 	UPROPERTY() TObjectPtr<UTextureRenderTarget2D> ScratchRT; // 捕捉暫存（成品=裁切後 UTexture2D）
 	UPROPERTY() TMap<FString, TObjectPtr<UTexture2D>> Cache;
@@ -87,5 +94,6 @@ private:
 	int32 TicksAlive = 0; // 姿勢系統跑穩前不出片（前幾拍＝參考姿勢）
 
 	void EnsureDummy();
-	UTexture2D* CaptureNow(); // 正交捕捉→CPU alpha 裁切→透明背景頭形貼圖
+	// 正交捕捉→CPU alpha 裁切→膚色錨定自動曝光→透明背景頭形貼圖
+	UTexture2D* CaptureNow(const FLinearColor& Tone);
 };

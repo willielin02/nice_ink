@@ -89,6 +89,11 @@ public:
 	UPROPERTY(Transient)
 	FString HostRoomCode;
 
+	// 建房頁選的人數上限（2026-08-13；同 HostRoomCode 的搬運路：SessionSubsystem
+	// 寫入→GameMode PostLogin 轉進 GameState；拆房重置 6）
+	UPROPERTY(Transient)
+	int32 HostMaxPlayers = 6;
+
 	// robo 鉤子：延遲截圖（Shot showui＝含 Slate/HUD）。住 GameInstance＝任何
 	// 世界/任何 PC 類都路由得到（選單/道場/直連 client 通吃）、core ticker 跨
 	// ServerTravel 存活——NiMenuShot 只活在選單 PC 的補位
