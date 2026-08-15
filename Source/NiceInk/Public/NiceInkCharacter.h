@@ -464,6 +464,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "1", ClampMax = "20"))
 	float JiggleMaxCm = 8.0f;         // 偏移鉗位（防穿模/防瞬移灌爆）
 
+	// 08-15 user 抓「頭轉到某角度乳頭沉進乳房」：徑向往體內的偏移不對稱鉗（往外照舊 8cm）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0", ClampMax = "8"))
+	float JiggleInwardMaxCm = 1.5f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0", ClampMax = "30"))
+	float JiggleChestMaxRollDeg = 15.0f; // 胸旋轉耦合轉角上限（原 25°；乳頭繞骨原點內掃）
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.02", ClampMax = "0.9"))
 	float JiggleDamping = 0.32f;      // 阻尼比 ζ（低=晃更多下；過低=步頻共振 Q 放大頂鉗位）
 

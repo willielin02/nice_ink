@@ -466,7 +466,6 @@ void UNeckStretchComponent::UpdateNeck()
 	Normals.SetNumUninitialized(NumV);
 	UV0.SetNumUninitialized(NumV);
 	Cols.SetNumUninitialized(NumV);
-	const FLinearColor Neutral(127.0f / 255.0f, 127.0f / 255.0f, 127.0f / 255.0f, 0.0f);
 
 	for (int32 j = 0; j < Rows; ++j)
 	{
@@ -474,8 +473,6 @@ void UNeckStretchComponent::UpdateNeck()
 		const float Blend = SmoothStep01(T);
 		const float Taper = TaperAt(T);
 		const float MidEnv = FMath::Square(FMath::Sin(PI * T)); // 環向形狀的沿長包絡（端排=0）
-		const float WB = 1.0f - SmoothStep01(T / 0.35f);
-		const float WH = 1.0f - SmoothStep01((1.0f - T) / 0.35f);
 		for (int32 k = 0; k < GRing; ++k)
 		{
 			const int32 Idx = j * GRing + k;
@@ -503,9 +500,11 @@ void UNeckStretchComponent::UpdateNeck()
 				Verts[Idx] = FMath::Lerp(Ruled, Tube, Compress);
 			}
 			UV0[Idx] = FVector2D(static_cast<float>(k) / GRing, T);
-			const FLinearColor RingCol = (WB > 0.0f)
-				? FMath::Lerp(Neutral, BodyRingColor[k].ReinterpretAsLinear(), WB)
-				: (WH > 0.0f ? FMath::Lerp(Neutral, HeadResCol[k], WH) : Neutral);
+			// 端色沿長逐列 lerp（08-15 質感修：舊制 35% 端帶後淡到 Neutral＝管中段一條
+			// 平膚色帶＝「另一塊材料」讀感真兇；兩端色都是該列在身體 chroma 場的實采，
+			// 沿長插值＝整管帶著當地血色、與身體同源）
+			const FLinearColor RingCol = FMath::Lerp(
+				BodyRingColor[k].ReinterpretAsLinear(), HeadResCol[k], Blend);
 			Cols[Idx] = RingCol.QuantizeRound();
 		}
 	}

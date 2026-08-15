@@ -7130,15 +7130,26 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		const FVector LeverHat = Lv.PivotOfsCS.IsNearlyZero()
 			? FVector(0.0f, 0.983f, -0.183f)
 			: (-Lv.PivotOfsCS).GetSafeNormal();
-		const FVector Radial = FVector::DotProduct(OffsetCS, LeverHat) * LeverHat;
-		const FVector Tangent = OffsetCS - Radial;
+		// 徑向不對稱鉗位（08-15 user 抓「頭轉到某些角度乳頭沉進乳房」）：LeverHat 由樞軸
+		// 指向骨頭＝朝體外；徑向負值＝整顆骨（連乳頭）往胸壁/骨盆內壓——彈簧 8cm 上限
+		// 對「往內」是穿膜距離。往外照舊（彈出來是要的），往內鉗到 JiggleInwardMaxCm。
+		float RadialS = FVector::DotProduct(OffsetCS, LeverHat);
+		if (RadialS < -JiggleInwardMaxCm)
+		{
+			RadialS = -JiggleInwardMaxCm;
+		}
+		const FVector Radial = RadialS * LeverHat;
+		const FVector Tangent = OffsetCS - FVector::DotProduct(OffsetCS, LeverHat) * LeverHat;
 		FQuat DeltaQ = FQuat::Identity;
 		if (!Tangent.IsNearlyZero(0.001f))
 		{
 			const FVector Axis = FVector::CrossProduct(LeverHat, Tangent.GetSafeNormal()).GetSafeNormal();
 			if (!Axis.IsNearlyZero())
 			{
-				const float Ang = FMath::Min(Tangent.Size() / FMath::Max(Lv.LeverCm, 1.0f), MaxRollRad);
+				// 胸的轉角上限減半（08-15）：蒙皮繞骨原點轉、乳頭在骨前 ~7cm——25° 讓乳頭
+				// 近側掃進胸大肌；15° 上限＝橫向擺幅保留、內掃量減 60%
+				const float RollCap = (B == 1 || B == 2) ? FMath::DegreesToRadians(JiggleChestMaxRollDeg) : MaxRollRad;
+				const float Ang = FMath::Min(Tangent.Size() / FMath::Max(Lv.LeverCm, 1.0f), RollCap);
 				DeltaQ = FQuat(Axis, Ang);
 			}
 		}
