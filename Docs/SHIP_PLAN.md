@@ -883,3 +883,22 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   （睡姿路同門檻無迴歸）。教訓：**「安座即藏」的門檻要對「小角度純旋轉」校
   ——環心距是旋轉的盲區（07-26 已為此加 sin×半徑項，但半徑用平均值仍估不到
   環緣楔縫）；掃描式探針（角度全域傾印）一輪就把機率性穿膜定成確定區間**。
+- **2026-08-15 追記㉕＝脖子回歸蒙皮網格（user「脖子劣質破爛、質感差」→我推薦根治、
+  user 問「動不動甦醒根基」→不動→定案開工；先 commit push 145bcba）**：病根=
+  轆轤首伸縮脖是「每幀程序化生成的獨立網格」——材質斷層（素膚 vs 血色場+頭燈）、
+  接縫法線不連續（明暗線）、零星穿膜=幾何競賽無終點。根治=**雙版制**：
+  ①`build_sumo_skeletal_whole_fbx.py`＝非破壞（master 一字不動）記憶體內焊回
+  cut_seam_head3 的 84 對重合頂點（11931→11847=術前頂點數、零新增幾何、UV loop
+  原樣）＋焊縫兩側自訂法線平均＋頸帶蒙皮權重（沿 seam 平面法線 ±6cm：Head
+  smoothstep 0→1、Neck 帳篷峰 0.45、身側群含胸/肚 jiggle 骨等比縮；程序化初值、
+  Blender 筆刷細修留 user）→ sumo_skeletal_whole.fbx；②`ue_import_sumo_whole.py`
+  →SK_Sumo_Whole（沿用 SK_Sumo_Skeleton＝骨樹同源、槽名同序）；③C++
+  `SetBowBodyVariant`：站立/走路/作畫（含偷瞄）=Whole、睡姿替身=Cut（轆轤首
+  照舊）；伸縮脖 bNeckStretchEnabled 只在 Cut 版啟用；換版=Reset＋jiggle 基準
+  歸零。**甦醒根基零變動**：orbit 24/0＋feign 26/0 逐位過；gait 10/0；lookpitch
+  9/0（c6 改「Whole 下伸縮脖恆隱藏」）；截圖套件 robo_neckwhole_shots（站立/
+  抬頭/低頭/lean-lock 埋頭 各正側面）自查＝五態脖子皆單一連續皮膚、無切線/
+  材質差/明暗線/楔縫。**質感終審=user viewport**；權重細修（偷瞄 90° 大轉頭
+  若見皺褶）=Blender 筆刷項。鐵坑：robo 機位「正面」要用 -forward（網格前向=
+  actor -X）；DebugRoboEnterLean 的 victim 必須同世界（跨世界 trace 必假）；
+  probe 動作用 acted 旗標不用時間窗（背景 4~6fps 一 tick 就過窗）。

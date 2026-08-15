@@ -173,6 +173,10 @@
 
 ## 摺り足步態＋軟肉彈跳儀器（2026-08-04）
 
+- `robo_neckwhole_shots.py`（2026-08-15）＝脖子縫合版（SK_Sumo_Whole）截圖套件：host
+  當機位、client 模型當被拍者，站立平視/抬頭 60°/低頭 60°/lean-lock 埋頭 各正面
+  （-forward 側 130cm、頭高）＋側面；產出 neckwhole_*.png 自查「單一連續皮膚、無
+  切線/材質差/楔縫」。機制契約由 orbit/feign/gait/lookpitch 守；質感=user viewport。
 - `robo_lookpitch_probe.py`（2026-08-15）＝站立視野俯仰上身探針（**9 檢查**）：本人
   相機 pitch ±40° → 本人端與旁觀端 Neck→Head 骨向量 Z 分量同號變化（c1 抬頭
   dz>+0.02、c2 低頭 dz<-0.02、c3 兩端同量 |Δ|<0.02＝複製追趕收斂；閾值對應

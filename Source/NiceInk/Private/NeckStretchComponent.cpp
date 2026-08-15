@@ -238,6 +238,15 @@ void UNeckStretchComponent::UpdateNeck()
 	{
 		return;
 	}
+	if (!bNeckStretchEnabled)
+	{
+		if (IsVisible())
+		{
+			SetVisibility(false);
+			LastHeadCenter = FVector(FLT_MAX);
+		}
+		return;
+	}
 	if (!Source->IsVisible())
 	{
 		SetVisibility(false);

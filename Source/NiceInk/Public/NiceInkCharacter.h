@@ -1459,6 +1459,14 @@ private:
 	// 一具替身全員可見（含本人）。靜態 Body 只藏不關碰撞——畫墨/噴射 UV 解算照打。
 	bool EnsureBowBodyAsset() { return EnsurePoseableAsset(BowBody); }
 	bool EnsurePoseableAsset(UPoseableMeshComponent* Poseable); // SK 惰性載入＋皮膚 MID 共享
+	// 脖子雙版制（08-15 user 定案：站立/作畫脖子回歸蒙皮網格本體、程序化伸縮脖只留
+	// 甦醒者升起）：SK_Sumo_Whole（焊縫＋頸帶權重）＝站立/作畫常駐；SK_Sumo（切開版）
+	// ＝睡姿替身（轆轤首）。切換＝SetSkinnedAssetAndUpdate＋皮膚 MID 重指派；伸縮脖
+	// 只在切開版啟用（bNeckStretchEnabled）。
+	void SetBowBodyVariant(bool bWhole);
+	bool bBowBodyIsWhole = false;
+	UPROPERTY(Transient)
+	TObjectPtr<USkeletalMesh> BowMeshWhole;
 	void UpdateSleepBodyDouble(float DeltaSeconds); // 每 tick（所有端）：替身開關＋指向擺骨＋本人相機
 	bool bSleepDoubleActive = false;
 	float SleepLookSendAccum = 0.0f;    // 姿態上報節流（本人端）

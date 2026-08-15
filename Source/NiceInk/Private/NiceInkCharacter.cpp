@@ -4287,14 +4287,24 @@ bool ANiceInkCharacter::EnsurePoseableAsset(UPoseableMeshComponent* Poseable)
 	{
 		BowMesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo.SK_Sumo"));
 	}
-	if (BowMesh)
+	if (!BowMeshWhole)
 	{
-		Poseable->SetSkinnedAssetAndUpdate(BowMesh);
+		BowMeshWhole = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo_Whole.SK_Sumo_Whole"));
+	}
+	// BowBody 首載＝縫合版（站立是首個狀態）；縫合版缺席退回切開版（機制照跑）
+	USkeletalMesh* First = (Poseable == BowBody && BowMeshWhole) ? BowMeshWhole.Get() : BowMesh.Get();
+	if (Poseable == BowBody)
+	{
+		bBowBodyIsWhole = (First == BowMeshWhole && BowMeshWhole != nullptr);
+	}
+	if (First)
+	{
+		Poseable->SetSkinnedAssetAndUpdate(First);
 		if (Body && Body->GetDynamicMaterial())
 		{
 			// 皮膚 MID 按槽名指派：SK 匯入的槽序與 SM 相反（褌在 0）——
 			// 寫死 index 0 會把皮膚材質糊到褌上。褌槽保留資產上的 M_Fundoshi。
-			const TArray<FSkeletalMaterial>& SkMats = BowMesh->GetMaterials();
+			const TArray<FSkeletalMaterial>& SkMats = First->GetMaterials();
 			for (int32 i = 0; i < SkMats.Num(); ++i)
 			{
 				if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
@@ -4304,12 +4314,58 @@ bool ANiceInkCharacter::EnsurePoseableAsset(UPoseableMeshComponent* Poseable)
 			}
 		}
 	}
-	// 伸縮脖綁定資料源（骨骼 ref pose 快取＋端色＋抄身體 MID 膚色參數）
+	// 伸縮脖綁定資料源（骨骼 ref pose 快取＋端色＋抄身體 MID 膚色參數）——
+	// 環資料按頂點位置查、兩版網格 seam 頂點同位＝任一版都可 Init；啟用與否見 SetBowBodyVariant
 	if (Poseable == BowBody && NeckStretch && Poseable->GetSkinnedAsset())
 	{
 		NeckStretch->InitFromSource(BowBody, Body ? Body->GetDynamicMaterial() : nullptr);
+		NeckStretch->bNeckStretchEnabled = !bBowBodyIsWhole;
 	}
 	return Poseable->GetSkinnedAsset() != nullptr;
+}
+
+void ANiceInkCharacter::SetBowBodyVariant(bool bWhole)
+{
+	if (!BowBody || !EnsureBowBodyAsset())
+	{
+		return;
+	}
+	USkeletalMesh* Want = (bWhole && BowMeshWhole) ? BowMeshWhole.Get() : BowMesh.Get();
+	if (!Want || BowBody->GetSkinnedAsset() == Want)
+	{
+		if (NeckStretch)
+		{
+			NeckStretch->bNeckStretchEnabled = !bBowBodyIsWhole;
+		}
+		return;
+	}
+	BowBody->SetSkinnedAssetAndUpdate(Want);
+	bBowBodyIsWhole = (Want == BowMeshWhole);
+	if (Body && Body->GetDynamicMaterial())
+	{
+		const TArray<FSkeletalMaterial>& SkMats = Want->GetMaterials();
+		for (int32 i = 0; i < SkMats.Num(); ++i)
+		{
+			if (!SkMats[i].MaterialSlotName.ToString().Contains(TEXT("Fundoshi")))
+			{
+				BowBody->SetMaterial(i, Body->GetDynamicMaterial());
+			}
+		}
+	}
+	if (NeckStretch)
+	{
+		NeckStretch->InitFromSource(BowBody, Body ? Body->GetDynamicMaterial() : nullptr);
+		NeckStretch->bNeckStretchEnabled = !bBowBodyIsWhole;
+	}
+	// 換網格＝姿勢層/彈跳層基準全部重來
+	ResetBowBodyBones();
+	bGaitIdleWritten = false;
+	bStandLookWritten = false;
+	for (FJiggleBoneState& S : JiggleStates)
+	{
+		S.bValid = false;
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiBody: BowBody variant -> %s"), bBowBodyIsWhole ? TEXT("whole") : TEXT("cut"));
 }
 
 void ANiceInkCharacter::DebugRoboSleepLook(float Yaw, float Pitch)
@@ -4693,6 +4749,7 @@ void ANiceInkCharacter::ApplyBowPose()
 	{
 		return;
 	}
+	SetBowBodyVariant(/*bWhole=*/true); // 作畫姿＝縫合版（冪等；埋頭/偷瞄=蒙皮頸帶）
 	const float Az = EffectiveDrawAz();
 	const float Tilt = EffectiveDrawTilt();
 	// 門檻 0.05°（原 0.2 的量化微跳已由 One Euro 靜止凍結取代——濾波輸出靜止時
@@ -5806,6 +5863,7 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 	}
 	if (bAsleep && !bSleepDoubleActive && EnsureBowBodyAsset())
 	{
+		SetBowBodyVariant(/*bWhole=*/false); // 睡姿替身＝切開版（轆轤首伸縮脖的舞台）
 		bSleepDoubleActive = true;
 		// 捕捉參考姿勢（分析式擺骨的基底；姿勢快取歸零）——全基底骨重置：
 		// 只重置 Neck/Head 會把 lean 殘留的蹲姿脊椎/手臂帶進睡姿替身
@@ -6512,6 +6570,7 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 
 	if (!bStandDoubleActive)
 	{
+		SetBowBodyVariant(/*bWhole=*/true); // 站立/走路＝縫合版（脖子=蒙皮本體）
 		bStandDoubleActive = true;
 		bGaitIdleWritten = false;
 		bStandLookWritten = false;

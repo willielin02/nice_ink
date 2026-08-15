@@ -64,6 +64,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Neck")
 	FString GetDebugSummary() const;
 	void ForceRebuild(); // 清跳過快取＝下一 UpdateNeck 必重建（actor 現身邊緣用）
+	bool bNeckStretchEnabled = true; // 08-15 雙版制：縫合版網格上停用（脖子=蒙皮本體）
 
 	// robo 探針：傾印當前管幾何（CSV：row,col,pos,normal）——平滑度調查用
 	// （非 const：引擎 GetProcMeshSection 只有非 const 版）
