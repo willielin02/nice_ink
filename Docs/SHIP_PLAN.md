@@ -935,3 +935,13 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   版 |pitch|≥5 必現」）、gait 10/0、orbit 24/0；neckwhole_shots 站立/lean 近景自查連續。
   **教訓：蒙皮 vs 程序化各有結構缺陷（權重帶拉扯 vs 幾何競賽）——user 兩輪 viewport
   後裁決以「同一條脖子、同一品質」的一致性優先；縫合版留作備選不刪。**
+- **2026-08-15 追記㉙＝脖子膚色不對（user 截圖：自訂臉玩家身體粉、脖子偏黃）**：端色
+  header 全 0.5 中性（非兇手）→真兇=NeckStretch MID 在 InitFromSource **只抄一次**身體
+  MID 的 SkinTone，而自訂膚色是進房後 ApplyCustomAvatar/ApplySkinToneOnly 才寫進身體
+  ＝脖子停在預設/名冊膚色（舊制 35% 端帶淡到 Neutral 時只有兩端小段錯色不顯眼、
+  端色 lerp 拉滿整管後鋪滿全長露餡）。修=UpdateNeck 每 tick 比對身體 SkinTone、變了
+  整組 uniform 重抄；client 端 InitFromSource 時身體 MID 常未建→角色每 tick
+  SetBodyMaterialRef 指標比對推入（晚綁）。E2E 兩端 log 對賬：body face applied 同 tick
+  neck synced 同值（host 0.386/0.216/0.130、P2 0.397/0.188/0.150）。**教訓：跨元件
+  「抄一次參數」的 MID＝晚到狀態的盲區；凡身體參數會後到（自訂臉/tone 先行），
+  消費者要用「值比對每 tick 追」不用「初始化抄一次」。**

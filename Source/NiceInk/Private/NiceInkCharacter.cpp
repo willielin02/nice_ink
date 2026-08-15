@@ -578,6 +578,10 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	// 由下一 tick 的變化偵測接住，一幀延遲不可感）
 	if (NeckStretch)
 	{
+		if (Body)
+		{
+			NeckStretch->SetBodyMaterialRef(Body->GetDynamicMaterial()); // 晚綁：MID 建好即推入（指標比對）
+		}
 		NeckStretch->UpdateNeck();
 	}
 

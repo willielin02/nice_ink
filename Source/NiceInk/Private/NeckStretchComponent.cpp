@@ -211,9 +211,14 @@ void UNeckStretchComponent::InitFromSource(UPoseableMeshComponent* InSource, UMa
 		TEXT("/Game/Characters/M_NeckStretch.M_NeckStretch")))
 	{
 		NeckMid = UMaterialInstanceDynamic::Create(Base, this);
+		BodyMidRef = Cast<UMaterialInstanceDynamic>(BodyMaterial);
 		if (NeckMid && BodyMaterial)
 		{
 			NeckMid->CopyMaterialUniformParameters(BodyMaterial);
+			if (BodyMidRef)
+			{
+				BodyMidRef->GetVectorParameterValue(FMaterialParameterInfo(TEXT("SkinTone")), LastSyncedTone);
+			}
 		}
 		SetMaterial(0, NeckMid);
 	}
@@ -232,11 +237,36 @@ void UNeckStretchComponent::ForceRebuild()
 	LastHeadCenter = FVector(FLT_MAX);
 }
 
+void UNeckStretchComponent::SetBodyMaterialRef(UMaterialInstanceDynamic* BodyMid)
+{
+	if (BodyMid && BodyMid != BodyMidRef)
+	{
+		BodyMidRef = BodyMid;
+		LastSyncedTone = FLinearColor::Black; // 強制下一 UpdateNeck 整組重抄
+	}
+}
+
 void UNeckStretchComponent::UpdateNeck()
 {
 	if (!bReady || !Source)
 	{
 		return;
+	}
+	// 膚色同步（08-15 user 抓「脖子膚色不對」）：InitFromSource 只抄一次身體 MID——
+	// 自訂臉的 SkinTone 是進房後才寫進身體 MID（ApplyCustomAvatar/ApplySkinToneOnly）
+	// ＝脖子停在預設/名冊膚色。每 tick 比對 SkinTone（一個 vector 讀取＝廉價），變了
+	// 整組 uniform 重抄（頭燈/亮度/去飽和一併跟）。
+	if (NeckMid && BodyMidRef)
+	{
+		FLinearColor Tone;
+		if (BodyMidRef->GetVectorParameterValue(FMaterialParameterInfo(TEXT("SkinTone")), Tone) &&
+			!Tone.Equals(LastSyncedTone, 1e-4f))
+		{
+			NeckMid->CopyMaterialUniformParameters(BodyMidRef);
+			LastSyncedTone = Tone;
+			UE_LOG(LogTemp, Log, TEXT("NeckStretch: skin tone synced (%.3f,%.3f,%.3f) on %s"),
+				Tone.R, Tone.G, Tone.B, *GetNameSafe(GetOwner()));
+		}
 	}
 	if (!bNeckStretchEnabled)
 	{

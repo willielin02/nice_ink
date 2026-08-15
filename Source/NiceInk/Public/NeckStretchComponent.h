@@ -18,6 +18,7 @@
 #include "NeckStretchComponent.generated.h"
 
 class UPoseableMeshComponent;
+class UMaterialInstanceDynamic;
 
 UCLASS(ClassGroup = (NiceInk), meta = (BlueprintSpawnableComponent))
 class UNeckStretchComponent : public UProceduralMeshComponent
@@ -64,7 +65,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Neck")
 	FString GetDebugSummary() const;
 	void ForceRebuild(); // 清跳過快取＝下一 UpdateNeck 必重建（actor 現身邊緣用）
+	// 身體 MID 晚綁（client 上 InitFromSource 時 MID 常未建）：角色每 tick 指標比對推入
+	void SetBodyMaterialRef(UMaterialInstanceDynamic* BodyMid);
 	bool bNeckStretchEnabled = true; // 08-15 雙版制：縫合版網格上停用（脖子=蒙皮本體）
+	// 膚色同步：身體 MID 參照＋上次同步的 SkinTone（變了整組 uniform 重抄）
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> BodyMidRef;
+	FLinearColor LastSyncedTone = FLinearColor::Black;
 
 	// robo 探針：傾印當前管幾何（CSV：row,col,pos,normal）——平滑度調查用
 	// （非 const：引擎 GetProcMeshSection 只有非 const 版）
