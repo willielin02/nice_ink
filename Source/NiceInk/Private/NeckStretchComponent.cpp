@@ -797,15 +797,29 @@ void UNeckStretchComponent::UpdateNeck()
 		}
 		if (!bSleeveCreated && bSleeve)
 		{
-			// 袖套自己的 winding（身片中段良態四邊形 vs 法線；不借管子的判定——管子首建
-			// 可能在 chord≈0 退化態）
+			// winding 逐格判定（08-16 選單舞者「脖胸黑洞」實錘：整片用一格猜方向＝
+			// 首建幀幾何退化時整片判反＝背面朝外全黑）：每個四邊形用自己的幾何法線 vs
+			// 四頂點平均法線決定——不可能整片反、每格自己對
+			// 首建必須是良態幾何：任一格面積趨零（骨姿未就緒/整片塌回）＝這 tick 不建、等下一 tick
+			int32 Degenerate = 0, Total = 0;
+			for (int32 Strip = 0; Strip < 2; ++Strip)
 			{
-				const int32 r0 = 1, k0 = 0;
-				const FVector& A0 = SV[r0 * GRing + k0];
-				const FVector& B0 = SV[r0 * GRing + 1];
-				const FVector& D0 = SV[(r0 + 1) * GRing + k0];
-				const FVector G = FVector::CrossProduct(B0 - A0, D0 - A0).GetSafeNormal();
-				bSleeveFlip = FVector::DotProduct(G, SN[r0 * GRing + k0]) < 0.0f;
+				const int32 Base = Strip * SR * GRing;
+				for (int32 r = 0; r < SR - 1; ++r)
+				{
+					for (int32 k = 0; k < GRing; ++k)
+					{
+						const int32 K1 = (k + 1) % GRing;
+						const int32 A = Base + r * GRing + k, B = Base + r * GRing + K1, D = Base + (r + 1) * GRing + k;
+						++Total;
+						if (FVector::CrossProduct(SV[B] - SV[A], SV[D] - SV[A]).Size() < 1e-3) { ++Degenerate; }
+					}
+				}
+			}
+			// 外環少數重合點=天然退化格（走環合流）；超過 10% 退化=骨姿未就緒/整片塌回→等下一 tick
+			if (Degenerate * 10 > Total)
+			{
+				return;
 			}
 			TArray<int32> ST;
 			ST.Reserve(OuterSteps * GRing * 6 * 2);
@@ -821,7 +835,10 @@ void UNeckStretchComponent::UpdateNeck()
 						const int32 B = Base + r * GRing + K1;
 						const int32 C = Base + (r + 1) * GRing + K1;
 						const int32 D = Base + (r + 1) * GRing + k;
-						if (bSleeveFlip)
+						const FVector G = FVector::CrossProduct(SV[B] - SV[A], SV[D] - SV[A]);
+						const FVector NAvg = SN[A] + SN[B] + SN[C] + SN[D];
+						const bool bFlipQ = FVector::DotProduct(G, NAvg) < 0.0f;
+						if (bFlipQ)
 						{
 							ST.Append({ A, C, B, A, D, C });
 						}

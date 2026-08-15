@@ -31,15 +31,18 @@ for p in me.polygons:
         vnrm.setdefault(vi, Vector((0,0,0)))
         vnrm[vi] += Vector(me.corner_normals[li].vector)
 
+MAX_STEP_M = 0.02   # 單步上限 2cm：超過=繞頸長邊（不是外走）→視為無路
+MIN_COS = 0.45      # 位移與 seam 法線夾角 < ~63° 才算「外走」
 def step_out(vi, direction, exclude):
-    best, bestd = None, -1e9
+    # 合格鄰點中取「最短」（不是最沿法線）：短邊=真正相鄰的一圈；長邊常是繞頸/跨區
+    best, bestlen = None, 1e9
     p0 = me.vertices[vi].co
     for nb in adj[vi]:
         if nb in exclude: continue
         d = (me.vertices[nb].co - p0)
-        if d.length < 1e-9: continue
-        score = d.normalized().dot(direction)
-        if score > bestd: bestd, best = score, nb
+        if d.length < 1e-9 or d.length > MAX_STEP_M: continue
+        if d.normalized().dot(direction) < MIN_COS: continue
+        if d.length < bestlen: bestlen, best = d.length, nb
     return best
 
 def walk(ring, direction):
