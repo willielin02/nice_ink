@@ -1,6 +1,7 @@
 #include "NeckStretchComponent.h"
 
 #include "NeckSeamData.h"
+#include "NeckOuterData.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
@@ -38,6 +39,25 @@ namespace
 			OutPos[k] = P;
 			OutNrm[k] = N.GetSafeNormal();
 		}
+	}
+
+	// 短脖頸皮（08-16）：外環頂點用「同列 seam 頂點的權重」蒙皮（鄰點 1~5cm 內權重近似）
+	void SkinWithWeightsOf(const NeckSeamData::FSeamVert& W, const TArray<FTransform>& SkinT,
+		const FVector& Rest, const FVector& RestN, FVector& OutP, FVector& OutN)
+	{
+		FVector P = FVector::ZeroVector, N = FVector::ZeroVector;
+		for (int32 j = 0; j < 4; ++j)
+		{
+			if (W.W[j] <= 0.0f)
+			{
+				continue;
+			}
+			const FTransform& T = SkinT[W.Bone[j]];
+			P += W.W[j] * T.TransformPosition(Rest);
+			N += W.W[j] * T.TransformVectorNoScale(RestN);
+		}
+		OutP = P;
+		OutN = N.GetSafeNormal();
 	}
 
 	FVector NewellNormal(const TArray<FVector>& Ring)
@@ -228,6 +248,8 @@ void UNeckStretchComponent::InitFromSource(UPoseableMeshComponent* InSource, UMa
 	}
 
 	bSectionCreated = false;
+	bSleeveCreated = false;
+	ClearAllMeshSections();
 	LastHeadCenter = FVector(FLT_MAX);
 	bReady = true;
 }
@@ -332,12 +354,19 @@ void UNeckStretchComponent::UpdateNeck()
 	// 攤在環緣）；安座（彎角≈0）時退化回舊判定。
 	const float BendSin = FVector::CrossProduct(NB, NH).Size();
 	const float WorstGapCm = ChordCm + BendSin * HeadRingRadius;
-	if (WorstGapCm < NeckHideChordCm)
+	// 頭安座＝管子收合（section 0 藏）；袖套（section 1）在短脖域恆在（08-16）——
+	// 安座時切縫本身的皮膚就是「站立難看」的來源，袖套正是要蓋它
+	const bool bSeated = WorstGapCm < NeckHideChordCm;
+	SetVisibility(true);
+	if (bSectionCreated)
 	{
-		SetVisibility(false); // 頭安座＝脖子收合、物理上不存在
+		SetMeshSectionVisible(0, !bSeated);
+	}
+	if (bSeated && !bNeckSleeveEnabled)
+	{
+		SetVisibility(false);
 		return;
 	}
-	SetVisibility(true);
 
 	// --- 中線 Hermite（端切向＝環 Newell 法線；兩環同繞向 → 兩端 Newell 都指向頭側）---
 	const FVector T0v = NB * ChordCm * NeckTangentK;
@@ -423,6 +452,9 @@ void UNeckStretchComponent::UpdateNeck()
 	// RMF 傳輸保角＝列角座標在兩端同義。
 	const int32 E = Rows - 1;
 	const FQuat HeadQInv = HeadQ.Inverse();
+	// 短脖頸皮（08-16）：頭側外環按同一 (m,M2,F) 重取樣，寫進 OutOuterPos/Nrm[step]
+	FVector HeadOuterPos[NeckOuterData::OuterSteps];
+	FVector HeadOuterNrm[NeckOuterData::OuterSteps];
 	auto ResampleHead = [&](float Angle, FVector& OutPos, FVector& OutNrm, FLinearColor& OutCol,
 		float& OutFrontFactor)
 	{
@@ -452,6 +484,15 @@ void UNeckStretchComponent::UpdateNeck()
 				// ReinterpretAsLinear＝純 /255（FLinearColor(FColor) 是 sRGB 解碼——毀編碼，勿用）
 				OutCol = FMath::Lerp(HeadRingColor[m].ReinterpretAsLinear(),
 					HeadRingColor[M2].ReinterpretAsLinear(), F);
+				for (int32 s = 0; s < NeckOuterData::OuterSteps; ++s)
+				{
+					const NeckOuterData::FOuterVert& A = NeckOuterData::HeadOuter[s][m];
+					const NeckOuterData::FOuterVert& B = NeckOuterData::HeadOuter[s][M2];
+					const FVector RP = FMath::Lerp(FVector(A.Px, A.Py, A.Pz), FVector(B.Px, B.Py, B.Pz), F);
+					const FVector RN = FMath::Lerp(FVector(A.Nx, A.Ny, A.Nz), FVector(B.Nx, B.Ny, B.Nz), F);
+					HeadOuterPos[s] = HeadT.TransformPosition(RP);
+					HeadOuterNrm[s] = HeadT.TransformVectorNoScale(RN).GetSafeNormal();
+				}
 				return;
 			}
 		}
@@ -459,6 +500,12 @@ void UNeckStretchComponent::UpdateNeck()
 		OutNrm = HeadT.TransformVectorNoScale(SeamNrm(NeckSeamData::HeadRing[0])).GetSafeNormal();
 		OutCol = HeadRingColor[0].ReinterpretAsLinear();
 		OutFrontFactor = 1.0f;
+		for (int32 s = 0; s < NeckOuterData::OuterSteps; ++s)
+		{
+			const NeckOuterData::FOuterVert& A = NeckOuterData::HeadOuter[s][0];
+			HeadOuterPos[s] = HeadT.TransformPosition(FVector(A.Px, A.Py, A.Pz));
+			HeadOuterNrm[s] = HeadT.TransformVectorNoScale(FVector(A.Nx, A.Ny, A.Nz)).GetSafeNormal();
+		}
 	};
 
 	// 壓縮域＝直紋面（2026-07-26 作畫姿勢脖子戰役）：管面解算器的設計域是「伸長」
@@ -478,9 +525,22 @@ void UNeckStretchComponent::UpdateNeck()
 	HeadResCol.SetNumUninitialized(GRing);
 	HeadLocal.SetNumUninitialized(GRing);
 	ColFront.SetNumUninitialized(GRing);
+	TArray<TArray<FVector>> HeadOuterPosCol, HeadOuterNrmCol; // [step][k]（袖套用）
+	HeadOuterPosCol.SetNum(NeckOuterData::OuterSteps);
+	HeadOuterNrmCol.SetNum(NeckOuterData::OuterSteps);
+	for (int32 s = 0; s < NeckOuterData::OuterSteps; ++s)
+	{
+		HeadOuterPosCol[s].SetNumUninitialized(GRing);
+		HeadOuterNrmCol[s].SetNumUninitialized(GRing);
+	}
 	for (int32 k = 0; k < GRing; ++k)
 	{
 		ResampleHead(ColAng[k], HeadResPos[k], HeadResNrm[k], HeadResCol[k], ColFront[k]);
+		for (int32 s = 0; s < NeckOuterData::OuterSteps; ++s)
+		{
+			HeadOuterPosCol[s][k] = HeadOuterPos[s];
+			HeadOuterNrmCol[s][k] = HeadOuterNrm[s];
+		}
 		const FVector V = HeadResPos[k] - Hc;
 		HeadLocal[k] = FVector(FVector::DotProduct(V, CU[E]), FVector::DotProduct(V, CW[E]),
 			FVector::DotProduct(V, CT[E]));
@@ -637,7 +697,7 @@ void UNeckStretchComponent::UpdateNeck()
 
 	// 索引（一次建；winding 以「幾何法線=外向法線同向」判定——取中段良態四邊形，
 	// row0 貼著邊界環面積趨零＝噪聲判定源，robo 實錘判反→two-sided 背面翻法線＝暗盤）
-	if (!bSectionCreated)
+	if (!bSectionCreated && !bSeated && ChordCm > 1.0f) // 首建要良態幾何（winding 判定）
 	{
 		const int32 MJ = Rows / 2;
 		const int32 MA = MJ * GRing;
@@ -668,8 +728,118 @@ void UNeckStretchComponent::UpdateNeck()
 		CreateMeshSection(0, Verts, Tris, Normals, UV0, Cols, TArray<FProcMeshTangent>(), false);
 		bSectionCreated = true;
 	}
-	else
+	else if (bSectionCreated)
 	{
 		UpdateMeshSection(0, Verts, Normals, UV0, Cols, TArray<FProcMeshTangent>());
+	}
+
+	// --- 短脖頸皮（08-16 user 定案：站立/作畫另設程序化脖子）---
+	// 兩片「袖套」貼在切縫上下的殼面上：身側 OS 圈外環＋seam 身環、頭側 seam 頭環（重取樣）
+	// ＋OS 圈外環——都是 rest 真幾何（下顎垂肉/斜方肌輪廓由網格本身給、不靠插值長）、
+	// 真法線（rest 頂點法線隨骨轉）、同源膚色。沿法線外推 SleeveOfs（seam 側 +、最外圈
+	// 略 −＝邊緣潛入殼面下=無邊線）。長脖域（弦長 > SleeveMaxChordCm=甦醒升起）整片
+	// 塌回 seam 環（零面積不畫）——袖套只服務短脖。
+	{
+		using namespace NeckOuterData;
+		const bool bSleeve = bNeckSleeveEnabled && ChordCm < NeckSleeveMaxChordCm;
+		const int32 SR = OuterSteps + 1; // 每片行數（含 seam 排）
+		const int32 NV = SR * GRing * 2;
+		TArray<FVector> SV; TArray<FVector> SN; TArray<FVector2D> SUV; TArray<FColor> SC;
+		SV.SetNumUninitialized(NV); SN.SetNumUninitialized(NV); SUV.SetNumUninitialized(NV); SC.SetNumUninitialized(NV);
+		// 外推量表：seam 排 → 最外排
+		auto OfsAt = [&](int32 StepFromSeam) -> float
+		{
+			// StepFromSeam 0=seam 排、OS=最外排
+			const float T = static_cast<float>(StepFromSeam) / FMath::Max(1, OuterSteps);
+			return FMath::Lerp(NeckSleeveOfsSeamCm, NeckSleeveOfsEdgeCm, T);
+		};
+		for (int32 k = 0; k < GRing; ++k)
+		{
+			const FLinearColor BodyCol = BodyRingColor[k].ReinterpretAsLinear();
+			const FLinearColor HeadCol = HeadResCol[k];
+			// 身片：row r=0 最外 … r=OS-1 第一外環, r=OS = seam 身環
+			for (int32 r = 0; r < SR; ++r)
+			{
+				const int32 Idx = r * GRing + k;
+				const int32 StepFromSeam = OuterSteps - r; // OS..0
+				FVector P, N;
+				if (StepFromSeam == 0)
+				{
+					P = BP[k]; N = BN[k];
+				}
+				else
+				{
+					const FOuterVert& O = BodyOuter[StepFromSeam - 1][k];
+					SkinWithWeightsOf(NeckSeamData::BodyRing[k], SkinT,
+						FVector(O.Px, O.Py, O.Pz), FVector(O.Nx, O.Ny, O.Nz), P, N);
+				}
+				SV[Idx] = bSleeve ? P + N * OfsAt(StepFromSeam) : BP[k];
+				SN[Idx] = N; SUV[Idx] = FVector2D(static_cast<float>(k) / GRing, 0.0f);
+				SC[Idx] = BodyCol.QuantizeRound();
+			}
+			// 頭片：row r=0 seam 頭環（重取樣） … r=OS 最外
+			for (int32 r = 0; r < SR; ++r)
+			{
+				const int32 Idx = SR * GRing + r * GRing + k;
+				FVector P, N;
+				if (r == 0)
+				{
+					P = HeadResPos[k]; N = HeadResNrm[k];
+				}
+				else
+				{
+					P = HeadOuterPosCol[r - 1][k]; N = HeadOuterNrmCol[r - 1][k];
+				}
+				SV[Idx] = bSleeve ? P + N * OfsAt(r) : HeadResPos[k];
+				SN[Idx] = N; SUV[Idx] = FVector2D(static_cast<float>(k) / GRing, 1.0f);
+				SC[Idx] = HeadCol.QuantizeRound();
+			}
+		}
+		if (!bSleeveCreated && bSleeve)
+		{
+			// 袖套自己的 winding（身片中段良態四邊形 vs 法線；不借管子的判定——管子首建
+			// 可能在 chord≈0 退化態）
+			{
+				const int32 r0 = 1, k0 = 0;
+				const FVector& A0 = SV[r0 * GRing + k0];
+				const FVector& B0 = SV[r0 * GRing + 1];
+				const FVector& D0 = SV[(r0 + 1) * GRing + k0];
+				const FVector G = FVector::CrossProduct(B0 - A0, D0 - A0).GetSafeNormal();
+				bSleeveFlip = FVector::DotProduct(G, SN[r0 * GRing + k0]) < 0.0f;
+			}
+			TArray<int32> ST;
+			ST.Reserve(OuterSteps * GRing * 6 * 2);
+			for (int32 Strip = 0; Strip < 2; ++Strip)
+			{
+				const int32 Base = Strip * SR * GRing;
+				for (int32 r = 0; r < SR - 1; ++r)
+				{
+					for (int32 k = 0; k < GRing; ++k)
+					{
+						const int32 K1 = (k + 1) % GRing;
+						const int32 A = Base + r * GRing + k;
+						const int32 B = Base + r * GRing + K1;
+						const int32 C = Base + (r + 1) * GRing + K1;
+						const int32 D = Base + (r + 1) * GRing + k;
+						if (bSleeveFlip)
+						{
+							ST.Append({ A, C, B, A, D, C });
+						}
+						else
+						{
+							ST.Append({ A, B, C, A, C, D });
+						}
+					}
+				}
+			}
+			CreateMeshSection(1, SV, ST, SN, SUV, SC, TArray<FProcMeshTangent>(), false);
+			SetMaterial(1, NeckMid);
+			bSleeveCreated = true;
+		}
+		else if (bSleeveCreated)
+		{
+			UpdateMeshSection(1, SV, SN, SUV, SC, TArray<FProcMeshTangent>());
+			SetMeshSectionVisible(1, bSleeve);
+		}
 	}
 }

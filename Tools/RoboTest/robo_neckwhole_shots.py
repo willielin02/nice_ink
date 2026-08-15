@@ -47,20 +47,21 @@ class Probe:
         return unreal.GameplayStatics.get_player_controller(get_world("UEDPIE_2"), 0)
 
     def shoot(self, name, side=False):
+        # 每個姿勢拍四方位（0/90/180/270 相對 actor forward）＝一定有一張正對脖子後側/側面
         server = self.server(); m = self.model_server(); h = self.host()
         pc = unreal.GameplayStatics.get_player_controller(server, 0)
         mloc = m.get_actor_location()
-        # 網格前向＝actor -X（陷阱年鑑：面向鏡頭=yaw 180）——「正面」機位站在 -forward 側
-        fv = m.get_actor_forward_vector(); yaw = math.degrees(math.atan2(-fv.y, -fv.x))
-        ang = math.radians(yaw + (90.0 if side else 0.0))
-        # 頭高≈mloc.z+60（膠囊中心 z 到頭 ~+60）
-        cam = unreal.Vector(mloc.x + 130.0 * math.cos(ang), mloc.y + 130.0 * math.sin(ang), mloc.z + 55.0)
+        fv = m.get_actor_forward_vector(); yaw0 = math.degrees(math.atan2(fv.y, fv.x))
+        i = 1 if side else 0
+        dyaw = (0.0, 90.0, 180.0, 270.0)[i % 4] if isinstance(side, bool) else float(side)
+        ang = math.radians(yaw0 + dyaw)
+        cam = unreal.Vector(mloc.x + 85.0 * math.cos(ang), mloc.y + 85.0 * math.sin(ang), mloc.z + 40.0)
         h.set_actor_location(cam, False, True)
         look = unreal.MathLibrary.find_look_at_rotation(
-            unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z + 55.0))
+            unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z + 62.0))
         pc.set_control_rotation(look)
         unreal.SystemLibrary.execute_console_command(server, f"HighResShot 1280x720 filename=neckwhole_{name}")
-        log(f"shot {name}")
+        log(f"shot {name} dyaw={dyaw}")
 
     def step(self):
         s = self.stage
@@ -84,16 +85,15 @@ class Probe:
                 log(f"victim={self.victim_pid} host={self.host_pid} model={self.model_pid}")
                 focus_main_window()
                 # 計畫：(名稱, 動作)
-                self.plan = [
-                    ("stand_front", lambda: self.model_pc().set_control_rotation(unreal.Rotator(0.0, 0.0, self.myaw)), False),
-                    ("stand_side", None, True),
-                    ("up_front", lambda: self.model_pc().set_control_rotation(unreal.Rotator(0.0, 60.0, self.myaw)), False),
-                    ("up_side", None, True),
-                    ("down_front", lambda: self.model_pc().set_control_rotation(unreal.Rotator(0.0, -60.0, self.myaw)), False),
-                    ("down_side", None, True),
-                    ("lean_side", lambda: (self.model_pc().set_control_rotation(unreal.Rotator(0.0, 0.0, self.myaw)), self.enter_lean()), True),
-                    ("lean_front", None, False),
-                ]
+                def pitch(p): return lambda: self.model_pc().set_control_rotation(unreal.Rotator(0.0, float(p), self.myaw))
+                quads = (0.0, 90.0, 180.0, 270.0)
+                self.plan = []
+                for pname, act in (("stand", pitch(0)), ("up", pitch(60)), ("down", pitch(-60))):
+                    for qi, q in enumerate(quads):
+                        self.plan.append((f"{pname}_q{qi}", act if qi == 0 else None, q))
+                self.plan.append(("lean_q0", lambda: (self.model_pc().set_control_rotation(unreal.Rotator(0.0, 0.0, self.myaw)), self.enter_lean()), 0.0))
+                for qi, q in enumerate(quads[1:], start=1):
+                    self.plan.append((f"lean_q{qi}", None, q))
                 self.myaw = self.model_pc().get_control_rotation().yaw
                 self.i = 0; self.advance("plan")
             elif self.elapsed() > 40: log("FAIL: no drawing"); self.finish()

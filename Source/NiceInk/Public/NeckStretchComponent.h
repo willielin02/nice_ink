@@ -68,6 +68,20 @@ public:
 	// 身體 MID 晚綁（client 上 InitFromSource 時 MID 常未建）：角色每 tick 指標比對推入
 	void SetBodyMaterialRef(UMaterialInstanceDynamic* BodyMid);
 	bool bNeckStretchEnabled = true; // 08-15 雙版制：縫合版網格上停用（脖子=蒙皮本體）
+
+	// 短脖頸皮「袖套」（08-16 user 定案：站立/作畫另設程序化脖子）：切縫上下各
+	// OuterSteps 圈 rest 真幾何貼在殼面上（真法線/同源膚色），沿法線外推 seam 側 +、
+	// 最外圈 −（邊緣潛入殼面）；弦長 > SleeveMaxChord（甦醒升起）整片塌回不畫
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck")
+	bool bNeckSleeveEnabled = true;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "60"))
+	float NeckSleeveMaxChordCm = 15.0f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "2"))
+	float NeckSleeveOfsSeamCm = 0.25f;   // seam 排沿法線外推（蓋住切縫鋸齒）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "-2", ClampMax = "1"))
+	float NeckSleeveOfsEdgeCm = -0.15f;  // 最外排（負=潛入殼面下=無邊線）
+	bool bSleeveCreated = false;
+	bool bSleeveFlip = false;
 	// 膚色同步：身體 MID 參照＋上次同步的 SkinTone（變了整組 uniform 重抄）
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> BodyMidRef;

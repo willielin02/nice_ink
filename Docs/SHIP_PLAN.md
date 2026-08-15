@@ -945,3 +945,20 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   neck synced 同值（host 0.386/0.216/0.130、P2 0.397/0.188/0.150）。**教訓：跨元件
   「抄一次參數」的 MID＝晚到狀態的盲區；凡身體參數會後到（自訂臉/tone 先行），
   消費者要用「值比對每 tick 追」不用「初始化抄一次」。**
+- **2026-08-16 追記㉚＝短脖程序化「頸皮袖套」（user：蒙皮版因建模脖區細紋不好看→
+  「針對站立/作畫另設程序化」定案「做」）**：診斷=同一條轆轤首管子在 46cm 長管域
+  有形有光影、在站立 0.5~2cm 薄楔片域長不出任何形體＝扁亮貼片＋切環鋸齒近距全露。
+  設計=不再「兩切口之間臨時補一段」，改「切縫上下永遠貼一片乾淨頸皮」：
+  ①`sumo_neck_outer_rings.py`＝從切開版 master 沿 seam 平面法線逐邊外走 4 步、每側
+  4 圈外環（每步 ~1.2cm、與 seam 環逐點對應）→neck_outer_rings.json→
+  `sumo_neck_outer_header.py`→NeckOuterData.h（rest 位置/法線，UE component cm）；
+  ②NeckStretch 加 section 1「袖套」＝身片（4 外環＋seam 身環、同列 seam 頂點權重
+  蒙皮）＋頭片（seam 頭環重取樣＋4 外環按同 (m,M2,F) 重取樣、Head 剛體）——rest
+  真幾何（下顎垂肉/斜方肌輪廓由網格給）、真法線、同源膚色；沿法線外推 seam 側
+  +0.25→最外 −0.15（邊緣潛入殼面=無邊線）；弦長 > 15cm（甦醒升起）整片塌回不畫、
+  管子照舊；安座時管子 section 0 藏、袖套恆在（蓋住切縫本身的難看皮膚）。旋鈕
+  bNeckSleeveEnabled/NeckSleeveMaxChordCm/OfsSeam/OfsEdge。robo_neckwhole_shots
+  四姿×四方位近景自查：站立/抬頭/低頭側視＝連續皮膚無扁亮板無鋸齒；髮際線下
+  殘留淡淡雜紋（頭片最外圈潛入處）＝待 viewport 裁決是否再修。**教訓：程序化脖子
+  的「短域」缺陷不是參數、是資訊量——插值長不出形體；解法是把 rest 真幾何借進來
+  當形體，程序化只負責跟隨與縫合。**
