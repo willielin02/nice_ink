@@ -136,10 +136,9 @@ class Probe:
                 self.stage_t = time.monotonic()
                 return
             log("sweep(remote) pitch:vis:chord = " + " ".join(f"{p}:{v}:{c:.1f}" for p, v, c in self.sweep_rows))
-            # 08-15 雙版制：站立=縫合版（脖子=蒙皮本體）→伸縮脖必須恆隱藏（vis=0 全掃描）；
-            # 若哪格 vis=1＝切開版漏跑進站立/伸縮脖沒被停用＝迴歸
-            leaked = [p for p, v, c in self.sweep_rows if v == 1]
-            self.check("c6_neckstretch_off_on_whole", len(leaked) == 0, f"visible-at-pitch={leaked} (whole variant expected)")
+            # 08-15 終案：站立也用切開版＋程序化伸縮脖（user 定案）→|pitch|≥5 楔縫必開＝伸縮脖必現
+            bad = [p for p, v, c in self.sweep_rows if abs(p) >= 5 and v == 0]
+            self.check("c6_neck_visible_when_pitched", len(bad) == 0, f"hidden-at-pitch={bad}")
             self.pc().set_control_rotation(unreal.Rotator(0.0, 89.0, self.yaw0))
             self.advance("cap")
         elif s == "cap":
