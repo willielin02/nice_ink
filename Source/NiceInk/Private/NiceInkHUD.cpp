@@ -642,6 +642,15 @@ void ANiceInkHUD::DrawHUD()
 	BeginUiFrame(); // ESC 選單的按鈕判定
 	TickAudioCues(GS);
 
+	// 進房載入布（08-14）：臉同步齊全前蓋整屏（本人臉上行 ack＋manifest 席位全入簿；
+	// 8s 保底掀開）——搭配現身閘＝房內從頭到尾不存在頂著名冊臉的力士
+	if (MyChar && MyChar->IsJoinFaceSyncPending())
+	{
+		DrawRect(FLinearColor(0.01f, 0.01f, 0.015f, 1.0f), 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY);
+		DrawBottomHint(NiLoc::T(this, ENiLocKey::StatusJoining), NiHudColor::PaperDim);
+		return;
+	}
+
 	// 沉睡端：視覺全遮蔽——黑屏＋醉夢迷宮＋姿勢面板，其他 HUD 一概不畫
 	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
@@ -1002,8 +1011,23 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
 	if (bIsHost)
 	{
-		DrawBottomHint(NiLoc::TFmt(this, NumIn >= MinStart ? ENiLocKey::LobbyStart : ENiLocKey::LobbyWaiting, CountText),
-			NumIn >= MinStart ? NiHudColor::Amber : NiHudColor::PaperDim);
+		// 可開局＝人數夠＋全員臉齊（與 RequestStartMatch 同判準；Game 世界限定）
+		bool bFacesReady = true;
+		if (GetWorld()->WorldType == EWorldType::Game)
+		{
+			for (APlayerState* PS : GS->PlayerArray)
+			{
+				const ANiceInkCharacter* C = Cast<ANiceInkCharacter>(PS->GetPawn());
+				if (C && !C->bFaceReady)
+				{
+					bFacesReady = false;
+					break;
+				}
+			}
+		}
+		const bool bCanStart = NumIn >= MinStart && bFacesReady;
+		DrawBottomHint(NiLoc::TFmt(this, bCanStart ? ENiLocKey::LobbyStart : ENiLocKey::LobbyWaiting, CountText),
+			bCanStart ? NiHudColor::Amber : NiHudColor::PaperDim);
 	}
 	else
 	{

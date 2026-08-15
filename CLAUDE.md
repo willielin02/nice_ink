@@ -300,8 +300,9 @@ canvas 做不到毛玻璃半透明）**。
   ＋DrawFaceTok 自訂臉優先＋本人 Persona 直讀零延遲——**此前局內連本人都穿
   名冊臉（ApplyCustomAvatar 只有選單舞台在用）＝一併修好**；WorldType==Game
   才啟動=robo 零干擾；驗證=雙實例 log 四向對賬（server/client view×兩席）。
-  **待做只剩自訂臉雲端儲存**（跨裝置隨身；房內可見已閉環）＋blob 壓縮＋88s
-  背景烘焙 UX。
+  **待做只剩自訂臉雲端儲存**（跨裝置隨身；房內可見已閉環）＋88s 背景烘焙 UX；
+  blob 壓縮=08-14 NIF2 已了（JPEG q90+alpha PNG 分載、1.5MB→~400KB、tone 先行
+  搭 FaceBegin、快取 blob_nif2.bin；帳=SHIP_PLAN 追記⑲）。
   **08-10 首啟身分制（user 五條定案）**＝①強制上傳閘門（不上傳=不玩；
   08-12 起實裝形式=首啟導流頁、FaceGateHint 紅字制退役）②選單預設跳舞力士=作者本人臉
   （Content/AuthorFace 四工件 runtime 匯入、NonUFS staging；**永不成為玩家

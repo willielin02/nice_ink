@@ -420,6 +420,34 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "20"))
 	float GaitTorsoLeanDeg = 6.0f;    // 上身向行進方向前傾
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "90", ClampMax = "3600"))
+	float GaitDirSlewDegPerSec = 600.0f;
+
+	// 站立視野俯仰上身（08-15 user 定案：「抬頭低頭要反映在人偶頭部；左右禁止
+	//（穿膜）＝全身一起轉、頭身零相對位移」）：本人相機 pitch 上報 → 他端把
+	// Neck+Head 繞頸樞軸俯仰（yaw 恆 0）。站立自由視角限定（睡/鎖各自接管）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "1"))
+	float LookPitchHeadShare = 0.6f;   // 俯仰分攤：Head 佔比（其餘給 Neck）
+	// 08-15 user 定案：他端最多上下 12°、視野 0~89° 以指數曲線分配進這 12°
+	// （小角度反應快、大角度慢慢逼近上限）：head = Max × (1−e^(−k·|p|/89)) / (1−e^(−k))
+	// ——p=89 恰等於 Max；k 越大越早飽和（k→0 退化為線性）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "60"))
+	float LookPitchMaxDeg = 12.0f;     // 他端可見俯仰上限（上下對稱）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0.05", ClampMax = "8"))
+	float LookPitchCurveK = 2.5f;      // 指數曲線陡度（2.5：視野 30°≈7.7°、60°≈10.9°、89°=12°）
+	UPROPERTY(Replicated)
+	float LookPitchDeg = 0.0f;         // 上報值（30Hz 節流、變化 >0.5° 才送）
+	float RemoteLookPitchDeg = 0.0f;   // 他端平滑追趕值
+	float LookPitchLastReport = -1.0f;
+	float LookPitchReportedDeg = 0.0f;
+	UFUNCTION(Server, Unreliable)
+	void ServerReportLookPitch(float PitchDeg);
+	float CurrentLookPitchForPose(float DeltaSeconds);
+	void ApplyLookPitchToCS(const FReferenceSkeleton& Ref, TArray<FTransform>& CS, float DeltaSeconds);
+	void ApplyStandLookPitch(float DeltaSeconds); // 靜止站姿專用（gait 路徑走 ApplyLookPitchToCS）
+	bool bStandLookWritten = false;
+	bool bWasHiddenForPose = true;   // 隱形→現身邊緣偵測（現身瞬間強制重寫骨姿＝骨矩陣上傳） // 傾斜軸擺轉角速（前搖節奏旋鈕：180° 反轉≈0.3s；大=俐落、小=黏）
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Walk", meta = (ClampMin = "0", ClampMax = "25"))
 	float GaitArmSwingDeg = 7.0f;     // 手臂前後小擺（與同側腳反相）
 
@@ -827,20 +855,41 @@ public:
 	// LAN 與 EOS 同路（臉走房內 P2P 不走雲端）；PIE/robo（WorldType≠Game）不啟動。
 
 	UFUNCTION(Server, Reliable)
-	void ServerFaceHello(); // viewer 報到：server 補發所有已知臉（晚到者路）
+	void ServerFaceHello(bool bHasCustomFace); // viewer 報到：server 補發所有已知臉；無臉端（開發沙箱）＝即刻 FaceReady
 	UFUNCTION(Server, Reliable)
-	void ServerFaceBegin(int32 TotalBytes);
+	void ServerFaceBegin(int32 TotalBytes, FLinearColor Tone); // tone 先行（08-14）：膚色不等列車
 	UFUNCTION(Server, Reliable)
 	void ServerFaceChunk(int32 Offset, const TArray<uint8>& Bytes);
 	UFUNCTION(Server, Reliable)
 	void ServerFaceEnd(uint32 Crc);
 
 	UFUNCTION(Client, Reliable)
-	void ClientFaceBegin(int32 Seat, int32 TotalBytes);
+	void ClientFaceBegin(int32 Seat, int32 TotalBytes, FLinearColor Tone); // tone 先行（08-14）
 	UFUNCTION(Client, Reliable)
 	void ClientFaceChunk(int32 Seat, int32 Offset, const TArray<uint8>& Bytes);
 	UFUNCTION(Client, Reliable)
 	void ClientFaceEnd(int32 Seat, uint32 Crc);
+
+	// --- 進房載入閘（08-14；veil＝臉同步齊全前不掀）---
+	UFUNCTION(Client, Reliable)
+	void ClientFaceManifest(const TArray<int32>& Seats); // 報到當下 server 既有的臉清單＝veil 等待集
+	UFUNCTION(Client, Reliable)
+	void ClientFaceUpAck(); // 本人臉上行已被 server 收妥
+
+	// HUD 進房載入布判準：本人 client 在 Game 世界、臉同步未齊＝true（8s 保底掀開；
+	// host/PIE/robo 恆 false）。一次滿足即閂死＝永不中途復發
+	bool IsJoinFaceSyncPending();
+
+	// 臉齊現身閘（08-14 三修＝單一權威制）：bHidden 只有 server 寫——玩家 pawn
+	// spawn 即隱形，GameMode 等「當下所有觀看者都 ack 收到他的臉」才 FaceGateShowNow
+	// ＝任何端都不可能看到頂著名冊臉的力士（雙寫者競態根絕；晚到者自己的視角由
+	// veil 蓋住）。非玩家角色（頭像亭替身/選單舞者＝無 PlayerState）不閘。
+	bool bFaceReady = false; // server-only：開局臉齊保險/HUD 主機提示讀
+	bool bFaceNone = false;  // server-only：無 blob 可等（無臉端/失敗保底）＝即刻現身
+	void ServerSetFaceReady(bool bNoBlobFallback = false);
+	void FaceGateShowNow(); // server：全房都拿到他的臉了——現身（冪等）
+	UFUNCTION(Server, Reliable)
+	void ServerFaceGotSeat(int32 Seat); // 觀看者回報：席位 Seat 的臉已入本端登記簿
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitAccusation(int32 WorkId, int32 AccusedPlayerId);
@@ -1028,6 +1077,7 @@ private:
 
 	// --- 自訂臉房內分發內部狀態（2026-08-10）---
 	int32 AppliedShareFaceRev = 0;   // 已套用的登記簿臉版本（0=尚未）
+	int32 AppliedShareToneRev = 0;   // 已套用的提前 tone 版本（0=尚未；tone 先行制）
 	TArray<uint8> FaceUpBuf;         // server 端上行收件緩衝
 	int32 FaceUpExpected = -1;
 	int32 FaceUpReceived = 0;
@@ -1035,9 +1085,18 @@ private:
 	int32 FaceDownSeat = -1;
 	int32 FaceDownExpected = -1;
 	int32 FaceDownReceived = 0;
+	bool bGaitPhaseSeedPending = false; // 起步時按橫向速度選開步腳（08-15 修「往右先左傾」）
+
 	FTimerHandle FaceShareTimer;     // 開場輪詢：等佔有＋席位就緒
 	int32 FaceShareTicksLeft = 0;
 	bool bFaceShareStarted = false;
+	// 進房載入閘（owner client 本地狀態）
+	TArray<int32> JoinFaceWaitSeats; // manifest：要等的席位
+	bool bFaceManifestRecv = false;
+	bool bFaceUpAcked = false;
+	bool bJoinFaceSyncDone = false;  // 一次滿足即閂死
+	double JoinFaceSyncStartS = -1.0;
+	bool bFaceGateShown = false; // server：現身閘已放行（latch；host 本人/非玩家首 tick 即放）
 	TSharedPtr<TArray<uint8>> FaceUpSendBuf; // 上行節奏發送（防 reliable 緩衝溢位）
 	int32 FaceUpSendOff = 0;
 	FTimerHandle FaceUpSendTimer;

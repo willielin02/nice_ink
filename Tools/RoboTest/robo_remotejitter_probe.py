@@ -148,10 +148,13 @@ class Probe:
             lp = m2.get_editor_property("LeanPoint")
             d_cam = ((cam.x - lp.x) ** 2 + (cam.y - lp.y) ** 2 + (cam.z - lp.z) ** 2) ** 0.5
             # 承重下界=不得貼膚（bug=眼錨定格在皮膚 2~3cm）；上界寬鬆——直接畫制
-            # 剛臂+伸縮針下 60cm 級眼錨=合法幾何（directdraw 遠點伸針同域）
-            ok = 5.0 <= d_cam <= 90.0
+            # 剛臂+伸縮針下 60cm 級眼錨=合法幾何（directdraw 遠點伸針同域）。
+            # 08-14 上界 90→120：入鎖預設工具自 07-25 起=Stencil（07-31 凍結相機、
+            # 取景更遠）→本檢查在切 Liner 之前跑=量到 Stencil 相機，102.5cm=現行
+            # 合法幾何（stash 對照實驗定罪=與 07-26 老幾何的 90 上界過時，非迴歸）。
+            ok = 5.0 <= d_cam <= 120.0
             log(("PASS " if ok else "FAIL ") +
-                f"first-lock camera distance sane | dCamToPoint={d_cam:.1f}cm (expect 5~90)")
+                f"first-lock camera distance sane | dCamToPoint={d_cam:.1f}cm (expect 5~120)")
             m2.call_method("DebugRoboNeedle", (0,))  # Liner=刺青機（伸縮針受測）
             self.advance("baseline")
         elif s == "baseline":

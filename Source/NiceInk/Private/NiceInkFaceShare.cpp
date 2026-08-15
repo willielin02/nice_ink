@@ -2,14 +2,101 @@
 
 #include "Engine/Texture2D.h"
 #include "Engine/World.h"
+#include "IImageWrapper.h"
+#include "IImageWrapperModule.h"
 #include "ImageUtils.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Modules/ModuleManager.h"
 
 namespace
 {
-	constexpr uint32 FaceBlobMagic = 0x3146494E; // 'NIF1' little-endian
-	constexpr int32 FaceBlobMaxPart = 4 * 1024 * 1024; // 單張 png 瘋值上限
+	constexpr uint32 FaceBlobMagic = 0x3146494E;   // 'NIF1' little-endian（舊版：三段原始 PNG）
+	constexpr uint32 FaceBlobMagic2 = 0x3246494E;  // 'NIF2'（08-14 壓縮版：JPEG RGB＋alpha PNG 分載）
+	constexpr int32 FaceBlobMaxPart = 4 * 1024 * 1024; // 單段瘋值上限
+	constexpr int32 FaceJpegQuality = 90; // 實測 2048² 臉：640KB PNG→~120KB，質差不可感
+
+	// --- ImageWrapper 小工具（NIF2 打包/解包共用） ---
+
+	bool DecodeToBgra(const TArray<uint8>& FileBytes, TArray64<uint8>& OutBgra, int32& OutW, int32& OutH)
+	{
+		IImageWrapperModule& Mod = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		const EImageFormat Fmt = Mod.DetectImageFormat(FileBytes.GetData(), FileBytes.Num());
+		TSharedPtr<IImageWrapper> Wrap = Fmt != EImageFormat::Invalid ? Mod.CreateImageWrapper(Fmt) : nullptr;
+		if (!Wrap.IsValid() || !Wrap->SetCompressed(FileBytes.GetData(), FileBytes.Num()))
+		{
+			return false;
+		}
+		OutW = Wrap->GetWidth();
+		OutH = Wrap->GetHeight();
+		return Wrap->GetRaw(ERGBFormat::BGRA, 8, OutBgra);
+	}
+
+	bool DecodeToGray(const TArray<uint8>& FileBytes, TArray64<uint8>& OutGray, int32& OutW, int32& OutH)
+	{
+		IImageWrapperModule& Mod = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		const EImageFormat Fmt = Mod.DetectImageFormat(FileBytes.GetData(), FileBytes.Num());
+		TSharedPtr<IImageWrapper> Wrap = Fmt != EImageFormat::Invalid ? Mod.CreateImageWrapper(Fmt) : nullptr;
+		if (!Wrap.IsValid() || !Wrap->SetCompressed(FileBytes.GetData(), FileBytes.Num()))
+		{
+			return false;
+		}
+		OutW = Wrap->GetWidth();
+		OutH = Wrap->GetHeight();
+		return Wrap->GetRaw(ERGBFormat::Gray, 8, OutGray);
+	}
+
+	bool EncodeBgraPair(const TArray64<uint8>& Bgra, int32 W, int32 H,
+		TArray64<uint8>& OutJpeg, TArray64<uint8>& OutAlphaPng)
+	{
+		IImageWrapperModule& Mod = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		TSharedPtr<IImageWrapper> Jpeg = Mod.CreateImageWrapper(EImageFormat::JPEG);
+		if (!Jpeg.IsValid() || !Jpeg->SetRaw(Bgra.GetData(), Bgra.Num(), W, H, ERGBFormat::BGRA, 8))
+		{
+			return false;
+		}
+		OutJpeg = Jpeg->GetCompressed(FaceJpegQuality);
+
+		TArray64<uint8> Alpha;
+		Alpha.SetNumUninitialized(static_cast<int64>(W) * H);
+		for (int64 i = 0; i < Alpha.Num(); ++i)
+		{
+			Alpha[i] = Bgra[i * 4 + 3];
+		}
+		TSharedPtr<IImageWrapper> Png = Mod.CreateImageWrapper(EImageFormat::PNG);
+		if (!Png.IsValid() || !Png->SetRaw(Alpha.GetData(), Alpha.Num(), W, H, ERGBFormat::Gray, 8))
+		{
+			return false;
+		}
+		OutAlphaPng = Png->GetCompressed();
+		return OutJpeg.Num() > 0 && OutAlphaPng.Num() > 0;
+	}
+
+	UTexture2D* CreateFaceTexFromJpegAlpha(const TArray<uint8>& Jpeg, const TArray<uint8>& AlphaPng)
+	{
+		TArray64<uint8> Bgra, Gray;
+		int32 W = 0, H = 0, Wa = 0, Ha = 0;
+		if (!DecodeToBgra(Jpeg, Bgra, W, H) || !DecodeToGray(AlphaPng, Gray, Wa, Ha) ||
+			W != Wa || H != Ha || W <= 0 || H <= 0)
+		{
+			return nullptr;
+		}
+		for (int64 i = 0; i < Gray.Num(); ++i)
+		{
+			Bgra[i * 4 + 3] = Gray[i];
+		}
+		UTexture2D* Tex = UTexture2D::CreateTransient(W, H, PF_B8G8R8A8);
+		if (!Tex)
+		{
+			return nullptr;
+		}
+		void* Mip = Tex->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+		FMemory::Memcpy(Mip, Bgra.GetData(), Bgra.Num());
+		Tex->GetPlatformData()->Mips[0].BulkData.Unlock();
+		Tex->SRGB = true;
+		Tex->UpdateResource();
+		return Tex;
+	}
 
 	void AppendInt(TArray<uint8>& Out, uint32 V)
 	{
@@ -49,6 +136,19 @@ UNiceInkFaceShare* UNiceInkFaceShare::Get(const UObject* WorldContext)
 
 bool UNiceInkFaceShare::BuildBlobFromDir(const FString& Dir, TArray<uint8>& OutBlob)
 {
+	// 打包快取：library 資料夾按時間戳不可變＝算一次用到底（省每次進房 ~300ms 轉碼）
+	const FString CachePath = Dir / TEXT("blob_nif2.bin");
+	if (FFileHelper::LoadFileToArray(OutBlob, *CachePath) && OutBlob.Num() > 32)
+	{
+		uint32 Magic = 0;
+		FMemory::Memcpy(&Magic, OutBlob.GetData(), sizeof(Magic));
+		if (Magic == FaceBlobMagic2)
+		{
+			return true;
+		}
+	}
+	OutBlob.Reset();
+
 	TArray<uint8> Open, Closed, Mask;
 	if (!FFileHelper::LoadFileToArray(Open, *(Dir / TEXT("face_open.png"))) ||
 		!FFileHelper::LoadFileToArray(Closed, *(Dir / TEXT("face_closed.png"))) ||
@@ -81,6 +181,41 @@ bool UNiceInkFaceShare::BuildBlobFromDir(const FString& Dir, TArray<uint8>& OutB
 		}
 	}
 
+	// NIF2 轉碼：RGB→JPEG（q90）、alpha→無損灰階 PNG；失敗退回 NIF1 原始 PNG 打包
+	TArray64<uint8> OpenBgra, ClosedBgra;
+	int32 Wo = 0, Ho = 0, Wc = 0, Hc = 0;
+	TArray64<uint8> OpenJpeg, OpenA, ClosedJpeg, ClosedA;
+	const bool bNif2 =
+		DecodeToBgra(Open, OpenBgra, Wo, Ho) && DecodeToBgra(Closed, ClosedBgra, Wc, Hc) &&
+		EncodeBgraPair(OpenBgra, Wo, Ho, OpenJpeg, OpenA) &&
+		EncodeBgraPair(ClosedBgra, Wc, Hc, ClosedJpeg, ClosedA) &&
+		OpenJpeg.Num() < FaceBlobMaxPart && OpenA.Num() < FaceBlobMaxPart &&
+		ClosedJpeg.Num() < FaceBlobMaxPart && ClosedA.Num() < FaceBlobMaxPart;
+
+	if (bNif2)
+	{
+		OutBlob.Reset(40 + static_cast<int32>(OpenJpeg.Num() + OpenA.Num() + ClosedJpeg.Num() + ClosedA.Num()) + Mask.Num());
+		AppendInt(OutBlob, FaceBlobMagic2);
+		AppendFloat(OutBlob, Tone.R);
+		AppendFloat(OutBlob, Tone.G);
+		AppendFloat(OutBlob, Tone.B);
+		AppendInt(OutBlob, static_cast<uint32>(OpenJpeg.Num()));
+		AppendInt(OutBlob, static_cast<uint32>(OpenA.Num()));
+		AppendInt(OutBlob, static_cast<uint32>(ClosedJpeg.Num()));
+		AppendInt(OutBlob, static_cast<uint32>(ClosedA.Num()));
+		AppendInt(OutBlob, static_cast<uint32>(Mask.Num()));
+		OutBlob.Append(OpenJpeg.GetData(), static_cast<int32>(OpenJpeg.Num()));
+		OutBlob.Append(OpenA.GetData(), static_cast<int32>(OpenA.Num()));
+		OutBlob.Append(ClosedJpeg.GetData(), static_cast<int32>(ClosedJpeg.Num()));
+		OutBlob.Append(ClosedA.GetData(), static_cast<int32>(ClosedA.Num()));
+		OutBlob.Append(Mask);
+		FFileHelper::SaveArrayToFile(OutBlob, *CachePath);
+		UE_LOG(LogTemp, Log, TEXT("NiFaceShare: NIF2 blob built (%d bytes, was %d raw png)"),
+			OutBlob.Num(), 32 + Open.Num() + Closed.Num() + Mask.Num());
+		return true;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("NiFaceShare: NIF2 encode failed - falling back to NIF1 raw png blob"));
 	OutBlob.Reset(32 + Open.Num() + Closed.Num() + Mask.Num());
 	AppendInt(OutBlob, FaceBlobMagic);
 	AppendFloat(OutBlob, Tone.R);
@@ -95,35 +230,98 @@ bool UNiceInkFaceShare::BuildBlobFromDir(const FString& Dir, TArray<uint8>& OutB
 	return true;
 }
 
-bool UNiceInkFaceShare::StoreBlob(int32 Seat, const TArray<uint8>& Blob)
+bool UNiceInkFaceShare::PeekTone(const TArray<uint8>& Blob, FLinearColor& OutTone)
 {
 	int32 Cursor = 0;
-	uint32 Magic = 0, LenOpen = 0, LenClosed = 0, LenMask = 0;
+	uint32 Magic = 0;
 	FLinearColor Tone(0.4f, 0.22f, 0.13f);
-	if (!ReadInt(Blob, Cursor, Magic) || Magic != FaceBlobMagic ||
+	if (!ReadInt(Blob, Cursor, Magic) || (Magic != FaceBlobMagic && Magic != FaceBlobMagic2) ||
 		!ReadFloat(Blob, Cursor, Tone.R) || !ReadFloat(Blob, Cursor, Tone.G) ||
-		!ReadFloat(Blob, Cursor, Tone.B) ||
-		!ReadInt(Blob, Cursor, LenOpen) || !ReadInt(Blob, Cursor, LenClosed) ||
-		!ReadInt(Blob, Cursor, LenMask))
+		!ReadFloat(Blob, Cursor, Tone.B))
 	{
 		return false;
 	}
-	if (LenOpen == 0 || LenOpen > FaceBlobMaxPart || LenClosed == 0 || LenClosed > FaceBlobMaxPart ||
-		LenMask == 0 || LenMask > FaceBlobMaxPart ||
-		Cursor + static_cast<int32>(LenOpen + LenClosed + LenMask) != Blob.Num())
+	OutTone = Tone;
+	return true;
+}
+
+bool UNiceInkFaceShare::StoreBlob(int32 Seat, const TArray<uint8>& Blob)
+{
+	int32 Cursor = 0;
+	uint32 Magic = 0;
+	FLinearColor Tone(0.4f, 0.22f, 0.13f);
+	if (!ReadInt(Blob, Cursor, Magic) || (Magic != FaceBlobMagic && Magic != FaceBlobMagic2) ||
+		!ReadFloat(Blob, Cursor, Tone.R) || !ReadFloat(Blob, Cursor, Tone.G) ||
+		!ReadFloat(Blob, Cursor, Tone.B))
 	{
 		return false;
 	}
 
-	auto ImportPart = [&Blob, &Cursor](uint32 Len) -> UTexture2D*
+	auto SlicePart = [&Blob, &Cursor](uint32 Len) -> TArray<uint8>
 	{
 		TArray<uint8> Bytes(Blob.GetData() + Cursor, static_cast<int32>(Len));
 		Cursor += Len;
-		return FImageUtils::ImportBufferAsTexture2D(Bytes);
+		return Bytes;
 	};
-	UTexture2D* Open = ImportPart(LenOpen);
-	UTexture2D* Closed = ImportPart(LenClosed);
-	UTexture2D* Mask = ImportPart(LenMask);
+
+	UTexture2D* Open = nullptr;
+	UTexture2D* Closed = nullptr;
+	UTexture2D* Mask = nullptr;
+	if (Magic == FaceBlobMagic2)
+	{
+		// NIF2：JPEG RGB＋alpha 灰 PNG 分載合體；眼罩原始 PNG
+		uint32 LenOpenRgb = 0, LenOpenA = 0, LenClosedRgb = 0, LenClosedA = 0, LenMask = 0;
+		if (!ReadInt(Blob, Cursor, LenOpenRgb) || !ReadInt(Blob, Cursor, LenOpenA) ||
+			!ReadInt(Blob, Cursor, LenClosedRgb) || !ReadInt(Blob, Cursor, LenClosedA) ||
+			!ReadInt(Blob, Cursor, LenMask))
+		{
+			return false;
+		}
+		const uint32 Lens[5] = { LenOpenRgb, LenOpenA, LenClosedRgb, LenClosedA, LenMask };
+		uint64 Sum = 0;
+		for (uint32 L : Lens)
+		{
+			if (L == 0 || L > static_cast<uint32>(FaceBlobMaxPart))
+			{
+				return false;
+			}
+			Sum += L;
+		}
+		if (static_cast<uint64>(Cursor) + Sum != static_cast<uint64>(Blob.Num()))
+		{
+			return false;
+		}
+		const TArray<uint8> OpenRgb = SlicePart(LenOpenRgb);
+		const TArray<uint8> OpenA = SlicePart(LenOpenA);
+		const TArray<uint8> ClosedRgb = SlicePart(LenClosedRgb);
+		const TArray<uint8> ClosedA = SlicePart(LenClosedA);
+		TArray<uint8> MaskPng = SlicePart(LenMask);
+		Open = CreateFaceTexFromJpegAlpha(OpenRgb, OpenA);
+		Closed = CreateFaceTexFromJpegAlpha(ClosedRgb, ClosedA);
+		Mask = FImageUtils::ImportBufferAsTexture2D(MaskPng);
+	}
+	else
+	{
+		// NIF1（舊版相容）：三段原始 PNG
+		uint32 LenOpen = 0, LenClosed = 0, LenMask = 0;
+		if (!ReadInt(Blob, Cursor, LenOpen) || !ReadInt(Blob, Cursor, LenClosed) ||
+			!ReadInt(Blob, Cursor, LenMask))
+		{
+			return false;
+		}
+		if (LenOpen == 0 || LenOpen > FaceBlobMaxPart || LenClosed == 0 || LenClosed > FaceBlobMaxPart ||
+			LenMask == 0 || LenMask > FaceBlobMaxPart ||
+			Cursor + static_cast<int32>(LenOpen + LenClosed + LenMask) != Blob.Num())
+		{
+			return false;
+		}
+		TArray<uint8> OpenPng = SlicePart(LenOpen);
+		TArray<uint8> ClosedPng = SlicePart(LenClosed);
+		TArray<uint8> MaskPng = SlicePart(LenMask);
+		Open = FImageUtils::ImportBufferAsTexture2D(OpenPng);
+		Closed = FImageUtils::ImportBufferAsTexture2D(ClosedPng);
+		Mask = FImageUtils::ImportBufferAsTexture2D(MaskPng);
+	}
 	if (!Open || !Closed || !Mask)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("NiFaceShare: blob decode failed (seat %d)"), Seat);
@@ -151,6 +349,24 @@ void UNiceInkFaceShare::StoreTextures(int32 Seat, UTexture2D* Open, UTexture2D* 
 	E.Mask = Mask;
 	E.Tone = Tone;
 	++E.Revision;
+}
+
+void UNiceInkFaceShare::StoreToneEarly(int32 Seat, FLinearColor Tone)
+{
+	if (Seat < 0)
+	{
+		return;
+	}
+	FNiFaceEntry& E = Entries.FindOrAdd(Seat);
+	E.Tone = Tone;
+	++E.ToneRevision;
+	UE_LOG(LogTemp, Log, TEXT("NiFaceShare: tone-early stored (seat %d)"), Seat);
+}
+
+int32 UNiceInkFaceShare::GetToneRevision(int32 Seat) const
+{
+	const FNiFaceEntry* E = Entries.Find(Seat);
+	return E ? E->ToneRevision : 0;
 }
 
 int32 UNiceInkFaceShare::GetRevision(int32 Seat) const

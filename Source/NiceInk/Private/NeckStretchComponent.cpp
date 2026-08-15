@@ -227,6 +227,11 @@ void UNeckStretchComponent::InitFromSource(UPoseableMeshComponent* InSource, UMa
 	bReady = true;
 }
 
+void UNeckStretchComponent::ForceRebuild()
+{
+	LastHeadCenter = FVector(FLT_MAX);
+}
+
 void UNeckStretchComponent::UpdateNeck()
 {
 	if (!bReady || !Source)

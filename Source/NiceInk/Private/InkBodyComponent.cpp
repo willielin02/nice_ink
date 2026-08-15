@@ -57,6 +57,15 @@ void UInkBodyComponent::ApplyCustomAvatar(UTexture2D* Open, UTexture2D* Closed, 
 	}
 }
 
+void UInkBodyComponent::ApplySkinToneOnly(FLinearColor Tone)
+{
+	SkinTone = Tone;
+	if (DynamicBodyMaterial)
+	{
+		DynamicBodyMaterial->SetVectorParameterValue(SkinToneParam, SkinTone);
+	}
+}
+
 void UInkBodyComponent::BindCanvas(UInkCanvasComponent* Canvas)
 {
 	UMaterialInterface* BaseMaterial = BodyMaterial ? BodyMaterial.Get() : GetMaterial(0);

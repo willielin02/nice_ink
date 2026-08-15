@@ -54,7 +54,7 @@ public:
 
 	// 弦長低於此值＝頭安座＝整件隱藏（rest 收合）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0.1", ClampMax = "10"))
-	float NeckHideChordCm = 1.5f;
+	float NeckHideChordCm = 0.15f; // 08-15 1.5→0.15：站立俯仰 ±5~9° 時 chord 0.3~0.5＋楔縫已張卻被判安座＝穿膜（probe 掃描實錘）；真安座 chord 逐位=0.0
 
 	// 沿長度的環數（含兩端排）。20＝深彎每行 ~5° 環面轉角（曲率取樣，成本可忽略）
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Neck", meta = (ClampMin = "6", ClampMax = "32"))
@@ -63,6 +63,7 @@ public:
 	// robo 探針：管幾何現場數字（chord/環中心世界座標/bounds）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Neck")
 	FString GetDebugSummary() const;
+	void ForceRebuild(); // 清跳過快取＝下一 UpdateNeck 必重建（actor 現身邊緣用）
 
 	// robo 探針：傾印當前管幾何（CSV：row,col,pos,normal）——平滑度調查用
 	// （非 const：引擎 GetProcMeshSection 只有非 const 版）

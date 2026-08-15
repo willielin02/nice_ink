@@ -142,6 +142,10 @@ ANiceInkCharacter::ANiceInkCharacter()
 	bReplicates = true;
 	bUseControllerRotationYaw = true;
 
+	// 08-14 同步卡頓根治③：FRepMovement 旋轉量化預設 8-bit/軸（1.4° 階梯）——
+	// 滑鼠轉身在他端跳格。提到 16-bit（0.005°）；頻寬代價每包數 byte。
+	GetReplicatedMovement_Mutable().RotationQuantizationLevel = ERotatorQuantization::ShortComponents;
+
 	GetCapsuleComponent()->SetCapsuleSize(42.0f, 92.0f);
 	// 準星描畫要打到身體網格，不是膠囊
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
@@ -149,8 +153,18 @@ ANiceInkCharacter::ANiceInkCharacter()
 	GetCharacterMovement()->MaxWalkSpeed = 250.0f;
 	GetCharacterMovement()->BrakingDecelerationWalking = 2048.0f;
 
+	// 08-14 同步卡頓根治②：CMC 的網路平滑（client 看 simulated proxy＋listen
+	// server 看 client 的 pawn）只把平滑偏移寫在 ACharacter::Mesh 的相對變換上；
+	// 本作可見身體是自訂元件、原掛 capsule 下＝每個網路修正原封硬跳在可見網格上
+	//（乾淨 LAN 60Hz 看不見；EOS P2P 抖動/頻寬飽和把包距拉大＝可見瞬移，jiggle
+	// 彈簧還把每次 snap 當激勵）。把沒資產的 Mesh 釘在 capsule 原點當平滑載體、
+	// 可見身體改掛它下面＝免費繼承引擎 Exponential 平滑；本人端與 server 端偏移
+	// 恆零＝畫墨/UV 解算/伺服器判定讀到的位置完全不變。
+	GetMesh()->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+
 	Body = CreateDefaultSubobject<UInkBodyComponent>(TEXT("Body"));
-	Body->SetupAttachment(GetCapsuleComponent());
+	Body->SetupAttachment(GetMesh());
 	Body->SetRelativeLocation(BodyStandRelLoc);
 	Body->SetRelativeRotation(BodyStandRelRot);
 	Body->SetOwnerNoSee(true); // 第一人稱看不見自己身體的全貌（SPEC 視角規則）
@@ -176,7 +190,7 @@ ANiceInkCharacter::ANiceInkCharacter()
 	// 彎腰用可擺骨身體：鎖定時亮、平時藏。只擋噴射（PhysicsBody），
 	// 不擋 Visibility——別人的游標射線要穿過你打到受害者皮膚。
 	BowBody = CreateDefaultSubobject<UPoseableMeshComponent>(TEXT("BowBody"));
-	BowBody->SetupAttachment(GetCapsuleComponent());
+	BowBody->SetupAttachment(GetMesh()); // 同 Body：掛平滑載體（08-14 根治②）
 	BowBody->SetRelativeLocation(BodyStandRelLoc);
 	BowBody->SetRelativeRotation(BodyStandRelRot);
 	BowBody->SetOwnerNoSee(true);
@@ -314,9 +328,9 @@ void ANiceInkCharacter::BeginPlay()
 	// 本人臉入自己登記簿＋上傳 server；遠端 client 另外報到領全房已知臉。
 	if (GetWorld() && GetWorld()->WorldType == EWorldType::Game)
 	{
-		FaceShareTicksLeft = 30; // 0.5s × 30 ＝ 15s 內等到佔有
+		FaceShareTicksLeft = 150; // 0.1s × 150 ＝ 15s 內等到佔有（08-14 輪詢 0.5→0.1s＝進房握手提速）
 		GetWorldTimerManager().SetTimer(FaceShareTimer, this,
-			&ANiceInkCharacter::MaybeStartFaceShare, 0.5f, /*bLoop=*/true);
+			&ANiceInkCharacter::MaybeStartFaceShare, 0.1f, /*bLoop=*/true);
 	}
 
 	// 實體筆外觀：真資產（刺青機/麥克筆）＝實尺寸（scale 1）；圓柱退路＝縮成 1.2cm 粗 15cm 長。
@@ -425,6 +439,7 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawTargetRepW, COND_SkipOwner);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, bDrawTargetRepValid, COND_SkipOwner);
 	DOREPLIFETIME(ANiceInkCharacter, bBodyFaceDown);
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, LookPitchDeg, COND_SkipOwner);
 }
 
 void ANiceInkCharacter::Tick(float DeltaSeconds)
@@ -435,6 +450,18 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	const bool bLocal = PC && IsLocallyControlled();
+
+	// 08-14 根治②補丁：本人端關掉 CMC 網路平滑——平滑載體（GetMesh）只服務
+	// 「看別人」（simulated proxy／listen server 看 client）。本人的 client 修正
+	// 若也被攤 100ms，入鎖瞬間讀骨會拿到半路位置＝凍結相機錨污染
+	//（robo_remotejitter first-lock dCamToPoint 102.5cm 實錘）。關掉＝本人視覺
+	// 回到 capsule 硬跳＝改制前的既有行為原樣（他端平滑不受影響）。
+	if (bLocal && GetCharacterMovement() &&
+		GetCharacterMovement()->NetworkSmoothingMode != ENetworkSmoothingMode::Disabled)
+	{
+		GetCharacterMovement()->NetworkSmoothingMode = ENetworkSmoothingMode::Disabled;
+		GetMesh()->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	}
 
 	if (bLocal)
 	{
@@ -460,6 +487,31 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 		{
 			PollSleepHead(PC, DeltaSeconds); // 視線輸入先於替身更新＝相機零延遲
 		}
+	}
+
+	// 臉齊現身閘（08-14）：Game 世界裡臉還沒到齊的力士對旁人整體隱形——
+	// 房內從頭到尾不存在頂著名冊臉的力士（SPEC #52 身分載體閉環）。
+	// server 端裁決（bHidden 複製全房）；client 端對 simulated proxy 補強（複製時序保底）；
+	// owner 端不干預（自己第一人稱本來就 OwnerNoSee、veil 蓋著）。
+	// 臉齊現身閘（08-14 三修＝單一權威）：只有 server 動 bHidden——真玩家 pawn
+	// spawn 即隱形、GameMode 等全房 ack 才 FaceGateShowNow。無 PlayerState（頭像亭
+	// 替身/選單舞者）不閘；host 本人首 tick 即放行。client 端零介入＝競態根絕。
+	if (HasAuthority() && GetWorld()->WorldType == EWorldType::Game && !bFaceGateShown)
+	{
+		if (GetPlayerState())
+		{
+			if (IsLocallyControlled())
+			{
+				FaceGateShowNow(); // listen 主機本人：臉走本地零延遲路
+			}
+			else if (!IsHidden())
+			{
+				SetActorHiddenInGame(true);
+				UE_LOG(LogTemp, Log, TEXT("NiFaceShare: gate hide pid=%d"),
+					GetPlayerState<APlayerState>()->GetPlayerId());
+			}
+		}
+		// PlayerState 未到（佔有中）＝先不動，下一 tick 再看
 	}
 
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
@@ -953,12 +1005,20 @@ void ANiceInkCharacter::EnsureAvatarApplied()
 		Body->SetEyesClosed(bAsleep);
 		AppliedAvatarIndex = PS->AvatarIndex;
 		AppliedShareFaceRev = 0; // 名冊重套會蓋臉——強制自訂臉重疊
+		AppliedShareToneRev = 0; // tone 先行同理（名冊膚色會蓋掉提前 tone）
 	}
 
 	// 房內分發自訂臉（2026-08-10）：登記簿有這席的臉且版本變了＝蓋上名冊臉。
 	// 每 tick 輪詢（map find＋int 比對＝廉價），臉晚到/換臉都自然收斂
 	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
 	{
+		// tone 先行（08-14）：FaceBegin 帶到的膚色先上身——臉貼圖還要 ~1 秒列車
+		const int32 ToneRev = Share->GetToneRevision(PS->SeatIndex);
+		if (ToneRev > 0 && ToneRev != AppliedShareToneRev)
+		{
+			Body->ApplySkinToneOnly(Share->GetTone(PS->SeatIndex));
+			AppliedShareToneRev = ToneRev;
+		}
 		const int32 Rev = Share->GetRevision(PS->SeatIndex);
 		if (Rev > 0 && Rev != AppliedShareFaceRev)
 		{
@@ -1080,6 +1140,29 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 
 	CameraPitch = Ctrl.Pitch;
 	FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+
+	// 站立視野俯仰上報（08-15）：他端據此擺 Neck+Head 俯仰（左右不上報＝全身跟
+	// 控制器 yaw、頭身零相對位移=user 定案）；30Hz 節流＋變化 >0.5° 才送
+	const float Now = GetWorld()->GetTimeSeconds();
+	if (Now - LookPitchLastReport >= 1.0f / 30.0f &&
+		FMath::Abs(CameraPitch - LookPitchReportedDeg) > 0.5f)
+	{
+		LookPitchLastReport = Now;
+		LookPitchReportedDeg = CameraPitch;
+		if (HasAuthority())
+		{
+			LookPitchDeg = CameraPitch; // listen 主機本人：直寫複製值
+		}
+		else
+		{
+			ServerReportLookPitch(CameraPitch);
+		}
+	}
+}
+
+void ANiceInkCharacter::ServerReportLookPitch_Implementation(float PitchDeg)
+{
+	LookPitchDeg = FMath::Clamp(PitchDeg, -89.0f, 89.0f);
 }
 
 void ANiceInkCharacter::PollMove(APlayerController* PC)
@@ -3496,7 +3579,9 @@ void ANiceInkCharacter::MaybeStartFaceShare()
 
 	if (HasAuthority())
 	{
-		// listen 主機本人：blob 不過網——直接進 GameMode 集散地＋廣播
+		// listen 主機本人：blob 不過網、顯示走本地零延遲路——現身閘即刻 ready；
+		// blob 打包失敗/無臉＝標 bFaceNone（觀看端不空等、名冊臉誠實降級）
+		bool bBlobShared = false;
 		if (Persona->HasCustomFace())
 		{
 			TArray<uint8> Blob;
@@ -3504,15 +3589,25 @@ void ANiceInkCharacter::MaybeStartFaceShare()
 			{
 				if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
 				{
-					GM->OnFaceBlobReceived(this, Blob);
+					GM->OnFaceBlobReceived(this, Blob); // 內含 ServerSetFaceReady()
+					bBlobShared = true;
 				}
 			}
+		}
+		if (!bBlobShared)
+		{
+			ServerSetFaceReady(/*bNoBlobFallback=*/true);
 		}
 		return;
 	}
 
-	// 遠端客戶端：報到（server 補發所有已知臉）＋節奏上傳自己的臉
-	ServerFaceHello();
+	// 遠端客戶端：報到（server 補發所有已知臉＋回 manifest）＋節奏上傳自己的臉；
+	// 無臉端（開發沙箱）報到即視同上行完成（veil/現身閘不空等）
+	ServerFaceHello(Persona->HasCustomFace());
+	if (!Persona->HasCustomFace())
+	{
+		bFaceUpAcked = true;
+	}
 	if (Persona->HasCustomFace())
 	{
 		TSharedPtr<TArray<uint8>> Blob = MakeShared<TArray<uint8>>();
@@ -3521,9 +3616,11 @@ void ANiceInkCharacter::MaybeStartFaceShare()
 		{
 			FaceUpSendBuf = Blob;
 			FaceUpSendOff = 0;
-			ServerFaceBegin(Blob->Num());
+			FLinearColor Tone(0.4f, 0.22f, 0.13f);
+			UNiceInkFaceShare::PeekTone(*Blob, Tone);
+			ServerFaceBegin(Blob->Num(), Tone);
 			GetWorldTimerManager().SetTimer(FaceUpSendTimer, this,
-				&ANiceInkCharacter::TickFaceUpload, 0.1f, /*bLoop=*/true);
+				&ANiceInkCharacter::TickFaceUpload, 0.025f, /*bLoop=*/true);
 		}
 	}
 }
@@ -3536,7 +3633,11 @@ void ANiceInkCharacter::TickFaceUpload()
 		return;
 	}
 	const TArray<uint8>& B = *FaceUpSendBuf;
-	int32 Budget = 8; // 8×16KB / 0.1s ≈ 1.3MB/s——一張臉 ~1 秒送完、不撐爆 reliable 緩衝
+	// 08-14 卡頓根治①＋二修：節奏=1×16KB/0.025s≈640KB/s「抹平」——頻寬帳逐幀記，
+	// 單 tick 爆發（舊 4×16KB）會把該連線打進飽和數幀、bFaceReady 等小屬性被餓
+	//（現身旗標晚 2.3s 實錘）。單塊 16KB＜每幀預算（帽 2MB/s÷60fps=33KB）＝
+	// 任何幀都不飽和；blob ~400KB 仍 0.7 秒送完。
+	int32 Budget = 1;
 	while (Budget-- > 0 && FaceUpSendOff < B.Num())
 	{
 		TArray<uint8> Chunk(B.GetData() + FaceUpSendOff, FMath::Min(PersonaChunkSize, B.Num() - FaceUpSendOff));
@@ -3552,15 +3653,117 @@ void ANiceInkCharacter::TickFaceUpload()
 	}
 }
 
-void ANiceInkCharacter::ServerFaceHello_Implementation()
+void ANiceInkCharacter::ServerFaceHello_Implementation(bool bHasCustomFace)
 {
+	if (!bHasCustomFace)
+	{
+		ServerSetFaceReady(/*bNoBlobFallback=*/true); // 無臉端（開發沙箱）：即刻現身走名冊臉
+	}
 	if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
 	{
 		GM->RegisterFaceViewer(this);
 	}
 }
 
-void ANiceInkCharacter::ServerFaceBegin_Implementation(int32 TotalBytes)
+void ANiceInkCharacter::ServerSetFaceReady(bool bNoBlobFallback)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (bNoBlobFallback && !bFaceReady)
+	{
+		bFaceNone = true; // 沒有 blob 可等（無臉端/上傳失敗）：名冊臉＝誠實降級
+		FaceGateShowNow();
+	}
+	bFaceReady = true;
+}
+
+void ANiceInkCharacter::FaceGateShowNow()
+{
+	if (!HasAuthority() || bFaceGateShown)
+	{
+		return;
+	}
+	bFaceGateShown = true;
+	if (IsHidden())
+	{
+		SetActorHiddenInGame(false);
+		UE_LOG(LogTemp, Log, TEXT("NiFaceShare: gate show pid=%d"),
+			GetPlayerState() ? GetPlayerState<APlayerState>()->GetPlayerId() : -1);
+	}
+}
+
+void ANiceInkCharacter::ServerFaceGotSeat_Implementation(int32 Seat)
+{
+	if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+	{
+		GM->OnViewerGotFace(this, Seat);
+	}
+}
+
+void ANiceInkCharacter::ClientFaceManifest_Implementation(const TArray<int32>& Seats)
+{
+	JoinFaceWaitSeats = Seats;
+	bFaceManifestRecv = true;
+}
+
+void ANiceInkCharacter::ClientFaceUpAck_Implementation()
+{
+	bFaceUpAcked = true;
+}
+
+bool ANiceInkCharacter::IsJoinFaceSyncPending()
+{
+	if (bJoinFaceSyncDone)
+	{
+		return false;
+	}
+	UWorld* World = GetWorld();
+	// veil 只服務 Game 世界的遠端 client 本人；host 本人臉零延遲、PIE/robo 不啟動。
+	// 閂死只准掛在「恆真」條件上——IsLocallyControlled 在剛進世界時 Controller
+	// 複製晚一兩幀＝瞬態假，上閂=veil 永不出現（首輪 E2E 實錘）
+	if (!World || World->WorldType != EWorldType::Game || HasAuthority())
+	{
+		bJoinFaceSyncDone = true;
+		return false;
+	}
+	if (!IsLocallyControlled())
+	{
+		return false; // 佔有複製未到：不蓋布也不判定，下一幀再看
+	}
+	const double Now = World->GetTimeSeconds();
+	if (JoinFaceSyncStartS < 0.0)
+	{
+		JoinFaceSyncStartS = Now;
+	}
+	bool bReady = bFaceManifestRecv && bFaceUpAcked;
+	if (bReady)
+	{
+		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+		{
+			for (int32 Seat : JoinFaceWaitSeats)
+			{
+				if (Share->GetRevision(Seat) <= 0)
+				{
+					bReady = false;
+					break;
+				}
+			}
+		}
+	}
+	// 8s 保底掀開＝傳輸失敗不卡死（誠實降級：名冊臉墊檔、晚到的臉照舊輪詢蓋上）
+	if (bReady || Now - JoinFaceSyncStartS > 8.0)
+	{
+		bJoinFaceSyncDone = true;
+		UE_LOG(LogTemp, Log, TEXT("NiFaceShare: join veil lifted (%s, %.2fs, waited %d faces)"),
+			bReady ? TEXT("ready") : TEXT("timeout"), Now - JoinFaceSyncStartS, JoinFaceWaitSeats.Num());
+		return false;
+	}
+	return true;
+}
+
+void ANiceInkCharacter::ServerFaceBegin_Implementation(int32 TotalBytes, FLinearColor Tone)
 {
 	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
 	{
@@ -3570,6 +3773,12 @@ void ANiceInkCharacter::ServerFaceBegin_Implementation(int32 TotalBytes)
 	FaceUpExpected = TotalBytes;
 	FaceUpReceived = 0;
 	FaceUpBuf.SetNumZeroed(TotalBytes);
+	// tone 先行：server 端（=listen 主機畫面）膚色即刻上身，臉貼圖隨列車後到
+	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this); Share && PS)
+	{
+		Share->StoreToneEarly(PS->SeatIndex, Tone);
+	}
 }
 
 void ANiceInkCharacter::ServerFaceChunk_Implementation(int32 Offset, const TArray<uint8>& Bytes)
@@ -3592,6 +3801,7 @@ void ANiceInkCharacter::ServerFaceEnd_Implementation(uint32 Crc)
 		{
 			GM->OnFaceBlobReceived(this, FaceUpBuf);
 		}
+		ClientFaceUpAck(); // veil 判準之一：本人臉已被 server 收妥
 	}
 	else
 	{
@@ -3603,7 +3813,7 @@ void ANiceInkCharacter::ServerFaceEnd_Implementation(uint32 Crc)
 	FaceUpReceived = 0;
 }
 
-void ANiceInkCharacter::ClientFaceBegin_Implementation(int32 Seat, int32 TotalBytes)
+void ANiceInkCharacter::ClientFaceBegin_Implementation(int32 Seat, int32 TotalBytes, FLinearColor Tone)
 {
 	if (Seat < 0 || TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
 	{
@@ -3615,6 +3825,11 @@ void ANiceInkCharacter::ClientFaceBegin_Implementation(int32 Seat, int32 TotalBy
 	FaceDownExpected = TotalBytes;
 	FaceDownReceived = 0;
 	FaceDownBuf.SetNumZeroed(TotalBytes);
+	// tone 先行：該席膚色即刻入簿（EnsureAvatarApplied 輪詢套用），臉貼圖隨後
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+	{
+		Share->StoreToneEarly(Seat, Tone);
+	}
 }
 
 void ANiceInkCharacter::ClientFaceChunk_Implementation(int32 Seat, int32 Offset, const TArray<uint8>& Bytes)
@@ -3637,7 +3852,10 @@ void ANiceInkCharacter::ClientFaceEnd_Implementation(int32 Seat, uint32 Crc)
 	{
 		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
 		{
-			Share->StoreBlob(Seat, FaceDownBuf);
+			if (Share->StoreBlob(Seat, FaceDownBuf))
+			{
+				ServerFaceGotSeat(Seat); // 回報收妥：server 據此判「全房都有他的臉」才現身
+			}
 		}
 	}
 	FaceDownBuf.Empty();
@@ -6275,12 +6493,31 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 		return;
 	}
 
+	// 08-15 脖子破洞修：actor 隱形期間寫入的骨姿不進渲染（hidden 元件不上傳骨矩陣），
+	// 現身後靜止站姿的「已寫過=不重寫」閘讓頭殼停在初始骨位＝頭浮、脖子開洞
+	//（user 截圖：剛進房未動時；一動就好=第一次重寫才上傳）。現身瞬間強制整套
+	// 重寫一次（Reset＋姿勢寫入＝骨矩陣上傳）。
+	const bool bHiddenNow = IsHidden() || !BowBody->IsVisible();
+	if (bWasHiddenForPose && !bHiddenNow)
+	{
+		bGaitIdleWritten = false;
+		bStandLookWritten = false;
+		BowBody->MarkRenderDynamicDataDirty(); // 骨矩陣重上傳（雙保險）
+		if (NeckStretch)
+		{
+			NeckStretch->ForceRebuild(); // 伸縮脖跳過快取同步清＝現身後必重建一次
+		}
+	}
+	bWasHiddenForPose = bHiddenNow;
+
 	if (!bStandDoubleActive)
 	{
 		bStandDoubleActive = true;
 		bGaitIdleWritten = false;
+		bStandLookWritten = false;
 		bGaitPrevFootValid = false;
 		WalkAnimPhase = 0.0f;
+		bGaitPhaseSeedPending = true;
 		GaitStanceAlpha = 0.0f;
 		// 前一個使用者（睡姿替身/作畫姿）的殘留清乾淨；相對變換回站姿基準
 		ResetBowBodyBones();
@@ -6324,14 +6561,30 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 	if (Speed2D < 20.0f && GaitStanceAlpha <= KINDA_SMALL_NUMBER)
 	{
 		WalkAnimPhase = 0.0f;
+		bGaitPhaseSeedPending = true;
 		bGaitPrevFootValid = false;
 		GaitFootSpeed[0] = GaitFootSpeed[1] = 0.0f;
 		if (!bGaitIdleWritten)
 		{
 			bGaitIdleWritten = true;
+			bStandLookWritten = false;
 			ResetBowBodyBones(); // 站姿＝ref pose（與雕像版同一剪影；彈跳層隨後疊自己的偏移）
 		}
+		ApplyStandLookPitch(DeltaSeconds); // 靜止站姿：只擺頭頸俯仰
 		return;
+	}
+	if (bGaitPhaseSeedPending)
+	{
+		// 開步腳播種（08-15 user 抓「往右移動會先左傾再右傾」）：相位恆從 0
+		//（左腳撐地）起步＝往右起步的第一拍重心反向壓左。按初始橫向速度選開步腳：
+		// 明確往右（CS +X=角色左側 ⇒ VelCS.X<0）從 0.5（右腳撐地）起＝第一拍重心
+		// 即壓向行進側；往左/純前後照舊從 0。守恆式/雙軌制/腳貼地構造全不動。
+		bGaitPhaseSeedPending = false;
+		const FVector VelCS0 = BowBody->GetComponentTransform().InverseTransformVectorNoScale(GetVelocity());
+		WalkAnimPhase = (VelCS0.X < -20.0f) ? 0.5f : 0.0f;
+		// 傾斜軸「不」播種（08-15 三刀定案）：殘留的舊行進方向＝前搖的天然起點
+		//（起步先朝舊向微傾、等角速擺轉掃到行進側＝anticipation 讀感）——二刀曾
+		// 直接播種=前搖全滅、質感沒了（user 打回）。擺轉本體見 ApplyGaitPose。
 	}
 	bGaitIdleWritten = false;
 	ApplyGaitPose(DeltaSeconds, Speed2D);
@@ -6424,11 +6677,29 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 	FVector WantDir = FVector(VelCS.X, VelCS.Y, 0.0f);
 	if (WantDir.Normalize())
 	{
-		const float K = FMath::Clamp(DeltaSeconds * 10.0f, 0.0f, 1.0f);
-		GaitSlideDirCS = FMath::Lerp(GaitSlideDirCS, WantDir, K);
-		if (!GaitSlideDirCS.Normalize())
+		// 三刀終案（08-15 三輪 user 逐回打磨）：傾斜軸=**等角速擺轉**掃向行進向。
+		// 一輪原版=向量 lerp（反向目標先縮後過零硬跳=卡 80ms 再啪一下=「先左傾
+		// 再右傾」）；二輪=播種+硬切（即時正確但前搖/平滑全滅=「質感沒了」）。
+		// 擺轉=兩者的正解：殘留舊向自然成為前搖起點、全程連續無卡無跳；小角度
+		// 微調近瞬時、180° 反轉=GaitDirSlewDegPerSec 決定的重心轉移弧（600°/s
+		// ≈0.3s）。正對 180° 時取道身前（重心經前方轉移的讀感）。
+		const float CosA = FVector::DotProduct(GaitSlideDirCS, WantDir);
+		const float AngDeg = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(CosA, -1.0f, 1.0f)));
+		const float StepDeg = GaitDirSlewDegPerSec * DeltaSeconds;
+		if (AngDeg <= StepDeg)
 		{
 			GaitSlideDirCS = WantDir;
+		}
+		else
+		{
+			float Sign = FMath::Sign(FVector::CrossProduct(GaitSlideDirCS, WantDir).Z);
+			if (Sign == 0.0f)
+			{
+				Sign = (GaitSlideDirCS.X > 0.0f) ? 1.0f : -1.0f; // 180° 平手：經 +Y（身前）
+			}
+			GaitSlideDirCS = GaitSlideDirCS.RotateAngleAxis(Sign * StepDeg, FVector::UpVector);
+			GaitSlideDirCS.Z = 0.0f;
+			GaitSlideDirCS.Normalize();
 		}
 	}
 	// 雙軌分量步幅（有號；守恆式各自成立）：前後=各腳在自己側軌道上滑、
@@ -6558,6 +6829,9 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 	}
 
 	// 寫入（收斂迴圈：poseable 快取陷阱的既有解法；驗證骨含最深鏈尾）
+	// 視野俯仰（08-15）：Neck+Head 繞頸樞軸俯仰疊在步態上（yaw 恆 0）
+	ApplyLookPitchToCS(Ref, CS, DeltaSeconds);
+
 	static const TArray<FName> GaitVerifyBones = {
 		FName(TEXT("LeftFoot")), FName(TEXT("RightFoot")),
 		FName(TEXT("RightHand")), FName(TEXT("Head")) };
@@ -6574,6 +6848,78 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 	GaitPrevFootW[0] = FootWL;
 	GaitPrevFootW[1] = FootWR;
 	bGaitPrevFootValid = true;
+}
+
+float ANiceInkCharacter::CurrentLookPitchForPose(float DeltaSeconds)
+{
+	// 本人＝相機 pitch 零延遲（旁人相機/第三人稱鏡頭下看自己）；他端＝複製值平滑追趕
+	//（上報 30Hz、追趕 K20＝τ50ms，同 aim 同步慣例）
+	if (IsLocallyControlled())
+	{
+		RemoteLookPitchDeg = CameraPitch;
+	}
+	else
+	{
+		const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
+		RemoteLookPitchDeg += (LookPitchDeg - RemoteLookPitchDeg) * K;
+	}
+	// 指數飽和映射（user 定案）：|p|∈[0,89] → [0,Max]，p=89 恰=Max；符號保留
+	const float P = FMath::Clamp(FMath::Abs(RemoteLookPitchDeg), 0.0f, 89.0f) / 89.0f;
+	const float K = FMath::Max(LookPitchCurveK, 0.05f);
+	const float Norm = (1.0f - FMath::Exp(-K * P)) / (1.0f - FMath::Exp(-K));
+	return FMath::Sign(RemoteLookPitchDeg) * LookPitchMaxDeg * Norm;
+}
+
+void ANiceInkCharacter::ApplyLookPitchToCS(const FReferenceSkeleton& Ref, TArray<FTransform>& CS, float DeltaSeconds)
+{
+	// 俯仰＝繞角色左右軸（CS +X=角色左側；+Y 前 +Z 上）：+θ 把 +Y（臉向）轉向 +Z（抬頭）
+	// ——與相機 pitch 同號。分攤 Neck（1-share）/Head（share）；yaw 恆 0＝頭身零相對
+	// 轉向（user 定案：左右穿膜、全身跟控制器）。
+	const float PitchDeg = CurrentLookPitchForPose(DeltaSeconds);
+	if (FMath::Abs(PitchDeg) < 0.05f)
+	{
+		return;
+	}
+	const int32 NeckIdx = Ref.FindBoneIndex(TEXT("Neck"));
+	const int32 HeadIdx = Ref.FindBoneIndex(TEXT("Head"));
+	if (NeckIdx == INDEX_NONE || HeadIdx == INDEX_NONE)
+	{
+		return;
+	}
+	const float HeadShare = FMath::Clamp(LookPitchHeadShare, 0.0f, 1.0f);
+	const FQuat NeckQ(FVector::XAxisVector, FMath::DegreesToRadians(PitchDeg * (1.0f - HeadShare)));
+	const FQuat HeadQ(FVector::XAxisVector, FMath::DegreesToRadians(PitchDeg * HeadShare));
+	RotSubtreeAboutPivotCS(Ref, CS, NeckIdx, NeckQ, CS[NeckIdx].GetLocation());
+	RotSubtreeAboutPivotCS(Ref, CS, HeadIdx, HeadQ, CS[HeadIdx].GetLocation());
+}
+
+void ANiceInkCharacter::ApplyStandLookPitch(float DeltaSeconds)
+{
+	// 靜止站姿（gait 未寫骨）：從 ref pose 組 CS、只疊頭頸俯仰、寫 Neck/Head 兩骨
+	if (!BowBody || !BowBody->GetSkinnedAsset())
+	{
+		return;
+	}
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	const int32 NumBones = Ref.GetNum();
+	TArray<FTransform> CS;
+	CS.SetNum(NumBones);
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		const int32 Parent = Ref.GetParentIndex(i);
+		CS[i] = Ref.GetRefBonePose()[i] * (Parent != INDEX_NONE ? CS[Parent] : FTransform::Identity);
+	}
+	const float Before = RemoteLookPitchDeg;
+	ApplyLookPitchToCS(Ref, CS, DeltaSeconds);
+	// 頭頸靜止且已寫過＝不重寫（省 poseable 寫入；jiggle 讀骨照舊）
+	if (FMath::Abs(RemoteLookPitchDeg) < 0.05f && FMath::Abs(Before) < 0.05f && bStandLookWritten)
+	{
+		return;
+	}
+	bStandLookWritten = true;
+	static const TArray<FName> LookVerifyBones = { FName(TEXT("Head")) };
+	WriteBowPoseConverged(Ref, CS, LookVerifyBones);
 }
 
 void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)

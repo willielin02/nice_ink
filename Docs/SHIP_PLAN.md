@@ -740,3 +740,146 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   ＋可點判準改「加入流程能否受理」（只擋 Joining/Hosting；完成回呼見 Joining
   不踩狀態機）。碼路護欄=永不過濾＋搭便車搭上過濾搜尋漏接=重搜一次不過濾。
   待實機=EOS 查詢端過濾（併 B4）、選擇器點選手感。
+- **2026-08-14 追記⑱＝場內移動/動作同步卡頓三兇根治（user「請仔細調查」→
+  「請全部修好」）**：①**臉分發列車 vs 引擎頻寬帽**（主兇）：blob 實測 1.2~1.6MB/人
+  （log 定罪）、列車節奏 8×16KB/0.1s≈1.3MB/s，撞引擎預設每連線帽 **100KB/s**
+  （MaxClientRate/ConfiguredInternetSpeed 皆 100000、LAN 同帽；07-26 只調了 tick
+  頻率沒動帽）→每張臉 12~15s 連線滿載、飽和期間移動屬性複製整段被跳過＝
+  進道場/有人進房後長段卡頓；上行同帽＝上傳者自己的 ServerMove 排隊＝他的
+  角色全房卡。修=ini 帽提 1MB/s（四值：MaxClientRate/MaxInternetClientRate/
+  ConfiguredInternetSpeed/ConfiguredLanSpeed）＋列車降速 2×16KB/0.1s≈320KB/s
+  ＋下行改**每收件者各自額度**（舊全域 budget=多收件者串行灌單線；現並行、
+  每連線恆 320KB/s；B3 persona 資產列車=KB 級不需動）。B7 blob 壓縮仍是根治面
+  （PNG 降階可 1.5MB→200KB 級）＝原帳保留。②**可見身體繞過引擎網路平滑**
+  （結構性）：CMC 的 simulated-proxy＋listen-server 平滑只寫 ACharacter::Mesh
+  相對變換——本作 Body/BowBody 掛 capsule 下＝每個網路修正原封硬跳在可見網格
+  （EOS P2P 抖動/飽和期間=可見瞬移；jiggle 把 <100cm 的 snap 當激勵放大體感）。
+  修=無資產 Mesh 釘 capsule 原點當**平滑載體**、Body/BowBody 改掛其下＝免費
+  繼承引擎 Exponential 平滑；**本人端 Tick 強制 NetworkSmoothingMode=Disabled**
+  （平滑只服務「看別人」——本人若吃平滑，client 修正時凍結相機錨/可畫域採樣
+  會讀到半路骨位；防禦性補丁、本人視覺=capsule 硬跳＝改制前行為原樣）。
+  server 判定/畫墨 UV 解算讀的位置零變動（authority 端偏移恆零）。③**遠端
+  轉身 1.4° 階梯**：FRepMovement 旋轉量化預設 8-bit/軸→ShortComponents 16-bit。
+  驗證=robo_gait_probe **10/0**＋robo_remotejitter 時序全綠（remote hips p50
+  0.14/p95 2.05cm 與 owner 同量級、marker 兩契約 PASS）；probe 曾報 first-lock
+  dCamToPoint 102.5cm FAIL→**stash 對照實驗定罪=既有過時檢查非迴歸**（07-26
+  寫的 90cm 上界對應機器工具眼錨；07-25 起入鎖預設=Stencil＋07-31 凍結相機
+  =102.5 為現行合法幾何；儀器上界修 120 已記註）。**注意：in-process PIE
+  迴路零網路修正＝平滑改動在 robo 環境是嚴格 no-op（前後統計逐位相同實證）
+  ——②的效果只在真網路（EOS P2P/雙機）顯形，手感閘=user viewport 雙機實測**。
+  鐵坑沉澱：引擎頻寬帽 100KB/s 是隱形地板——任何 MB 級 reliable
+  列車先算帽；「listen server 也平滑 client 的 pawn」與「平滑只寫 GetMesh」是
+  同一條引擎事實的兩面，自訂顯示元件要嘛掛載體吃平滑、要嘛本人 Disabled。
+- **2026-08-14 追記⑲＝臉 blob 壓縮 NIF2＋tone 先行（user「進房臉/皮膚載入
+  怎麼這麼慢」→「動手」；追記⑱ 列車降速的代價面根治＝blob 壓縮舊帳結清）**：
+  ①**NIF2 格式**：face_open/closed 的 RGB 走 JPEG q90、alpha 走無損灰階 PNG
+  分載（島罩/頸淡出=承重合成通道、JPEG 不帶 alpha——合成端 JPEG 解回 BGRA
+  ＋灰 PNG 塞回 A、CreateTransient 上 GPU）；眼罩照舊 PNG；解碼端相容 NIF1；
+  打包結果快取 Dir/blob_nif2.bin（library 時間戳資料夾不可變=快取恆有效、
+  省每次進房轉碼）。②**tone 先行**：膚色 16 bytes 不搭列車尾班車——FaceBegin
+  RPC（Server/Client 兩向）直接帶 FLinearColor，登記簿 StoreToneEarly 獨立
+  ToneRevision（不觸發貼圖套用路）→EnsureAvatarApplied 先套 ApplySkinToneOnly。
+  ③實測（同機 LAN E2E、host 真臉+P2 沙箱臉）：blob 1,219,835→**364,683**／
+  1,623,678→**418,239**（3.3~3.9×）；client Welcomed→雙向臉全套用 **2.2 秒**
+  （throttle 前全速灌=1.9s 但餓死移動；throttle 後未壓縮=5.5s 上行+5s 下行；
+  現在=流量控制下拿回全速體感）；tone 先行實測比臉貼圖早 ~1.3s 上身。
+  四向對賬全綠（host/client view×兩席）。**視覺質感（JPEG q90 臉）待 user
+  viewport**；殘帳=自訂臉雲端儲存＋88s 背景烘焙 UX（原帳照舊）。
+- **2026-08-14 追記⑳＝進房臉同步收官：提速並行＋進房載入閘（user「先做成並行，
+  再收進進房載入」）**：①**提速**=臉列車 2→4 chunks/0.1s≈640KB/s（NIF2 後一張
+  ~0.7s；帽 1MB/s 恆有餘裕）＋FaceShare 就緒輪詢 0.5→0.1s（握手省 ~0.4s）；
+  上行/下行本就並行、多收件者本就並行。②**進房載入布（veil）**=臉同步齊全前
+  HUD 蓋整屏（判準=本人臉上行 ack＋ClientFaceManifest 席位集全入簿；8s 保底
+  掀開=傳輸失敗不卡死）；文案借現成 StatusJoining 13 語鍵。③**bFaceReady
+  現身閘**=server 收到該員 blob 才設 ready（複製旗標）、未 ready 的力士對旁人
+  SetActorHiddenInGame 整體隱形——**房內從頭到尾不存在頂著名冊臉的力士**
+  （#52 身分載體閉環）；保底三重=host 恆即刻 ready／無臉端 hello 帶旗標即刻
+  ready／server 報到後 10s 強制 ready（>veil 8s）；閘只在自己閘態變化時動手
+  =不與 ghost 全隱退化路互咬。④**開局臉齊保險**=RequestStartMatch＋HUD 開始
+  提示同判準（Game 世界限定、PIE/robo 不受擾）。實測（同機 LAN E2E）：
+  **Welcomed→veil 掀開 0.89s（ready 非 timeout）**、→雙向臉全套用 ~1.1s
+  （前一輪 2.2s；快取命中省掉 0.43s 現場轉碼實證）。鐵坑：**閂死旗標只准掛
+  恆真條件**——IsLocallyControlled 在剛進世界時 Controller 複製晚一兩幀=瞬態
+  假、上閂=veil 永不出現（首輪 E2E 實錘）；同機重啟撈房碼要防 log 輪替時序
+  （撈到舊場 HVZD 實錘、先驗 Log file open 時間戳）。現身閘視覺與 veil 體感
+  =user viewport（雙機 EOS 併 B4）。
+- **2026-08-14 追記㉑＝現身閘三修：單一權威制（user 回報「一邊看得到、另一邊
+  幾秒後才看到」→定罪→重構）**：①**病根 A（多秒空窗）**=臉列車單 tick 爆發
+  4×16KB——頻寬帳逐幀記（每幀預算=Rate/60≈17KB@1MB/s），64KB 爆發把該連線打進
+  飽和數幀、bFaceReady/bHidden 小屬性被餓（log 定罪：P4 現身旗標對 P3 晚 2.3s
+  =「一邊看不到人」本尊）。修=列車抹平 1×16KB/0.025s（同 640KB/s）＋帽 2MB/s
+  （單塊恆低於每幀預算）。**鐵則：頻寬帳逐幀記——平均速率合帽≠逐幀不超帽，
+  爆發節奏照樣餓死屬性複製。**②**病根 B（雙寫者競態）**=client 本地閘與 server
+  複製的 bHidden 互相蓋寫（變化偵測/逐 tick 斷言兩版都有洞：P2 端時序恰好可用、
+  P3 端 gate 全程沒接手=名冊臉閃現 0.7s）→**重構=單一權威**：bHidden 只有
+  server 寫——玩家 pawn spawn 即隱形，觀看者收妥 blob 回 ServerFaceGotSeat ack、
+  GameMode 等「發放當下全部在册觀看者 ack 齊」才 FaceGateShowNow（5s 保底）；
+  client 端閘整組拆除；晚一步報到的觀看者不進 ack 名單=他自己被 veil 蓋著。
+  bFaceReady/bFaceNone 降級 server-only（複製拆除）。③**pid=-1 迴歸修**=閘只認
+  有 PlayerState 的真玩家——頭像亭替身/選單舞者曾被閘隱形（23:28~00:00 的
+  build 選單舞者會消失，已修）。實測（host+P3+P2 三實例）：新人 join→隱形→
+  最後一個觀看者 ack 後 **2ms** 現身（全程 1.65s、與本人 veil 同步在 134ms 內）；
+  veil 0.83/1.34s 全 ready；無 pid=-1 閘 log。**教訓：可見性這類「一份狀態、
+  多端消費」的東西，寫者必須唯一——client 補強看似保險，實為競態來源。**
+- **2026-08-15 追記㉒＝開步腳播種（user 抓「第三人稱往右移會先左傾再右傾」）**：
+  步態相位起步恆歸零＝左腳撐地先行（重心第一拍壓左）——往左/前後讀感自然、
+  往右起步第一拍反向壓左＝「動作遲疑」讀感。修=起步時按初始橫向速度播種
+  WalkAnimPhase（明確往右（VelCS.X<-20；CS +X=角色左側）從 0.5=右腳撐地起、
+  其餘照舊 0）；bGaitPhaseSeedPending 掛在兩處歸零點（活化/停步）。守恆式/
+  雙軌制/貼地構造零變動；robo_gait_probe **10/0**（含右橫移段）；手感待 viewport。
+  **二刀（user「幾乎沒有改善」後重診）**：一刀修錯靶——重心橫移在起步瞬間被
+  0.17s 蹲斜坡壓近零＝根本不是可見的第一拍。真兇=**GaitSlideDirCS（上身前傾
+  的傾斜軸）從不重設**：殘留上一段行進方向，起步時前傾角隨蹲斜坡長出、軸卻
+  指舊向；且 vector-lerp 對反向目標先縮後過零硬跳＝朝錯邊傾 ~80ms 才甩正。
+  修=起步播種傾斜軸（當下速度向直設）＋行進中 >90° 轉向硬切（dot<0→直接換向；
+  美術語言=明確硬轉；≤90° 順向微調照舊 τ100ms）。gait probe 重跑 **10/0**；
+  手感待 viewport。**教訓：手感 bug 先找「可見的第一拍是哪個量」——被斜坡
+  壓制的量修了也無感；平滑器的殘留狀態（不重設的方向濾波）=起步方向 bug 常客。**
+  **三刀終案（user「即時了但少了平滑與前搖、質感沒了」）**：二刀把病和優點
+  一起砍了——殘留舊向其實是前搖（anticipation）的天然起點，原版的病只在
+  「擺過去的方式」（向量 lerp 對反向先縮後過零硬跳=卡 80ms 再啪）。終案=
+  **等角速擺轉**：傾斜軸以 GaitDirSlewDegPerSec（新旋鈕、預設 600°/s）連續掃向
+  行進向——起步先朝殘留舊向微傾、~0.3s 弧線掃到行進側=前搖回歸且全程無卡
+  無跳；小角度微調近瞬時；正對 180° 取道身前（重心經前方轉移讀感）；二刀的
+  播種/硬切全拆。gait probe **10/0**×3；**前搖節奏=viewport 旋鈕題**（大=俐落
+  小=黏）。**教訓：user 連打兩輪相反方向（「反向傾是 bug」→「前搖沒了」）＝
+  病根不在方向而在「運動的連續性」——修 bug 前先分離「病」（卡+跳）與「質感
+  載體」（殘留方向=前搖），別一刀全砍。**
+- **2026-08-15 追記㉓＝站立視野俯仰上身（user 定案逐字：「抬頭低頭要反映在旁人
+  看到的人偶頭部；左右禁止（穿膜）＝全身一起轉、頭身零相對位移，維持現狀」）**：
+  此前站立自由視角的相機 pitch 只活在本地相機、他端人偶頭恆平視。實裝=本人
+  PollLook 上報 LookPitchDeg（30Hz 節流、變化 >0.5° 才送、COND_SkipOwner；listen
+  主機直寫）→ 他端 K20 追趕（同 aim 慣例）→ Neck(40%)+Head(60%) 繞各自樞軸繞
+  角色左右軸俯仰（CS +X；+θ=抬頭與相機同號）、yaw 恆 0；增益 LookPitchGain 0.85
+  鉗 ±60°；旋鈕 LookPitchHeadShare/LookPitchGain。兩路：步態中疊在 gait CS 上
+  （WriteBowPoseConverged 前）、靜止站姿走 ApplyStandLookPitch（ref CS 只疊頭頸、
+  Head 驗證骨；靜止且已寫過=不重寫）；jiggle/伸縮脖照舊在其後讀骨。睡/鎖各自
+  接管路徑不動（bEligible 閘）。儀器=**robo_lookpitch_probe 7/0**（抬頭 dz +0.21/
+  低頭 −0.23、兩端逐位相同、轉身頭身相對偏航 0.0°）＋gait probe 10/0；手感
+  （分攤/增益/含蓄度）待 viewport。
+  **同日 user 定值：他端最多上下 12°、視野 0~89° 以指數曲線分配進這 12°**——
+  線性增益 0.85×鉗 60° 退役，改 head=Max×(1−e^(−k·|p|/89))/(1−e^(−k))
+  （LookPitchMaxDeg 12／LookPitchCurveK 2.5：視野 10°→3.2°、30°→7.4°、60°→10.7°、
+  89°=12°；小角度反應快、大角度慢慢逼近上限；符號保留）。probe 閾值隨上限重校
+  ＋新增 c5 上限檢查（89°→dz 0.077 ∈ 12° 帶）＝**8/0**。曲線陡度 k=viewport 旋鈕。
+- **2026-08-15 追記㉔＝脖子破洞（user 截圖：剛進房未動時頭浮/脖子全穿）**：診斷鏈
+  ①伸縮脖在 pitch 下 vis=1 chord 1.5＝俯仰不是兇手（probe 傾印）；②Game 世界他端
+  診斷：rest 全程 chord=0.0 vis=0（＝頭安座、脖子收合＝設計正確）——但視覺頭浮
+  ＝**可見皮膚沒跟骨**；③唯一同時滿足「剛進房」「沒動」「一動就好」的機制＝
+  現身閘：pawn spawn 即 SetActorHiddenInGame(true)、隱形期間 Reset/寫骨的骨矩陣
+  不進渲染，現身後靜止站姿「已寫過=不重寫」閘＋伸縮脖「頭沒動=跳過」閘讓渲染端
+  停在初始骨位→頭浮、脖洞；一動＝首次重寫才上傳。修=UpdateWalkAnim 偵測
+  隱形→現身邊緣（bWasHiddenForPose）：強制 Reset＋整套重寫＋MarkRenderDynamicDataDirty
+  ＋NeckStretch::ForceRebuild（新）。gait 10/0；**誠實記帳：自駕截圖三輪都沒框到
+  他人（seat 朝向/lobby 站位不在鏡頭內）＝視覺驗收留 user viewport 四視窗**。
+  教訓：**隱形期間寫入的 poseable 姿勢＝渲染端可能沒收到；任何「已寫過不重寫」
+  的省寫閘都要在現身邊緣重新武裝**（與「掃射式狀態設定對晚誕生元件必出 bug」
+  同族——這次是「對晚現身元件」）。
+  **續（user「進房不穿了，但抬低頭到特定角度仍有機率穿膜」）**：probe 加俯仰
+  掃描（−89~89 每 7° 傾印旁觀端伸縮脖 vis/chord）＝**定罪 −5~+9° 區間 vis=0**：
+  頭繞頭骨樞軸轉、環心幾乎不動（chord 0.3~0.5）但楔縫已張，隱藏門檻
+  NeckHideChordCm 1.5 把它判「安座」→藏＝穿膜（真安座 chord 逐位 0.0）。修=門檻
+  1.5→0.15；掃描全區 vis=1、probe **9/0**（新 c6 |pitch|≥5 必現）＋orbit 24/0
+  （睡姿路同門檻無迴歸）。教訓：**「安座即藏」的門檻要對「小角度純旋轉」校
+  ——環心距是旋轉的盲區（07-26 已為此加 sin×半徑項，但半徑用平均值仍估不到
+  環緣楔縫）；掃描式探針（角度全域傾印）一輪就把機率性穿膜定成確定區間**。

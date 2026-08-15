@@ -423,6 +423,7 @@ void ANiceInkGameMode::OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<
 	const int32 Seat = PS->SeatIndex;
 	TSharedPtr<TArray<uint8>> Shared = MakeShared<TArray<uint8>>(Blob);
 	FaceBlobs.Add(Seat, Shared);
+	From->ServerSetFaceReady(); // 現身閘：臉到手＝這名力士可以對旁人現身了
 
 	// 主機自己也是 viewer：直接入本機登記簿（不走 RPC）
 	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
@@ -430,7 +431,10 @@ void ANiceInkGameMode::OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<
 		Share->StoreBlob(Seat, Blob);
 	}
 
-	// 廣播給已報到的遠端 viewer（本人席位跳過——上傳前已入自己的簿）
+	// 廣播給已報到的遠端 viewer（本人席位跳過——上傳前已入自己的簿）；
+	// 同批建現身閘 ack 名單：這批 viewer 全部回報收妥後這名力士才現身
+	//（單一權威制——晚一步報到的 viewer 不進名單：他自己被 veil 蓋著、看不到閃現）
+	TArray<TWeakObjectPtr<ANiceInkCharacter>> Pending;
 	for (const TWeakObjectPtr<ANiceInkCharacter>& V : FaceViewers)
 	{
 		ANiceInkCharacter* C = V.Get();
@@ -438,10 +442,51 @@ void ANiceInkGameMode::OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<
 		if (C && (!VPS || VPS->SeatIndex != Seat))
 		{
 			EnqueueFaceJob(C, Seat, Shared);
+			Pending.Add(C);
 		}
+	}
+	FaceSeatChar.Add(Seat, From);
+	if (Pending.Num() == 0)
+	{
+		From->FaceGateShowNow(); // 房裡沒有別的觀看者（開房第一人）：即刻現身
+	}
+	else
+	{
+		FacePendingAcks.Add(Seat, Pending);
+		// 5s 保底：ack 丟失/觀看者離場——照樣現身，不卡在隱形
+		FTimerHandle Unused;
+		TWeakObjectPtr<ANiceInkCharacter> WeakFrom = From;
+		GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [WeakFrom]()
+		{
+			if (ANiceInkCharacter* C = WeakFrom.Get())
+			{
+				C->FaceGateShowNow();
+			}
+		}), 5.0f, false);
 	}
 	UE_LOG(LogTemp, Log, TEXT("NiFaceShare: host received face for seat %d (%d bytes, %d viewers)"),
 		Seat, Blob.Num(), FaceViewers.Num());
+}
+
+void ANiceInkGameMode::OnViewerGotFace(ANiceInkCharacter* Viewer, int32 Seat)
+{
+	TArray<TWeakObjectPtr<ANiceInkCharacter>>* Pending = FacePendingAcks.Find(Seat);
+	if (!Pending)
+	{
+		return;
+	}
+	Pending->RemoveAll([Viewer](const TWeakObjectPtr<ANiceInkCharacter>& W)
+	{
+		return !W.IsValid() || W.Get() == Viewer;
+	});
+	if (Pending->Num() == 0)
+	{
+		FacePendingAcks.Remove(Seat);
+		if (ANiceInkCharacter* C = FaceSeatChar.FindRef(Seat).Get())
+		{
+			C->FaceGateShowNow();
+		}
+	}
 }
 
 void ANiceInkGameMode::RegisterFaceViewer(ANiceInkCharacter* Viewer)
@@ -453,13 +498,28 @@ void ANiceInkGameMode::RegisterFaceViewer(ANiceInkCharacter* Viewer)
 	FaceViewers.AddUnique(Viewer);
 	const ANiceInkPlayerState* VPS = Viewer->GetPlayerState<ANiceInkPlayerState>();
 	const int32 OwnSeat = VPS ? VPS->SeatIndex : INDEX_NONE;
+	TArray<int32> ManifestSeats; // 報到當下既有的臉＝joiner veil 的等待集
 	for (const TPair<int32, TSharedPtr<TArray<uint8>>>& Pair : FaceBlobs)
 	{
 		if (Pair.Key != OwnSeat)
 		{
+			ManifestSeats.Add(Pair.Key);
 			EnqueueFaceJob(Viewer, Pair.Key, Pair.Value);
 		}
 	}
+	Viewer->ClientFaceManifest(ManifestSeats);
+
+	// 現身閘保底：報到後 10s 未收到臉（上傳失敗/CRC 拒收）＝強制 ready——
+	// 名冊臉現身的誠實降級，不卡開局、不永久隱形（>veil 8s＝joiner 先掀布再現身）
+	FTimerHandle Unused;
+	TWeakObjectPtr<ANiceInkCharacter> WeakViewer = Viewer;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [WeakViewer]()
+	{
+		if (ANiceInkCharacter* V = WeakViewer.Get())
+		{
+			V->ServerSetFaceReady(/*bNoBlobFallback=*/true); // 上傳失敗：名冊臉現身、不卡開局
+		}
+	}), 10.0f, false);
 }
 
 void ANiceInkGameMode::EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat,
@@ -476,41 +536,55 @@ void ANiceInkGameMode::EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat,
 	if (!GetWorldTimerManager().IsTimerActive(FaceSendTimer))
 	{
 		GetWorldTimerManager().SetTimer(FaceSendTimer, this,
-			&ANiceInkGameMode::TickFaceSend, 0.1f, /*bLoop=*/true);
+			&ANiceInkGameMode::TickFaceSend, 0.025f, /*bLoop=*/true);
 	}
 }
 
 void ANiceInkGameMode::TickFaceSend()
 {
 	constexpr int32 ChunkSize = 16 * 1024;
-	int32 Budget = 8; // 8×16KB / 0.1s ≈ 1.3MB/s——與上行同節奏，防 reliable 緩衝溢位
-	while (FaceSendQueue.Num() > 0 && Budget > 0)
+	// 08-14 卡頓根治①＋二修：每收件者每 tick 1×16KB、tick=0.025s≈640KB/s「抹平」
+	//（NIF2 後一張臉 ~0.7s）。單 tick 爆發會把該連線打進逐幀飽和、bFaceReady 等
+	// 小屬性被餓（現身旗標晚 2.3s 實錘）；單塊 16KB＜每幀預算（帽 2MB/s）＝不飽和。
+	// 不同收件者各自額度＝並行推進；同收件者多張臉照舊排隊逐張送。
+	TSet<ANiceInkCharacter*> Served;
+	for (int32 i = 0; i < FaceSendQueue.Num(); /*步進在迴圈尾*/)
 	{
-		FNiFaceSendJob& Job = FaceSendQueue[0];
+		FNiFaceSendJob& Job = FaceSendQueue[i];
 		ANiceInkCharacter* C = Job.Target.Get();
 		if (!C || !Job.Blob.IsValid())
 		{
-			FaceSendQueue.RemoveAt(0); // 收件者離場：job 作廢
+			FaceSendQueue.RemoveAt(i); // 收件者離場：job 作廢
 			continue;
 		}
+		if (Served.Contains(C))
+		{
+			++i; // 這條連線本 tick 額度已用（後續 job 排隊等）
+			continue;
+		}
+		Served.Add(C);
 		const TArray<uint8>& B = *Job.Blob;
 		if (!Job.bBegun)
 		{
-			C->ClientFaceBegin(Job.Seat, B.Num());
+			FLinearColor Tone(0.4f, 0.22f, 0.13f);
+			UNiceInkFaceShare::PeekTone(B, Tone); // tone 先行：膚色不等列車
+			C->ClientFaceBegin(Job.Seat, B.Num(), Tone);
 			Job.bBegun = true;
 		}
-		while (Budget > 0 && Job.NextOff < B.Num())
+		int32 Budget = 1;
+		while (Budget-- > 0 && Job.NextOff < B.Num())
 		{
 			TArray<uint8> Chunk(B.GetData() + Job.NextOff, FMath::Min(ChunkSize, B.Num() - Job.NextOff));
 			C->ClientFaceChunk(Job.Seat, Job.NextOff, Chunk);
 			Job.NextOff += Chunk.Num();
-			--Budget;
 		}
 		if (Job.NextOff >= B.Num())
 		{
 			C->ClientFaceEnd(Job.Seat, FCrc::MemCrc32(B.GetData(), B.Num()));
-			FaceSendQueue.RemoveAt(0);
+			FaceSendQueue.RemoveAt(i);
+			continue;
 		}
+		++i;
 	}
 	if (FaceSendQueue.Num() == 0)
 	{
@@ -758,6 +832,19 @@ void ANiceInkGameMode::RequestStartMatch()
 	if (GS->CurrentPhase != ENiceInkPhase::Lobby && GS->CurrentPhase != ENiceInkPhase::PostGame)
 	{
 		return;
+	}
+	// 開局臉齊保險（08-14）：全員臉到手才開局＝局內永不見名冊臉（規則藏開始鈕；
+	// 8s 逾時/無臉端已由 FaceReady 機制保底＝不會死鎖；PIE/robo 不受擾）
+	if (GetWorld() && GetWorld()->WorldType == EWorldType::Game)
+	{
+		for (APlayerState* PS : GS->PlayerArray)
+		{
+			const ANiceInkCharacter* C = Cast<ANiceInkCharacter>(PS->GetPawn());
+			if (C && !C->bFaceReady)
+			{
+				return;
+			}
+		}
 	}
 
 	GS->CurrentRound = 0;

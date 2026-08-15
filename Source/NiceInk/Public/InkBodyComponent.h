@@ -103,6 +103,9 @@ public:
 	// 與 ApplyAvatar 同語意，只是貼圖不走資產路徑
 	void ApplyCustomAvatar(UTexture2D* Open, UTexture2D* Closed, UTexture2D* EyeMask, FLinearColor Tone);
 
+	// tone 提前制（08-14）：臉貼圖還在列車上時先套膚色（FaceBegin RPC 帶到）
+	void ApplySkinToneOnly(FLinearColor Tone);
+
 	// 建 MID 並綁定畫布 RT 與玩家貼圖。可重複呼叫（貼圖換了之後重綁）。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void BindCanvas(UInkCanvasComponent* Canvas);

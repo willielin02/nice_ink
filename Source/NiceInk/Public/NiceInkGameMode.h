@@ -215,6 +215,9 @@ public:
 	// --- 自訂臉房內分發（2026-08-10；server 端集散地）---
 	// 上行驗收終點：存原始 blob（晚到者補發用）＋入主機登記簿＋廣播給已報到 viewer
 	void OnFaceBlobReceived(ANiceInkCharacter* From, const TArray<uint8>& Blob);
+	// 現身閘 ack（08-14 三修）：觀看者回報「席位 Seat 的臉已入我的登記簿」——
+	// 該席全部在册觀看者 ack 齊＝FaceGateShowNow（單一權威制）
+	void OnViewerGotFace(ANiceInkCharacter* Viewer, int32 Seat);
 	// 遠端 viewer 報到（Character::ServerFaceHello）：補發所有已知臉（跳過本人席位）
 	void RegisterFaceViewer(ANiceInkCharacter* Viewer);
 
@@ -231,6 +234,9 @@ private:
 		bool bBegun = false;
 	};
 	TArray<FNiFaceSendJob> FaceSendQueue;
+	// 現身閘記帳：seat → 尚未 ack 的觀看者；seat → 該席角色（show 用）
+	TMap<int32, TArray<TWeakObjectPtr<ANiceInkCharacter>>> FacePendingAcks;
+	TMap<int32, TWeakObjectPtr<ANiceInkCharacter>> FaceSeatChar;
 	FTimerHandle FaceSendTimer;
 	void EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat, const TSharedPtr<TArray<uint8>>& Blob);
 	void TickFaceSend();
