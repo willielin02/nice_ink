@@ -902,3 +902,12 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   若見皺褶）=Blender 筆刷項。鐵坑：robo 機位「正面」要用 -forward（網格前向=
   actor -X）；DebugRoboEnterLean 的 victim 必須同世界（跨世界 trace 必假）；
   probe 動作用 acted 旗標不用時間窗（背景 4~6fps 一 tick 就過窗）。
+- **2026-08-15 追記㉖＝甦醒朝向鏡像再現（user 4 視窗：醒來全員鏡像到對側；再跑一次
+  又正常＝競態）**：PIE 探針（robo_wakefov 擴充：本人 actor/控制器 yaw vs server、每個
+  旁觀者方位角兩端對賬）全 PASS 逐位相同＝PIE 重現不出、真網路封包順序才顯形。
+  處置：①08-04 一次性 RPC 寫入升級為**複製屬性＋本人每 tick 斷言**（SleepLieYawDeg/
+  bSleepLieYawValid；bAsleep 期間 actor yaw 偏 >2° 即扶正並 log `NiSleep: owner
+  yaw drift`＝日後再現留數字；閉眼期控制器 yaw 同斷言）——與封包順序無關、錯的方向
+  撐不過一幀；②ni.DebugHud 面板加朝向對賬行（YAW me actor/ctrl/cam＋每人 brg）
+  ＝user 現場截圖即可定罪。orbit 24/0＋feign 26/0。**教訓：一次性 RPC 落地的狀態
+  在真網路下就是競態源——凡「必須成立的姿態不變量」用複製屬性＋每 tick 斷言。**

@@ -439,6 +439,8 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawTargetRepW, COND_SkipOwner);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, bDrawTargetRepValid, COND_SkipOwner);
 	DOREPLIFETIME(ANiceInkCharacter, bBodyFaceDown);
+	DOREPLIFETIME(ANiceInkCharacter, SleepLieYawDeg);
+	DOREPLIFETIME(ANiceInkCharacter, bSleepLieYawValid);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, LookPitchDeg, COND_SkipOwner);
 }
 
@@ -461,6 +463,30 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	{
 		GetCharacterMovement()->NetworkSmoothingMode = ENetworkSmoothingMode::Disabled;
 		GetMesh()->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
+	}
+
+	// 睡姿 yaw 每 tick 斷言（08-15 競態封死；owner client 限定——server 端本就權威）：
+	// bAsleep 且 SleepLieYaw 已複製到＝actor/控制器 yaw 必須等於它。差 >2° 就扶正並記 log
+	//（留證：日後再現一次就有數字）。與 08-04 的一次性 RPC 寫入互補＝順序無關。
+	if (bLocal && !HasAuthority() && bAsleep && bSleepLieYawValid)
+	{
+		const float CurYaw = GetActorRotation().Yaw;
+		const float Dev = FMath::Abs(FMath::FindDeltaAngleDegrees(CurYaw, SleepLieYawDeg));
+		if (Dev > 2.0f)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("NiSleep: owner yaw drift %.1f (actor %.1f vs lie %.1f) - corrected"),
+				Dev, CurYaw, SleepLieYawDeg);
+			SetActorRotation(FRotator(0.0f, SleepLieYawDeg, 0.0f), ETeleportType::TeleportPhysics);
+		}
+		if (PC)
+		{
+			const float CtlDev = FMath::Abs(FMath::FindDeltaAngleDegrees(PC->GetControlRotation().Yaw, SleepLieYawDeg));
+			if (CtlDev > 2.0f && !bEyesOpen)
+			{
+				// 閉眼期控制器 yaw 恆=睡姿 yaw（睜眼後臉指向制自己管相機，控制器不再承載朝向）
+				PC->SetControlRotation(FRotator(0.0f, SleepLieYawDeg, 0.0f));
+			}
+		}
 	}
 
 	if (bLocal)
@@ -3061,6 +3087,8 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 		SetActorTransform(LieTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->StopMovementImmediately();
 		GetCharacterMovement()->DisableMovement();
+		SleepLieYawDeg = LieTransform.Rotator().Yaw; // 複製屬性＝owner 每 tick 斷言的權威 yaw
+		bSleepLieYawValid = true;
 		ClientSyncPoseTransform(LieTransform); // 本端 yaw 落地（客戶端權威、修正不覆蓋）
 	}
 	else
@@ -3069,6 +3097,7 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 		SprayCharges = 0;
 		KickCharges = 0;
 		bBodyFaceDown = false; // 現身站起＝翻身狀態自然結束
+		bSleepLieYawValid = false;
 		SetActorTransform(SeatTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		ClientSyncPoseTransform(SeatTransform); // 回座同樣要本端落地

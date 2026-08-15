@@ -6,6 +6,7 @@
 # 產出：Saved/robo_wakefov_result.txt
 import os
 import time
+import math
 import traceback
 
 import unreal
@@ -121,6 +122,36 @@ class Probe:
             log(f"AWAKE fov={fov:.1f} eyes={eyes}")
             log(f"{'PASS' if eyes == 1 and abs(fov - 72.0) < 0.5 else 'FAIL'} "
                 f"wake fov equals SleepWakeFov 72 (spec #42)")
+            # 08-15 朝向對賬（user 抓「醒來全員鏡像到對側」）：本人端 actor yaw / 控制器 yaw /
+            # 相機 yaw 必須與 server 端 actor yaw 一致（差 <5°）——180° 差=世界讀感整個翻面
+            server = get_world("UEDPIE_0")
+            sv = find_char(server, self.victim_pid)
+            lv = self.victim_local
+            sy = sv.get_actor_rotation().yaw
+            ly = lv.get_actor_rotation().yaw
+            pc = lv.get_controller()
+            cy = pc.get_control_rotation().yaw if pc else 999.0
+            cam = lv.get_editor_property("FirstPersonCamera")
+            camy = cam.get_world_rotation().yaw if cam else 999.0
+            def d(a, b):
+                x = (a - b + 180.0) % 360.0 - 180.0
+                return abs(x)
+            log(f"YAW server_actor={sy:.1f} local_actor={ly:.1f} local_ctrl={cy:.1f} local_cam={camy:.1f}")
+            log(f"{'PASS' if d(sy, ly) < 5.0 else 'FAIL'} local actor yaw == server actor yaw (d={d(sy, ly):.1f})")
+            log(f"{'PASS' if d(sy, cy) < 5.0 else 'FAIL'} local controller yaw == server actor yaw (d={d(sy, cy):.1f})")
+            # 相機朝向＝臉指向（睜眼初始 az=180 對躺姿？）——只記錄不斷言；旁觀者位置對賬見下
+            # 旁觀者對賬：server 世界的其他角色相對受害者的方位角，本人端同角色的方位角必須相同
+            for c in unreal.GameplayStatics.get_all_actors_of_class(server, unreal.NiceInkCharacter):
+                pid = c.get_editor_property("player_state").get_editor_property("player_id")
+                if pid == self.victim_pid:
+                    continue
+                lc = find_char(lv.get_world(), pid)
+                if not lc:
+                    continue
+                sd = c.get_actor_location() - sv.get_actor_location()
+                ld = lc.get_actor_location() - lv.get_actor_location()
+                sa = math.degrees(math.atan2(sd.y, sd.x)); la = math.degrees(math.atan2(ld.y, ld.x))
+                log(f"{'PASS' if d(sa, la) < 5.0 else 'FAIL'} bystander pid={pid} bearing server={sa:.1f} local={la:.1f} (d={d(sa, la):.1f})")
             self.finish()
 
     def finish(self):

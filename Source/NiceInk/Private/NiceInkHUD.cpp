@@ -12,6 +12,7 @@
 #include "Engine/Font.h"
 #include "Engine/Texture2D.h"
 #include "EngineUtils.h"
+#include "Camera/CameraComponent.h"
 #include "Fonts/FontCache.h"
 #include "Fonts/FontMeasure.h"
 #include "Fonts/SlateFontInfo.h"
@@ -1819,6 +1820,30 @@ void ANiceInkHUD::DrawDebugPanel(const ANiceInkGameState* GS, const ANiceInkPlay
 	Y += LineH;
 	DrawTok(TEXT("console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"),
 		M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+
+	// 朝向對賬（08-15 user 抓「醒來全員鏡像到對側」、PIE 重現不出）：本人 actor/控制器/
+	// 相機 yaw＋每個他人的世界方位角（相對本人）——與 server 視窗同一行對照即定罪
+	if (MyChar)
+	{
+		Y += LineH * 1.2f;
+		const AController* Ctl = MyChar->GetController();
+		const float CtlYaw = Ctl ? Ctl->GetControlRotation().Yaw : 999.0f;
+		const float CamYaw = MyChar->FirstPersonCamera ? MyChar->FirstPersonCamera->GetComponentRotation().Yaw : 999.0f;
+		FString Line = FString::Printf(TEXT("YAW me actor=%.0f ctrl=%.0f cam=%.0f asleep=%d eyes=%d |"),
+			MyChar->GetActorRotation().Yaw, CtlYaw, CamYaw, MyChar->bAsleep ? 1 : 0, MyChar->bEyesOpen ? 1 : 0);
+		for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+		{
+			ANiceInkCharacter* O = *It;
+			if (O == MyChar || !O->GetPlayerState())
+			{
+				continue;
+			}
+			const FVector D = O->GetActorLocation() - MyChar->GetActorLocation();
+			Line += FString::Printf(TEXT(" id%d brg=%.0f d=%.0f"),
+				O->GetPlayerState()->GetPlayerId(), FMath::RadiansToDegrees(FMath::Atan2(D.Y, D.X)), D.Size2D());
+		}
+		DrawTok(Line, M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
+	}
 
 	// 描圖現場（v4.0）：受害者端即時 summary
 	if (MyChar && MyChar->DreamTrace && MyChar->DreamTrace->IsTraceActive())

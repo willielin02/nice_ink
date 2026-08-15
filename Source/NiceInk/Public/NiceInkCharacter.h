@@ -635,6 +635,14 @@ public:
 	// 入睡：鎖移動、閉眼、身體躺到指定位置（仰躺大字，定案 #18）。
 	// 甦醒現身：站回座位、睜眼、恢復移動。
 	void ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform);
+	// 08-15 甦醒朝向競態封死（user 抓「醒來全員鏡像到對側」再現、PIE 重現不出）：
+	// 睡姿 yaw 改成**複製屬性**（冪等、與封包順序無關），owner client 在 bAsleep 期間
+	// 每 tick 斷言 actor yaw／控制器 yaw＝此值——一次性 RPC 寫入不管誰先到、
+	// 之後被什麼拉歪，都在下一幀扶正。
+	UPROPERTY(Replicated)
+	float SleepLieYawDeg = 0.0f;
+	UPROPERTY(Replicated)
+	bool bSleepLieYawValid = false;
 
 	// 入睡/甦醒傳送的本端落地（2026-07-16 bug：server 對 autonomous proxy 的
 	// SetActorTransform 只有位置會被移動修正推回、yaw 是客戶端權威永不修正——
