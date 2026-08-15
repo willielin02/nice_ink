@@ -15,7 +15,7 @@ namespace
 	constexpr int32 MaxRetries = 8;
 
 	constexpr float SelfArcSepCm = 3.0f;
-	constexpr float SelfDistFactor = 2.6f;
+	constexpr float SelfDistFactor = 2.55f; // 08-15 帶寬 2.2→2.4 後蛇/櫻最窄自距 0.93 vs 2.6×0.36=0.94 差 1%；物理必要 ≥2×（兩帶不疊）、2.55 仍留 27% 餘裕
 
 	// Blob（諧波閉圓保底）
 	void BuildBlob(const FDreamTraceParams& P, FRandomStream& RS, float WobbleScale, TArray<FVector2D>& Dense)
@@ -298,17 +298,17 @@ FDreamTraceParams FDreamTraceGen::DefaultParamsForCup(int32 Cup)
 	P.TargetTraceSeconds = 60.0f;
 	switch (FMath::Clamp(Cup, 0, 2))
 	{
-	// 帶寬統一 2.2（難度純走圖案複雜度軸）；分杯依 D_shape（Σmax(0,θ−3°)²）最佳三組切分
+	// 帶寬統一 2.4（08-15 user 定值 2.2→2.4「一直無法通關」；難度純走圖案複雜度軸）；分杯依 D_shape（Σmax(0,θ−3°)²）最佳三組切分
 	case 0: // 第一杯：D_shape 1.03~1.65
-		P.BandWidthNibMult = 2.2f;
+		P.BandWidthNibMult = 2.4f;
 		P.BakedPool = { Idx_Fan, Idx_Dango, Idx_Wave, Idx_Turtle };
 		break;
 	case 1: // 第二杯：D_shape 2.86~3.47
-		P.BandWidthNibMult = 2.2f;
+		P.BandWidthNibMult = 2.4f;
 		P.BakedPool = { Idx_Crane, Idx_Torii };
 		break;
 	default: // 第三杯（生死局）：D_shape 4.29~4.44
-		P.BandWidthNibMult = 2.2f;
+		P.BandWidthNibMult = 2.4f;
 		P.BakedPool = { Idx_Sakura, Idx_Snake };
 		break;
 	}

@@ -339,3 +339,12 @@
 
 DreamTrace.cpp `DefaultParamsForCup()`：BandWidthNibMult 三檔統一 2.2f；
 BakedPool 依上述分組重排。編譯通過。
+
+
+## 2026-08-15 帶寬 2.2→2.4（user 定值「否則一直無法通關」）
+- DefaultParamsForCup 三杯 BandWidthNibMult 2.2→2.4（帶全寬 3.8mm×2.4≈9.1mm、半寬 0.36cm@筆寬 0.3）；SPEC/CLAUDE.md 同步。
+- 連鎖：runtime 自交門檻 SelfDistFactor 2.6→2.55——蛇/櫻最窄自距 0.93cm vs 2.6×0.36=0.94 差 1%
+  （物理必要 ≥2×＝兩帶不疊；2.55 仍留 27% 餘裕）；圖案一筆不動。離線烘焙閘（2.6×0.30=0.78）
+  本就較鬆、非約束面。
+- robo_trace_test 兩條過時斷言更正（t1 seed42 選圖=Fan→「決定性烘焙圖且閉合」；t2 池覆蓋
+  3/3/2→4/2/2）；22/0。
