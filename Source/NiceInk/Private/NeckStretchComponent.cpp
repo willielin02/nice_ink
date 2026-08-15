@@ -503,8 +503,13 @@ void UNeckStretchComponent::UpdateNeck()
 			// 端色沿長逐列 lerp（08-15 質感修：舊制 35% 端帶後淡到 Neutral＝管中段一條
 			// 平膚色帶＝「另一塊材料」讀感真兇；兩端色都是該列在身體 chroma 場的實采，
 			// 沿長插值＝整管帶著當地血色、與身體同源）
-			const FLinearColor RingCol = FMath::Lerp(
-				BodyRingColor[k].ReinterpretAsLinear(), HeadResCol[k], Blend);
+			// 環向 3-tap 平滑（同法線：逐頂點 chroma 采樣的列間差在頭燈下也讀成直紋）
+			auto BodyC = [&](int32 kk) { return BodyRingColor[(kk + GRing) % GRing].ReinterpretAsLinear(); };
+			auto HeadC = [&](int32 kk) { return HeadResCol[(kk + GRing) % GRing]; };
+			const FLinearColor BodySm = BodyC(k - 1) * 0.25f + BodyC(k) * 0.5f + BodyC(k + 1) * 0.25f;
+			const FLinearColor HeadSm = HeadC(k - 1) * 0.25f + HeadC(k) * 0.5f + HeadC(k + 1) * 0.25f;
+			// 端排保原值（與殼面逐頂點同色＝縫無色階）；內排用平滑值
+			const FLinearColor RingCol = (j == 0) ? BodyC(k) : (j == E) ? HeadC(k) : FMath::Lerp(BodySm, HeadSm, Blend);
 			Cols[Idx] = RingCol.QuantizeRound();
 		}
 	}
@@ -550,6 +555,28 @@ void UNeckStretchComponent::UpdateNeck()
 					SmoothStep01(static_cast<float>(j) / E)).GetSafeNormal();
 				Normals[Idx] = RuledN.IsNearlyZero()
 					? N : FMath::Lerp(RuledN, N, Compress).GetSafeNormal();
+			}
+		}
+	}
+
+	// 環向法線平滑（08-15 user 抓「脖子一條條縱紋」）：管面每列各自沿中線推、相鄰列
+	// 微凹凸被中央差分法線逐列放大＝頭燈假光下 84 條明暗直紋（端色連續化後更顯眼）。
+	// 內排幾何法線沿環做 3-tap 兩趟＝列頻率抹平、真曲率保留（環向 84 列＝抹掉的是
+	// <5° 弧度的鋸齒）；端排不動（縫區移植法線＝與殼面無縫的錨）。
+	for (int32 Pass = 0; Pass < 2; ++Pass)
+	{
+		TArray<FVector> Prev = Normals;
+		for (int32 j = 1; j < E; ++j)
+		{
+			for (int32 k = 0; k < GRing; ++k)
+			{
+				const FVector Sm = (Prev[j * GRing + (k + GRing - 1) % GRing] * 0.25f
+					+ Prev[j * GRing + k] * 0.5f
+					+ Prev[j * GRing + (k + 1) % GRing] * 0.25f).GetSafeNormal();
+				if (!Sm.IsNearlyZero())
+				{
+					Normals[j * GRing + k] = Sm;
+				}
 			}
 		}
 	}
