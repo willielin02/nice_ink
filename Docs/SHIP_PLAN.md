@@ -955,3 +955,39 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   必用縫環距離不用平面距離、每頂點影響骨 ≤4 否則整個 section 換蒙皮路徑、臉閘門是
   T_FaceMask 貼圖（UV0）不是頂點色、NiDumpSK 渲染緩衝逐頂點對賬儀器、HighResShot
   同名疊號陷阱——重啟縫合版前先讀 tag 上的 SHIP_PLAN 追記㉛及續①~③。**
+- **2026-08-16 追記㉛（main 編號；tag wip/neck-whole-08-16 上另有一條 ㉛）＝站立/作畫脖子「縫隙」真兇＝切縫兩側法線分家（user 問「同一套為何站立/
+  作畫有縫、甦醒沒有」→我先腦補三條機理（烘焙表過期/跳過快取只看頭/薄片精度）→量測全數
+  推翻或降級：ni.NeckRingFromMesh 真權重路徑 tableErr=0.000~0.008cm＝烘焙表與資產權重
+  完全一致）**：真兇＝引擎渲染緩衝逐頂點對賬 `seamNormalGap mean=55.8° max=100°`——08-05
+  柔化法線轉印（sumo_soft_normals_bake）對「已切開」的 SumoRetopo 平滑：頭殼/身殼各自是
+  開放邊界、Laplacian 把兩側邊環各自往內捲＝轉印回去的縫兩側頂點法線分家；頭燈假光把
+  法線跳階放大成沿縫折線的亮暗鋸齒（robo A/B：同機位靜態未切 SM 乾淨、切開 SK 鋸齒＝
+  一刀定罪；rest 姿即現，抬頭/lean 更兇）。甦醒者沒縫＝兩端相隔 46cm＋管面法線自帶。
+  修三刀：①bake 平滑來源先 remove_doubles 焊回縫（正本拓樸/UV/權重零改動；焊 84 頂點=
+  縫本身；轉印後 Blender 端縫法線差 0.03°）→FBX→SK/SM 重匯入（引擎端 seamNormalGap
+  0.0°）②NeckStretch 端排法線改讀渲染緩衝真法線（BodyRestN/HeadRestN；烘焙表法線與新
+  資產差 30.9°＝再也不當端排來源）③身側環權重改讀渲染緩衝（全影響骨、GPU 同源；cvar
+  ni.NeckRingFromMesh 0/1 A/B）＋跳過快取加身側環位移比對（肚骨/肩骨帶走環而頭不動時
+  不再留舊薄片）。驗證：robo_neckgap_shots（新儀器：站立/抬頭/低頭/lean×正側背×新舊
+  A/B＋靜態 SM 對照＋GetDebugSummary meshw/tableErr）rest 鋸齒歸零、lean 階梯塊歸零；
+  lookpitch 9/0、gait 10/0、orbit 24/0、neck_observer 截圖正常。**殘項＝壓縮域薄片在
+  極端角（抬頭 60°/lean 30°）仍有淡色塊與零星白點（互穿側 z-fight/退化列）；user 若要
+  「站立/作畫也像甦醒者那條動態長脖」＝姿勢層改動（頭沿身環法線抬升 R·sinθ＋餘量＝
+  兩環永不互穿、薄片升格真管面）——改的是角色外觀（低頭/lean 時頭抬 3~9cm），歸 user
+  裁決未動。教訓：跨資產管線的「對稱假設」（平滑對切開網格＝兩側獨立）要在縫上直接量；
+  儀器先於機理——三條腦補機理全靠 tableErr 一個數字推翻。**
+- **2026-08-16 追記㉜＝縫上零星「透明破圖」（user viewport 追加）**：ni.NeckStretchOff 診斷 A/B 實錘
+  ——脖子薄片關掉時抬頭/lean 的楔縫是真洞（看穿到頭殼內側臉貼圖/背景），開著時只剩 1~3px 針孔＝
+  端排 T 接點（頭端重取樣點落在頭殼邊界折線上）＋CPU double 蒙皮 vs GPU float 的亞像素裂縫。修三刀：
+  ①**圍裙排**（NeckApronExtCm 0.6/NeckApronSinkCm 0.25）：兩端排各再伸一排沿管軸進殼、沿 −法線沉到
+  殼面下＝水密靠重疊不靠逐位相等；隱藏門檻 0.15→0.04（微彎也畫、只有真安座才收）②M_InkBodyChar
+  改 Two Sided（M_NeckStretch 本來就是）＝任何裂縫看進去是皮不是透明③兩材質 Normal ×TwoSidedSign
+  抵銷引擎背面翻法線（同一條法線著色）。驗證 robo_neckgap_shots（新增 off 模式）：抬頭 60°/lean 30°
+  只剩零星 1~3px 暗點；rest/俯仰 ±9° 乾淨。殘＝極端角針孔；徹底根治仍是姿勢層抬頭升格真管面（user 裁決）。**
+- **2026-08-16 追記㉝＝針孔真兇＝壓縮域列對應（user 截圖：站姿小彎角下巴下仍有深色破口、「方向不對」）**：
+  儀器 resampSkew（角度重取樣端點 vs 切縫孿生頂點距離）＝俯仰 8° 時弦長 0.4cm 但端點沿頭殼邊界滑
+  1.54cm＝補丁列傾斜 4:1、折疊＋T 接點＝針孔（追記㉜的圍裙/雙面只是把透明變深色＝治標）。修＝壓縮域
+  改**孿生頂點對應 k→k**（HeadRing[k] rest≡BodyRing[k]；補丁＝切縫本身張開的那塊面，兩端頂點與殼面
+  逐位相同、零扭轉、無 T 接點）、弦長 4→12cm 隨 Compress 交叉回角度重取樣（長管零改動）。驗證
+  robo_neckgap_shots（新增 up8/down8 站姿實域）：±8°/60°/lean 三機位零暗點；lookpitch 9/0、orbit 24/0。
+  教訓：症狀換色不換位置＝沒打中真兇；「小彎角就破」的簽名要先問列對應而不是覆蓋/材質。**

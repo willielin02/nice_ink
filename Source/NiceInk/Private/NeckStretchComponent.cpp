@@ -4,6 +4,17 @@
 #include "Components/PoseableMeshComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
+#include "Rendering/SkinWeightVertexBuffer.h"
+
+// 0=舊制（NeckSeamData 烘焙表權重）1=身側環權重從渲染緩衝讀（預設；A/B 診斷旋鈕）
+// 診斷：1=整條伸縮脖不畫（分辨縫上的破圖是脖子薄片還是殼本身）
+static TAutoConsoleVariable<int32> CVarNiNeckStretchOff(
+	TEXT("ni.NeckStretchOff"), 0, TEXT("Diagnostic: hide the procedural neck entirely"));
+static TAutoConsoleVariable<int32> CVarNiNeckRingFromMesh(
+	TEXT("ni.NeckRingFromMesh"), 1,
+	TEXT("NeckStretch body ring: 1=skin with mesh render-buffer weights (GPU-identical), 0=baked NeckSeamData table"));
 
 namespace
 {
@@ -89,10 +100,10 @@ FString UNeckStretchComponent::GetDebugSummary() const
 	const FVector HcW = WT.TransformPosition(DbgHc);
 	const FBoxSphereBounds B = Bounds;
 	return FString::Printf(
-		TEXT("ready=%d vis=%d chord=%.1f BcCS=(%.0f,%.0f,%.0f) HcCS=(%.0f,%.0f,%.0f) "
+		TEXT("ready=%d vis=%d chord=%.1f meshw=%d tableErr=%.3f resampSkew=%.2f BcCS=(%.0f,%.0f,%.0f) HcCS=(%.0f,%.0f,%.0f) "
 			 "BcW=(%.0f,%.0f,%.0f) HcW=(%.0f,%.0f,%.0f) compW=(%.0f,%.0f,%.0f) "
 			 "boundsW=(%.0f,%.0f,%.0f) ext=(%.0f,%.0f,%.0f)"),
-		bReady ? 1 : 0, IsVisible() ? 1 : 0, DbgChord,
+		bReady ? 1 : 0, IsVisible() ? 1 : 0, DbgChord, MeshWeightsMatched, DbgTableErrMax, DbgDirectVsResamp,
 		DbgBc.X, DbgBc.Y, DbgBc.Z, DbgHc.X, DbgHc.Y, DbgHc.Z,
 		BcW.X, BcW.Y, BcW.Z, HcW.X, HcW.Y, HcW.Z,
 		WT.GetLocation().X, WT.GetLocation().Y, WT.GetLocation().Z,
@@ -141,6 +152,19 @@ void UNeckStretchComponent::InitFromSource(UPoseableMeshComponent* InSource, UMa
 		SkinBoneNames.Add(BoneName);
 		RefInvCS.Add(CS.Inverse());
 	}
+	// 全骨 ref pose CS 反矩陣（真皮膚路徑用；影響骨集合由資產決定、不限六骨）
+	RefInvCSAll.Reset();
+	RefInvCSAll.SetNum(Ref.GetNum());
+	for (int32 i = 0; i < Ref.GetNum(); ++i)
+	{
+		FTransform CS = Local[i];
+		for (int32 P = Ref.GetParentIndex(i); P != INDEX_NONE; P = Ref.GetParentIndex(P))
+		{
+			CS = CS * Local[P];
+		}
+		RefInvCSAll[i] = CS.Inverse();
+	}
+	BindRingToMeshWeights();
 
 	// 端色（FColor：rgb=linear/2 編碼、a=hair 支路強度；shader 端 ×2 解碼）
 	auto ToColor = [](const NeckSeamData::FSeamVert& V)
@@ -246,6 +270,171 @@ void UNeckStretchComponent::SetBodyMaterialRef(UMaterialInstanceDynamic* BodyMid
 	}
 }
 
+void UNeckStretchComponent::BindRingToMeshWeights()
+{
+	BodyRingInfl.Reset();
+	BodyRingVertIdx.Reset();
+	MeshWeightsMatched = 0;
+	BodyRingInfl.SetNum(GRing);
+	BodyRingVertIdx.Init(-1, GRing);
+	BodyRestN.SetNum(GRing);
+	HeadRestN.SetNum(GRing);
+	for (int32 k = 0; k < GRing; ++k)
+	{
+		BodyRestN[k] = SeamNrm(NeckSeamData::BodyRing[k]);
+		HeadRestN[k] = SeamNrm(NeckSeamData::HeadRing[k]);
+	}
+	const FSkeletalMeshRenderData* RD = Source ? Source->GetSkeletalMeshRenderData() : nullptr;
+	if (!RD || RD->LODRenderData.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NeckStretch: no render data - body ring falls back to baked table"));
+		return;
+	}
+	const FSkeletalMeshLODRenderData& LOD = RD->LODRenderData[0];
+	const FPositionVertexBuffer& PB = LOD.StaticVertexBuffers.PositionVertexBuffer;
+	const FSkinWeightVertexBuffer* SW = LOD.GetSkinWeightVertexBuffer();
+	if (!SW || PB.GetNumVertices() == 0 || PB.GetVertexData() == nullptr || !SW->GetNeedsCPUAccess())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NeckStretch: render buffers not CPU-accessible (pos=%u sw=%d) - baked table"),
+			PB.GetNumVertices(), SW ? (int32)SW->GetNeedsCPUAccess() : -1);
+		return;
+	}
+	const FReferenceSkeleton& Ref = Source->GetSkinnedAsset()->GetRefSkeleton();
+	const int32 HeadIdx = Ref.FindBoneIndex(FName(TEXT("Head")));
+	const uint32 NumV = PB.GetNumVertices();
+	const uint32 MaxInfl = SW->GetMaxBoneInfluences();
+	// 診斷：切縫兩側同位頂點的頂點法線夾角（>0＝著色在縫上跳階＝可見鋸齒線的候選真兇）
+	TArray<FVector> HeadSideN, BodySideN;
+	HeadSideN.Init(FVector::ZeroVector, GRing);
+	BodySideN.Init(FVector::ZeroVector, GRing);
+	const FStaticMeshVertexBuffer& SVB = LOD.StaticVertexBuffers.StaticMeshVertexBuffer;
+	const bool bHasNrm = SVB.GetNumVertices() == NumV && SVB.GetTangentData() != nullptr;
+	// 切縫兩側頂點同位：身側＝Head 權重 <0.5 的那個
+	for (uint32 v = 0; v < NumV; ++v)
+	{
+		const FVector P(PB.VertexPosition(v));
+		for (int32 k = 0; k < GRing; ++k)
+		{
+			if (!P.Equals(SeamPos(NeckSeamData::BodyRing[k]), 0.02))
+			{
+				continue;
+			}
+			int32 SecIdx = 0, LocalV = 0;
+			LOD.GetSectionFromVertexIndex(static_cast<int32>(v), SecIdx, LocalV);
+			const FSkelMeshRenderSection& Sec = LOD.RenderSections[SecIdx];
+			TArray<FRingInfl> Infl;
+			float HeadW = 0.0f, Sum = 0.0f;
+			for (uint32 i = 0; i < MaxInfl; ++i)
+			{
+				const float W = SW->GetBoneWeight(v, i) / 65535.0f;
+				if (W <= 0.0f)
+				{
+					continue;
+				}
+				const int32 Local = static_cast<int32>(SW->GetBoneIndex(v, i));
+				const int32 Bone = Sec.BoneMap.IsValidIndex(Local) ? static_cast<int32>(Sec.BoneMap[Local]) : INDEX_NONE;
+				if (Bone == INDEX_NONE)
+				{
+					continue;
+				}
+				if (Bone == HeadIdx)
+				{
+					HeadW += W;
+				}
+				Infl.Add({ Bone, W });
+				Sum += W;
+			}
+			if (bHasNrm)
+			{
+				{ const FVector4f Nz = SVB.VertexTangentZ(v); (HeadW >= 0.5f ? HeadSideN : BodySideN)[k] = FVector(Nz.X, Nz.Y, Nz.Z); }
+			}
+			if (Sum <= 0.0f || HeadW >= 0.5f)
+			{
+				continue; // 頭側同位頂點（或空權重）
+			}
+			for (FRingInfl& I : Infl)
+			{
+				I.W /= Sum; // 量化殘差歸一
+			}
+			if (BodyRingVertIdx[k] < 0)
+			{
+				BodyRingVertIdx[k] = static_cast<int32>(v);
+				BodyRingInfl[k] = MoveTemp(Infl);
+				++MeshWeightsMatched;
+			}
+		}
+	}
+	BodyRestN.SetNum(GRing);
+	HeadRestN.SetNum(GRing);
+	for (int32 k = 0; k < GRing; ++k)
+	{
+		BodyRestN[k] = BodySideN[k].IsNearlyZero() ? SeamNrm(NeckSeamData::BodyRing[k]) : BodySideN[k].GetSafeNormal();
+		HeadRestN[k] = HeadSideN[k].IsNearlyZero() ? SeamNrm(NeckSeamData::HeadRing[k]) : HeadSideN[k].GetSafeNormal();
+	}
+	float NrmMaxDeg = 0.0f, NrmMeanDeg = 0.0f, TblMaxDeg = 0.0f;
+	int32 NrmPairs = 0;
+	for (int32 k = 0; k < GRing; ++k)
+	{
+		if (!HeadSideN[k].IsNearlyZero() && !BodySideN[k].IsNearlyZero())
+		{
+			const float Deg = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+				static_cast<float>(FVector::DotProduct(HeadSideN[k].GetSafeNormal(), BodySideN[k].GetSafeNormal())), -1.0f, 1.0f)));
+			NrmMaxDeg = FMath::Max(NrmMaxDeg, Deg);
+			NrmMeanDeg += Deg;
+			++NrmPairs;
+			const float TDeg = FMath::RadiansToDegrees(FMath::Acos(FMath::Clamp(
+				static_cast<float>(FVector::DotProduct(BodySideN[k].GetSafeNormal(), SeamNrm(NeckSeamData::BodyRing[k]).GetSafeNormal())), -1.0f, 1.0f)));
+			TblMaxDeg = FMath::Max(TblMaxDeg, TDeg);
+		}
+	}
+	if (NrmPairs > 0)
+	{
+		NrmMeanDeg /= NrmPairs;
+	}
+	UE_LOG(LogTemp, Log, TEXT("NeckStretch: body ring bound to mesh weights %d/%d (verts=%u maxInfl=%u) seamNormalGap pairs=%d max=%.1fdeg mean=%.1fdeg tableVsBody max=%.1fdeg on %s"),
+		MeshWeightsMatched, GRing, NumV, MaxInfl, NrmPairs, NrmMaxDeg, NrmMeanDeg, TblMaxDeg, *GetNameSafe(GetOwner()));
+}
+
+void UNeckStretchComponent::SkinBodyRingFromMesh(TArray<FVector>& OutPos, TArray<FVector>& OutNrm,
+	const TArray<FTransform>& SkinT) const
+{
+	// SkinT＝六骨舊表路徑的皮膚矩陣（未配到的頂點退回舊表）；配到的走全骨真權重
+	const TArray<FTransform>& CS = Source->GetComponentSpaceTransforms();
+	OutPos.SetNumUninitialized(GRing);
+	OutNrm.SetNumUninitialized(GRing);
+	for (int32 k = 0; k < GRing; ++k)
+	{
+		const NeckSeamData::FSeamVert& V = NeckSeamData::BodyRing[k];
+		const FVector Rest = SeamPos(V);
+		const FVector RestN = BodyRestN.IsValidIndex(k) ? BodyRestN[k] : SeamNrm(V);
+		FVector P = FVector::ZeroVector, N = FVector::ZeroVector;
+		if (BodyRingVertIdx[k] >= 0 && CS.Num() == RefInvCSAll.Num())
+		{
+			for (const FRingInfl& I : BodyRingInfl[k])
+			{
+				const FTransform T = RefInvCSAll[I.Bone] * CS[I.Bone];
+				P += I.W * T.TransformPosition(Rest);
+				N += I.W * T.TransformVectorNoScale(RestN);
+			}
+		}
+		else
+		{
+			for (int32 j = 0; j < 4; ++j)
+			{
+				if (V.W[j] <= 0.0f)
+				{
+					continue;
+				}
+				const FTransform& T = SkinT[V.Bone[j]];
+				P += V.W[j] * T.TransformPosition(Rest);
+				N += V.W[j] * T.TransformVectorNoScale(RestN);
+			}
+		}
+		OutPos[k] = P;
+		OutNrm[k] = N.GetSafeNormal();
+	}
+}
+
 void UNeckStretchComponent::UpdateNeck()
 {
 	if (!bReady || !Source)
@@ -268,7 +457,7 @@ void UNeckStretchComponent::UpdateNeck()
 				Tone.R, Tone.G, Tone.B, *GetNameSafe(GetOwner()));
 		}
 	}
-	if (!bNeckStretchEnabled)
+	if (!bNeckStretchEnabled || CVarNiNeckStretchOff.GetValueOnGameThread() != 0)
 	{
 		if (IsVisible())
 		{
@@ -294,7 +483,24 @@ void UNeckStretchComponent::UpdateNeck()
 	}
 
 	TArray<FVector> BP, BN;
-	SkinRing(NeckSeamData::BodyRing, SkinT, BP, BN);
+	const bool bFromMesh = CVarNiNeckRingFromMesh.GetValueOnGameThread() != 0 && MeshWeightsMatched > 0;
+	if (bFromMesh)
+	{
+		SkinBodyRingFromMesh(BP, BN, SkinT);
+		// 診斷：舊烘焙表與真權重的環點差（站立/作畫時 >0 就是舊制縫隙的來源之一）
+		TArray<FVector> TP, TN;
+		SkinRing(NeckSeamData::BodyRing, SkinT, TP, TN);
+		float Err = 0.0f;
+		for (int32 k = 0; k < GRing; ++k)
+		{
+			Err = FMath::Max(Err, static_cast<float>(FVector::Dist(TP[k], BP[k])));
+		}
+		DbgTableErrMax = Err;
+	}
+	else
+	{
+		SkinRing(NeckSeamData::BodyRing, SkinT, BP, BN);
+	}
 	// 頭側環＝剛體（Head=1.0 硬權重）：整環走 Head 皮膚矩陣、重取樣走 rest 參數表
 	const FTransform& HeadT = SkinT[HeadBoneSlot];
 
@@ -306,14 +512,21 @@ void UNeckStretchComponent::UpdateNeck()
 	Bc /= GRing;
 	const FVector Hc = HeadT.TransformPosition(HeadC0);
 
-	// 姿勢沒動＝跳過（含 GPU 上傳）
+	// 姿勢沒動＝跳過（含 GPU 上傳）——頭與身側環都沒動才跳（舊制只看頭：肚骨/肩骨
+	// 把身側環帶走而頭釘住時，脖子留在原地＝縫）
 	const FQuat HeadQ = HeadT.GetRotation();
-	if (LastHeadCenter.Equals(Hc, 0.005) && LastHeadQ.Equals(HeadQ, 1e-5f) && IsVisible())
+	bool bBodyMoved = LastBP.Num() != GRing;
+	for (int32 k = 0; !bBodyMoved && k < GRing; ++k)
+	{
+		bBodyMoved = !LastBP[k].Equals(BP[k], 0.005);
+	}
+	if (!bBodyMoved && LastHeadCenter.Equals(Hc, 0.005) && LastHeadQ.Equals(HeadQ, 1e-5f) && IsVisible())
 	{
 		return;
 	}
 	LastHeadCenter = Hc;
 	LastHeadQ = HeadQ;
+	LastBP = BP;
 	// 本人永不看見自己的脖子（人看不到自己的脖子；相機在眉心＝管面只可能糊鏡頭——
 	// A/B 截圖實錘 φ=45 滿屏皮膚的真兇）。他端照常看到完整伸長脖＝訊號不減。
 	SetOwnerNoSee(true);
@@ -445,8 +658,8 @@ void UNeckStretchComponent::UpdateNeck()
 				const float F = Off / Span;
 				const FVector RestP = FMath::Lerp(SeamPos(NeckSeamData::HeadRing[m]),
 					SeamPos(NeckSeamData::HeadRing[M2]), F);
-				const FVector RestN = FMath::Lerp(SeamNrm(NeckSeamData::HeadRing[m]),
-					SeamNrm(NeckSeamData::HeadRing[M2]), F);
+				const FVector RestN = FMath::Lerp(HeadRestN.IsValidIndex(m) ? HeadRestN[m] : SeamNrm(NeckSeamData::HeadRing[m]),
+					HeadRestN.IsValidIndex(M2) ? HeadRestN[M2] : SeamNrm(NeckSeamData::HeadRing[M2]), F);
 				OutPos = HeadT.TransformPosition(RestP);
 				OutNrm = HeadT.TransformVectorNoScale(RestN).GetSafeNormal();
 				// ReinterpretAsLinear＝純 /255（FLinearColor(FColor) 是 sRGB 解碼——毀編碼，勿用）
@@ -456,7 +669,7 @@ void UNeckStretchComponent::UpdateNeck()
 			}
 		}
 		OutPos = HeadT.TransformPosition(SeamPos(NeckSeamData::HeadRing[0]));
-		OutNrm = HeadT.TransformVectorNoScale(SeamNrm(NeckSeamData::HeadRing[0])).GetSafeNormal();
+		OutNrm = HeadT.TransformVectorNoScale(HeadRestN.IsValidIndex(0) ? HeadRestN[0] : SeamNrm(NeckSeamData::HeadRing[0])).GetSafeNormal();
 		OutCol = HeadRingColor[0].ReinterpretAsLinear();
 		OutFrontFactor = 1.0f;
 	};
@@ -478,13 +691,30 @@ void UNeckStretchComponent::UpdateNeck()
 	HeadResCol.SetNumUninitialized(GRing);
 	HeadLocal.SetNumUninitialized(GRing);
 	ColFront.SetNumUninitialized(GRing);
+	// 壓縮域列對應＝切縫孿生頂點 k→k（08-16 user「站姿小彎角也破圖」修）：角度重取樣是
+	// 長管的零剪切對應，但在弦長 mm~cm 的楔縫上它把列端點沿頭殼邊界折線滑開＝列傾斜/
+	// 折疊＋T 接點＝針孔。孿生對應（HeadRing[k] rest 位置≡BodyRing[k]）＝補丁恰是切縫
+	// 本身張開的那塊面：兩端頂點與殼面頂點逐位相同、零扭轉、無 T 接點。弦長 4→12cm
+	// 隨 Compress 交叉回角度重取樣（長管照舊）。
+	float DirectVsResampMax = 0.0f;
 	for (int32 k = 0; k < GRing; ++k)
 	{
-		ResampleHead(ColAng[k], HeadResPos[k], HeadResNrm[k], HeadResCol[k], ColFront[k]);
+		FVector RP, RN;
+		FLinearColor RC;
+		ResampleHead(ColAng[k], RP, RN, RC, ColFront[k]);
+		const FVector DP = HeadT.TransformPosition(SeamPos(NeckSeamData::HeadRing[k]));
+		const FVector DN = HeadT.TransformVectorNoScale(
+			HeadRestN.IsValidIndex(k) ? HeadRestN[k] : SeamNrm(NeckSeamData::HeadRing[k])).GetSafeNormal();
+		const FLinearColor DC = HeadRingColor[k].ReinterpretAsLinear();
+		DirectVsResampMax = FMath::Max(DirectVsResampMax, static_cast<float>(FVector::Dist(DP, RP)));
+		HeadResPos[k] = FMath::Lerp(DP, RP, Compress);
+		HeadResNrm[k] = FMath::Lerp(DN, RN, Compress).GetSafeNormal();
+		HeadResCol[k] = FMath::Lerp(DC, RC, Compress);
 		const FVector V = HeadResPos[k] - Hc;
 		HeadLocal[k] = FVector(FVector::DotProduct(V, CU[E]), FVector::DotProduct(V, CW[E]),
 			FVector::DotProduct(V, CT[E]));
 	}
+	DbgDirectVsResamp = DirectVsResampMax;
 
 	// --- 頂點網格 ---
 	const int32 NumV = Rows * GRing;
@@ -635,6 +865,32 @@ void UNeckStretchComponent::UpdateNeck()
 		}
 	}
 
+	// 圍裙排（08-16 user「零星角度看到透明破圖」）：兩端排再各伸一排到殼面之下——
+	// 頭端排是重取樣點（落在頭殼邊界折線上=T 接點）、身端排是 CPU 蒙皮（double）
+	// vs GPU（float）的同位近似，光柵化在掠射角必留亞像素裂縫＝透明針孔。圍裙沿管軸
+	// 伸進殼內 NeckApronExtCm、再沿 −法線沉 NeckApronSinkCm＝殼面蓋住裂縫（水密靠重疊
+	// 不靠逐位相等）。法線/色/UV 抄端排。
+	{
+		const int32 Base = Verts.Num();
+		Verts.AddUninitialized(2 * GRing);
+		Normals.AddUninitialized(2 * GRing);
+		UV0.AddUninitialized(2 * GRing);
+		Cols.AddUninitialized(2 * GRing);
+		for (int32 k = 0; k < GRing; ++k)
+		{
+			const int32 IB = Base + k;           // 身側圍裙
+			const int32 IH = Base + GRing + k;   // 頭側圍裙
+			Verts[IB] = BP[k] - NB * NeckApronExtCm - BN[k] * NeckApronSinkCm;
+			Verts[IH] = HeadResPos[k] + NH * NeckApronExtCm - HeadResNrm[k] * NeckApronSinkCm;
+			Normals[IB] = Normals[k];
+			Normals[IH] = Normals[E * GRing + k];
+			UV0[IB] = UV0[k];
+			UV0[IH] = UV0[E * GRing + k];
+			Cols[IB] = Cols[k];
+			Cols[IH] = Cols[E * GRing + k];
+		}
+	}
+
 	// 索引（一次建；winding 以「幾何法線=外向法線同向」判定——取中段良態四邊形，
 	// row0 貼著邊界環面積趨零＝噪聲判定源，robo 實錘判反→two-sided 背面翻法線＝暗盤）
 	if (!bSectionCreated)
@@ -645,16 +901,20 @@ void UNeckStretchComponent::UpdateNeck()
 			Verts[MA + 1] - Verts[MA], Verts[(MJ + 1) * GRing] - Verts[MA]).GetSafeNormal();
 		const bool bFlip = FVector::DotProduct(GN, Normals[MA]) < 0.0f;
 		TArray<int32> Tris;
-		Tris.Reserve((Rows - 1) * GRing * 6);
-		for (int32 j = 0; j < Rows - 1; ++j)
+		Tris.Reserve((Rows + 1) * GRing * 6);
+		const int32 ApronB = Rows * GRing;          // 身側圍裙排起點
+		const int32 ApronH = ApronB + GRing;        // 頭側圍裙排起點
+		auto RowStart = [&](int32 j) { return j < 0 ? ApronB : (j >= Rows ? ApronH : j * GRing); };
+		for (int32 j = -1; j < Rows; ++j) // -1＝身側圍裙→row0；Rows-1＝row E→頭側圍裙
 		{
+			const int32 R0 = RowStart(j), R1 = RowStart(j + 1);
 			for (int32 k = 0; k < GRing; ++k)
 			{
 				const int32 K1 = (k + 1) % GRing;
-				const int32 A = j * GRing + k;
-				const int32 B = j * GRing + K1;
-				const int32 C = (j + 1) * GRing + K1;
-				const int32 D = (j + 1) * GRing + k;
+				const int32 A = R0 + k;
+				const int32 B = R0 + K1;
+				const int32 C = R1 + K1;
+				const int32 D = R1 + k;
 				if (bFlip)
 				{
 					Tris.Append({ A, C, B, A, D, C });

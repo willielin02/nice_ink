@@ -177,6 +177,13 @@
   當機位、client 模型當被拍者，站立平視/抬頭 60°/低頭 60°/lean-lock 埋頭 各正面
   （-forward 側 130cm、頭高）＋側面；產出 neckwhole_*.png 自查「單一連續皮膚、無
   切線/材質差/楔縫」。機制契約由 orbit/feign/gait/lookpitch 守；質感=user viewport。
+- `robo_neckgap_shots.py`（2026-08-16）＝站立/作畫脖子縫隙 A/B 截圖＋量測：host 眼睛當機位
+  （離 Neck 骨 75cm、地板高）、client 模型當被拍者，站立/俯仰 ±8°/±60°/lean 各正側背，
+  每張記 GetDebugSummary（meshw=身側環真權重配對數、tableErr=烘焙表 vs 真權重環點差、
+  resampSkew=角度重取樣端點 vs 孿生頂點距離）；cvar `ni.NeckRingFromMesh 0/1`（環權重源）、
+  `ni.NeckStretchOff 1`（整條脖子關掉＝分辨破圖是補丁還是殼）、bSkeletalStandEnabled 關
+  ＝靜態未切 SM 對照；lean 要在 **server 世界的 model actor** 上呼 DebugRoboEnterLean（guard
+  把 RPC 壓本地）。啟動 log `NeckStretch: ... seamNormalGap` >2° ＝縫會現形（資產管線出事）。
 - `robo_lookpitch_probe.py`（2026-08-15）＝站立視野俯仰上身探針（**9 檢查**）：本人
   相機 pitch ±40° → 本人端與旁觀端 Neck→Head 骨向量 Z 分量同號變化（c1 抬頭
   dz>+0.02、c2 低頭 dz<-0.02、c3 兩端同量 |Δ|<0.02＝複製追趕收斂；閾值對應

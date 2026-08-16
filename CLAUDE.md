@@ -95,6 +95,13 @@ canvas 做不到毛玻璃半透明）**。
   EditorPerProjectUserSettings 白跑）；診斷法＝log 幀計數器差÷時間戳差先驗幀率。
 - **骨骼 FBX 重匯入會綁回舊骨架**（一骨陷阱）→ 匯入前先刪 SK＋Skeleton 資產。
 - **Blender 存檔在 Pose Mode＋use_selection 匯出會悄悄丟 armature** → 全場景匯出＋先回 Object Mode。
+- **對「已切開」的網格做平滑/法線轉印＝縫兩側各自內捲、法線分家**（08-16 實錘：頭身切縫兩側
+  頂點法線 mean 56°＝站立/作畫沿縫鋸齒亮暗跳階、甦醒 46cm 沒被看見）→ 平滑來源先
+  remove_doubles 焊回縫再轉印；引擎端看 log `NeckStretch: ... seamNormalGap`（>2° 出事）。
+  同案教訓：跨切縫的補丁在小張角要用**孿生頂點對應 k→k**，角度重取樣只屬長管
+  （8° 時弦 0.4cm 端點卻滑 1.54cm＝針孔）；症狀換色不換位置＝沒打中真兇。
+- **headless `-ExecutePythonScript` 用 PowerShell 管線接 Select-String 會在啟動後即死**（log 停在
+  Total Editor Startup Time、exit 255）→ `Start-Process -Wait` 不接管線、事後 grep log。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。
 - **「墨水落錯位置」先查 actor/component scale**（序列化的舊 scale 會蓋過 ctor 修正）。
 - **python 的 `unreal.Rotator(roll, pitch, yaw)` 參數順序**；GameMode CDO 改了不會進 PIE 實例
@@ -160,7 +167,10 @@ canvas 做不到毛玻璃半透明）**。
   說謊者；**5.7 Interchange 無視 FbxImportUI 選項**鐵坑；sumo_soft_normals_bake
   =著色對齊雕像讀感）；儀器=robo_gait_probe 10 契約（含 c8 不越帶/c9 膝外開/
   c10 大腿間距）+robo_headlight_probe A/B+DebugRoboWalk/GaitStats/ViewFrom；
-  四輪全綠；帳本=Docs/BODY_MOTION_PLAN.md、手感待 viewport；
+  四輪全綠；帳本=Docs/BODY_MOTION_PLAN.md、手感待 viewport；**脖子現制（08-16）＝全狀態切開版 SK_Sumo＋UNeckStretch 程序化脖（站立/作畫/睡
+  同一條；縫合版 SK_Sumo_Whole 封存 tag wip/neck-whole-08-16）；08-16 站立/作畫縫隙三段
+  定罪修（縫法線分家→焊縫重烘＋端排/身側環讀渲染緩衝；針孔→圍裙排＋雙面材質；小彎角
+  破口→壓縮域孿生頂點對應）＝SHIP_PLAN 追記㉛~㉝、儀器 robo_neckgap_shots；**
   二輪增益 0.4=誤修已還原（「太敏感」主詞是視野觸發非游標——體感形容詞先問
   主詞；StencilCursorGain 旋鈕留、預設 1.0）；三輪=**邊緣帶真兇雙修**（儀器
   robo_fovaxis_probe：引擎維持垂直 FOV、「水平半角 18°」只在 16:9 成立→半角

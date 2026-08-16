@@ -55,7 +55,13 @@ public:
 
 	// 弦長低於此值＝頭安座＝整件隱藏（rest 收合）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0.1", ClampMax = "10"))
-	float NeckHideChordCm = 0.15f; // 08-15 1.5→0.15：站立俯仰 ±5~9° 時 chord 0.3~0.5＋楔縫已張卻被判安座＝穿膜（probe 掃描實錘）；真安座 chord 逐位=0.0
+	float NeckHideChordCm = 0.04f; // 08-15 1.5→0.15：站立俯仰 ±5~9° 時 chord 0.3~0.5＋楔縫已張卻被判安座＝穿膜（probe 掃描實錘）；真安座 chord 逐位=0.0
+
+	// 圍裙排（08-16）：兩端排各再伸一排到殼面之下＝蓋住端排 T 接點/蒙皮近似的亞像素裂縫
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "3"))
+	float NeckApronExtCm = 0.6f;   // 沿管軸伸進殼內
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "1"))
+	float NeckApronSinkCm = 0.25f; // 沿 −法線下沉（殼面在上、圍裙在下＝不 z-fight）
 
 	// 沿長度的環數（含兩端排）。20＝深彎每行 ~5° 環面轉角（曲率取樣，成本可忽略）
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Neck", meta = (ClampMin = "6", ClampMax = "32"))
@@ -89,6 +95,25 @@ private:
 	TArray<FName> SkinBoneNames;
 	TArray<FTransform> RefInvCS;
 	bool bReady = false;
+
+	// 身側環真皮膚（08-16 站立/作畫縫隙修）：邊界環頂點的權重直接從渲染緩衝讀（與 GPU
+	// 同源、全影響骨、不經烘焙表）——烘焙表只留 rest 位置/法線/端色。甦醒者身體恆 rest
+	// 所以舊表從沒被考過；站立（肚骨彈跳/俯仰/步態）與作畫（肩臂彎）一動，表與資產
+	// 現行權重的任何差都在 0~4cm 薄片上現形＝縫。
+	struct FRingInfl { int32 Bone = 0; float W = 0.0f; };
+	TArray<TArray<FRingInfl>> BodyRingInfl;   // 每環頂點的實際影響（骨骼索引＝ref skeleton）
+	TArray<int32> BodyRingVertIdx;            // 對應渲染頂點索引（-1＝沒配到→退回烘焙表）
+	TArray<FTransform> RefInvCSAll;           // 全骨 ref pose CS 反矩陣
+	int32 MeshWeightsMatched = 0;
+	void BindRingToMeshWeights();
+	void SkinBodyRingFromMesh(TArray<FVector>& OutPos, TArray<FVector>& OutNrm, const TArray<FTransform>& SkinT) const;
+	TArray<FVector> LastBP;                   // 變化偵測（身側環動了也要重建——舊制只看頭）
+	float DbgTableErrMax = 0.0f;
+	float DbgDirectVsResamp = 0.0f;         // 角度重取樣點 vs 孿生頂點的最大距離（cm；診斷）              // 烘焙表 vs 緩衝權重的環點差（cm；診斷）
+	// 端排法線＝渲染緩衝裡切縫兩側頂點的真法線（rest 空間；配不到＝退回烘焙表）——
+	// 08-05 柔化法線轉印後烘焙表法線與資產法線已分家（實測 76°）＝端排著色跳階
+	TArray<FVector> BodyRestN;
+	TArray<FVector> HeadRestN;
 
 	// 端色（FColor 編碼：rgb=linear/2、a=hairW）
 	TArray<FColor> BodyRingColor;
