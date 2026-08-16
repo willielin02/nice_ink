@@ -100,6 +100,11 @@ public:
 	UFUNCTION(Exec)
 	void NiShot(float DelaySeconds, const FString& Name);
 
+	// 資產審計：把骨骼網格 LOD0 渲染頂點（位置/法線/切線/UV0/UV1/色/骨權重）傾印 CSV
+	// （08-16 縫合版 vs 切開版逐頂點對賬儀器；只在編輯器二進位有渲染資料）
+	UFUNCTION(Exec)
+	void NiDumpSK(const FString& AssetPath, const FString& OutPath);
+
 	// 各輸入輪詢點共用的靈敏度倍率（鉗 0.2–3.0）
 	float GetMouseScale() const;
 

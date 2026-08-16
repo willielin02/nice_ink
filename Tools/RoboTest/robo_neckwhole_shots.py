@@ -55,12 +55,13 @@ class Probe:
         i = 1 if side else 0
         dyaw = (0.0, 90.0, 180.0, 270.0)[i % 4] if isinstance(side, bool) else float(side)
         ang = math.radians(yaw0 + dyaw)
-        cam = unreal.Vector(mloc.x + 85.0 * math.cos(ang), mloc.y + 85.0 * math.sin(ang), mloc.z + 40.0)
+        dist = 45.0 if name.startswith('close') else 85.0   # close_*=脖側特寫（08-16 抬頭拉伸紋調查）
+        cam = unreal.Vector(mloc.x + dist * math.cos(ang), mloc.y + dist * math.sin(ang), mloc.z + (55.0 if name.startswith('close') else 40.0))
         h.set_actor_location(cam, False, True)
         look = unreal.MathLibrary.find_look_at_rotation(
             unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z + 62.0))
         pc.set_control_rotation(look)
-        unreal.SystemLibrary.execute_console_command(server, f"HighResShot 1280x720 filename=neckwhole_{name}")
+        unreal.SystemLibrary.execute_console_command(server, f"HighResShot {'1920x1080' if name.startswith('close') else '1280x720'} filename=neckwhole_{name}")
         log(f"shot {name} dyaw={dyaw}")
 
     def step(self):
@@ -91,6 +92,10 @@ class Probe:
                 for pname, act in (("stand", pitch(0)), ("up", pitch(60)), ("down", pitch(-60))):
                     for qi, q in enumerate(quads):
                         self.plan.append((f"{pname}_q{qi}", act if qi == 0 else None, q))
+                # 脖側特寫：抬頭到頂（89→視覺 12°）＋平視對照，四個斜側角
+                for pname, act in (("close_up", pitch(89)), ("close_flat", pitch(0))):
+                    for qi, q in enumerate((60.0, 120.0, 240.0, 300.0)):
+                        self.plan.append((f"{pname}_c{qi}", act if qi == 0 else None, q))
                 self.plan.append(("lean_q0", lambda: (self.model_pc().set_control_rotation(unreal.Rotator(0.0, 0.0, self.myaw)), self.enter_lean()), 0.0))
                 for qi, q in enumerate(quads[1:], start=1):
                     self.plan.append((f"lean_q{qi}", None, q))

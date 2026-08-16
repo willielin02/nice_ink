@@ -15,6 +15,10 @@
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
 #include "Sound/SoundBase.h"
+#include "Engine/SkeletalMesh.h"
+#include "Rendering/SkeletalMeshRenderData.h"
+#include "Rendering/SkeletalMeshLODRenderData.h"
+#include "Misc/FileHelper.h"
 #include "TimerManager.h"
 #include "VoiceChat.h"
 
@@ -170,6 +174,47 @@ void UNiceInkGameInstance::LoadSettings()
 	// 玩家存檔裡只該有他親手輸入的名字）。三位數＝滿房 6 人撞名 1.5%
 	//（兩位數 14%——名字要服社交叫喚，同房同名是實際干擾；2026-08-10 user 抓改）
 	SessionFallbackName = FString::Printf(TEXT("rikishi%03d"), FMath::RandRange(0, 999));
+}
+
+void UNiceInkGameInstance::NiDumpSK(const FString& AssetPath, const FString& OutPath)
+{
+	USkeletalMesh* SK = LoadObject<USkeletalMesh>(nullptr, *AssetPath);
+	if (!SK || !SK->GetResourceForRendering() || SK->GetResourceForRendering()->LODRenderData.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiDumpSK: no render data for %s"), *AssetPath); return;
+	}
+	const FSkeletalMeshLODRenderData& LOD = SK->GetResourceForRendering()->LODRenderData[0];
+	const uint32 N = LOD.StaticVertexBuffers.PositionVertexBuffer.GetNumVertices();
+	const bool bHasColor = LOD.StaticVertexBuffers.ColorVertexBuffer.GetNumVertices() == N;
+	const uint32 NumUV = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
+	FString Out; Out.Reserve(N * 160);
+	Out += TEXT("sec,i,px,py,pz,nx,ny,nz,tx,ty,tz,u0,v0,u1,v1,r,g,b,a,b0,w0,b1,w1,b2,w2,b3,w3\n");
+	for (int32 S = 0; S < LOD.RenderSections.Num(); ++S)
+	{
+		const FSkelMeshRenderSection& Sec = LOD.RenderSections[S];
+		for (uint32 k = 0; k < Sec.NumVertices; ++k)
+		{
+			const uint32 i = Sec.BaseVertexIndex + k;
+			const FVector3f P = LOD.StaticVertexBuffers.PositionVertexBuffer.VertexPosition(i);
+			const FVector3f Nn = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.VertexTangentZ(i);
+			const FVector3f T = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.VertexTangentX(i);
+			const FVector2f UV0 = NumUV > 0 ? LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 0) : FVector2f::ZeroVector;
+			const FVector2f UV1 = NumUV > 1 ? LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 1) : FVector2f::ZeroVector;
+			const FColor C = bHasColor ? LOD.StaticVertexBuffers.ColorVertexBuffer.VertexColor(i) : FColor::Black;
+			int32 B[4] = {0,0,0,0}; float W[4] = {0,0,0,0};
+			for (int32 j = 0; j < 4; ++j)
+			{
+				const int32 Local = LOD.SkinWeightVertexBuffer.GetBoneIndex(i, j);
+				B[j] = Sec.BoneMap.IsValidIndex(Local) ? (int32)Sec.BoneMap[Local] : -1;
+				W[j] = LOD.SkinWeightVertexBuffer.GetBoneWeight(i, j) / 65535.0f;
+			}
+			Out += FString::Printf(TEXT("%d,%u,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%.4f,%d,%.4f,%d,%.4f,%d,%.4f\n"),
+				S, i, P.X, P.Y, P.Z, Nn.X, Nn.Y, Nn.Z, T.X, T.Y, T.Z, UV0.X, UV0.Y, UV1.X, UV1.Y, C.R, C.G, C.B, C.A,
+				B[0], W[0], B[1], W[1], B[2], W[2], B[3], W[3]);
+		}
+	}
+	FFileHelper::SaveStringToFile(Out, *OutPath);
+	UE_LOG(LogTemp, Warning, TEXT("NiDumpSK: %s -> %s (%u verts, %d sections, uv=%u, color=%d)"), *AssetPath, *OutPath, N, LOD.RenderSections.Num(), NumUV, bHasColor ? 1 : 0);
 }
 
 void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)

@@ -88,17 +88,27 @@ _, _, vt = np.linalg.svd(P, full_matrices=False)
 nrm = Vector(vt[-1]); 
 if nrm.z < 0: nrm = -nrm   # 朝頭側
 print("seam normal", tuple(round(x,3) for x in nrm), "centroid", tuple(round(x,3) for x in c))
+# 08-16 鐵坑：seam 平面傾 43°（法線 (0,-0.69,0.73)）→「平面距離 < 5cm」是一片無限
+# 斜板，斜著切過上背 z≈100~135（UE 傾印實錘：2017 點位移、345 點權重、背中線法線
+# 全被改＝user 抓的「蟹足腫」）。帶＝**到縫環（最近縫頂點）距離**才是脖子本身；
+# 平面有號距離只拿來分頭側/身側。所有帶判定一律先過 ring_dist 閘。
+kd_seam = KDTree(len(seam_pts))
+for _i, _p in enumerate(seam_pts): kd_seam.insert(_p, _i)
+kd_seam.balance()
+def ring_dist(world_co):
+    return kd_seam.find(world_co)[2]
+RING_MAX = 0.10   # 縫環 10cm 外＝絕對不是脖子帶（頭側權重帶 BAND 0.10 為上限）
 
 # ---------- ①b 頸帶幾何平滑（08-16 user 定案：脖區建模面形千奇百怪→只動 xyz、
 #            UV0/拓樸/頂點數一字不動；帶外零變化＝邊界固定） ----------
-SMOOTH_BAND = 0.05     # seam 平面上下各 5cm 內參與平滑
+SMOOTH_BAND = 0.07     # seam 平面上下各 5cm 內參與平滑
 SMOOTH_FADE = 0.015    # 帶緣 1.5cm 內權重淡出到 0（邊界固定不動）
-SMOOTH_ITER = 12
+SMOOTH_ITER = 30
 SMOOTH_FACTOR = 0.5
 gSm = body.vertex_groups.get("NeckSmooth") or body.vertex_groups.new(name="NeckSmooth")
 n_in = 0
 for v in me.vertices:
-    s = abs((mw @ v.co - c).dot(nrm))
+    s = ring_dist(mw @ v.co)   # 到縫環距離（不是平面距離）
     if s > SMOOTH_BAND:
         gSm.add([v.index], 0.0, 'REPLACE'); continue
     w = 1.0 if s < SMOOTH_BAND - SMOOTH_FADE else (SMOOTH_BAND - s) / SMOOTH_FADE
@@ -114,7 +124,7 @@ with bpy.context.temp_override(object=body, active_object=body):
     before = {v.index: v.co.copy() for v in me.vertices}
     bpy.ops.object.modifier_apply(modifier=sm.name)
 # 位移鉗位：單頂點最多 SMOOTH_MAX_MM（保剪影；平滑只該抹掉 mm 級歪面，超過=在改形）
-SMOOTH_MAX_MM = 12.0
+SMOOTH_MAX_MM = 20.0
 clamped = 0
 for i, b in before.items():
     d = me.vertices[i].co - b
@@ -123,6 +133,15 @@ for i, b in before.items():
 disp = [(me.vertices[i].co - before[i]).length for i in before]
 moved = [d for d in disp if d > 1e-6]
 print(f"neck smooth: band verts={n_in} moved={len(moved)} max={(max(moved) if moved else 0)*1000:.2f}mm mean={sum(moved)/max(1,len(moved))*1000:.2f}mm clamped={clamped}")
+# 自檢：帶外（|s|>SMOOTH_BAND）不得有任何位移——有=修飾器影響域漏出，硬失敗
+_leak = [(i, ring_dist(mw @ before[i]), (me.vertices[i].co - before[i]).length) for i in before]
+_leak = [(i, s_, d_) for i, s_, d_ in _leak if s_ > SMOOTH_BAND and d_ > 1e-6]
+if _leak:
+    _leak.sort(key=lambda t: -t[2])
+    print("SMOOTH LEAK outside band:", len(_leak), "worst:", [(i, round(s_,3), round(d_*1000,2)) for i, s_, d_ in _leak[:8]])
+    import sys; sys.stdout.flush()
+    raise AssertionError(f"smooth leaked outside band on {len(_leak)} verts")
+print("smooth leak check: 0 verts moved outside band")
 assert len(me.vertices) == n1, "smooth changed vertex count?!"
 body.vertex_groups.remove(body.vertex_groups["NeckSmooth"])  # 工作用群不進 SK（apply 後重取參照）
 
@@ -146,7 +165,7 @@ def bake_soft_normals(ob, it=12, fac=0.5):
         bpy.ops.object.modifier_apply(modifier=dt.name)
     bpy.data.objects.remove(src, do_unlink=True)
     assert ob.data.has_custom_normals, "normal transfer failed"
-bake_soft_normals(body)
+bake_soft_normals(body, it=40)  # 08-16 帶內法線來源加倍平滑（帶外反正 100% 抄 master）：抬頭拉伸橫紋=排陰影，法線比幾何更能壓
 # 帶外原封抄回 master 法線；帶內以 SMOOTH_BAND 內距離做淡入（帶緣=master、seam=重烘）
 me.calc_normals_split() if hasattr(me, "calc_normals_split") else None
 NBLEND_BAND = SMOOTH_BAND
@@ -156,7 +175,7 @@ for poly in me.polygons:
     for li in poly.loop_indices:
         l = me.loops[li]; v = me.vertices[l.vertex_index]
         baked = Vector(l.normal)
-        s_ = abs((mw @ v.co - c).dot(nrm))
+        s_ = ring_dist(mw @ before.get(v.index, v.co))   # 縫環距離（平滑前位置）
         # 帶內頂點位置被平滑動過→用「平滑前」位置＋平滑前面心查 key
         pre_co = before.get(v.index, v.co)
         pre_fc = sum((before.get(me.loops[j].vertex_index, me.vertices[me.loops[j].vertex_index].co) for j in poly.loop_indices), Vector((0,0,0))) / max(1, len(poly.loop_indices))
@@ -188,30 +207,50 @@ def smooth(t):
     t = max(0.0, min(1.0, t)); return t*t*(3-2*t)
 BAND_BODY = 0.02   # 08-16 乳頭沉修：身側帶只到 seam 下 2cm（上胸頂點不進 Neck/Head 帶）
 changed = 0
+# 08-16 拉伸紋真兇：頭側頂點（原 Head=1、無身體群）走 head_w = 1-neck_w 分支＝
+# 帶內 smoothstep 被覆寫 → 縫環兩側一條邊 Head 權重 0.07→0.9 硬跳，12° 俯仰全壓在
+# 一排邊上＝抬頭時縫環處一圈剪切紋（close_up 特寫實錘）。修＝頭側缺身體群的頂點
+# 從**最近身側參考頂點**抄身體群分佈×rem，smoothstep 對整帶連續生效。
+_body_ref = []   # (world co, {group: normalized weight})
 for v in me.vertices:
+    if ring_dist(mw @ v.co) > 0.25: continue
+    if (mw @ v.co - c).dot(nrm) > -BAND_BODY: continue   # 只收帶外身側
+    cur = {gi_name[g.group]: g.weight for g in v.groups if gi_name[g.group] in BODY_GROUPS}
+    tot = sum(cur.values())
+    if tot > 1e-6: _body_ref.append((mw @ v.co, {n: w / tot for n, w in cur.items()}))
+kd_body = KDTree(len(_body_ref))
+for _i, (_p, _) in enumerate(_body_ref): kd_body.insert(_p, _i)
+kd_body.balance()
+print("body-side reference verts:", len(_body_ref))
+n_transfer = 0
+for v in me.vertices:
+    if ring_dist(mw @ v.co) > RING_MAX: continue   # 縫環 10cm 外一律不碰
     s = (mw @ v.co - c).dot(nrm)
     if s > BAND or s < -BAND_BODY: continue
     t = (s + BAND_BODY) / (BAND + BAND_BODY)   # 0 身側緣 → 1 頭側緣（非對稱帶）
     head_w = smooth(t)
-    neck_w = NECK_PEAK * (1.0 - abs(2*t - 1.0))   # 帳篷
+    neck_w = min(NECK_PEAK * (1.0 - abs(2*t - 1.0)), 1.0 - head_w)   # 帳篷（頭側頂端鉗到不超總和 1）
     # 現有非 Head/Neck/MARK/Jiggle 群 = 身體群，等比縮到 rem
     rem = max(0.0, 1.0 - head_w - neck_w)
     cur = {gi_name[g.group]: g.weight for g in v.groups}
     body_tot = sum(w for n, w in cur.items() if n in BODY_GROUPS)
-    for n, w in cur.items():
-        if n in BODY_GROUPS:
-            body.vertex_groups[n].add([v.index], (w / body_tot * rem) if body_tot > 1e-6 else 0.0, 'REPLACE')
-    if body_tot <= 1e-6:
-        # 頭側原本 Head=1：把 Head 讓一部分給 Neck（保總和 1）
-        head_w = 1.0 - neck_w
+    if body_tot > 1e-6:
+        dist = {n: w / body_tot for n, w in cur.items() if n in BODY_GROUPS}
+    else:
+        _, ri, _ = kd_body.find(mw @ v.co)
+        dist = _body_ref[ri][1]; n_transfer += 1
+    for n in BODY_GROUPS:
+        if n in dist or n in cur:
+            body.vertex_groups[n].add([v.index], dist.get(n, 0.0) * rem, 'REPLACE')
     gHead.add([v.index], head_w, 'REPLACE')
     gNeck.add([v.index], neck_w, 'REPLACE')
     changed += 1
-print("neck band weights written on", changed, "verts")
+print("neck band weights written on", changed, "verts; head-side body-dist transferred:", n_transfer)
 # 歸一化檢查：只查頸帶（變形群=骨架真骨；MARK_*/UV 群不算）
 bone_names = {b.name for b in arm.data.bones}
 bad = 0; worst = 0.0
 for v in me.vertices:
+    if ring_dist(mw @ v.co) > RING_MAX: continue
     s = (mw @ v.co - c).dot(nrm)
     if abs(s) > BAND: continue
     tot = sum(g.weight for g in v.groups if gi_name[g.group] in bone_names)
@@ -220,13 +259,13 @@ for v in me.vertices:
 print(f"band verts with bone-weight-sum off by >0.02: {bad} (worst dev {worst:.3f})")
 _diag = collections.Counter()
 for v in me.vertices:
+    if ring_dist(mw @ v.co) > RING_MAX: continue
     s = (mw @ v.co - c).dot(nrm)
     if abs(s) > BAND: continue
     tot = sum(g.weight for g in v.groups if gi_name[g.group] in bone_names)
     if abs(tot - 1.0) > 0.02:
         _diag[tuple(sorted(gi_name[g.group] for g in v.groups if g.weight > 0.01 and gi_name[g.group] in bone_names))] += 1
 print("off-sum group combos:", _diag.most_common(6))
-
 # ---------- ④ 材質槽合併＋匯出（同原腳本） ----------
 if len(body.material_slots) > 1:
     mi = np.zeros(len(me.polygons), np.int32)
