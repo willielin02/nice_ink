@@ -75,21 +75,65 @@ nrm = Vector(vt[-1]);
 if nrm.z < 0: nrm = -nrm   # 朝頭側
 print("seam normal", tuple(round(x,3) for x in nrm), "centroid", tuple(round(x,3) for x in c))
 
-if me.has_custom_normals or True:
-    me.calc_normals_split() if hasattr(me, "calc_normals_split") else None
-    loops_n = [Vector(l.normal) for l in me.loops]
-    # 每個焊縫頂點：其所有 loop 的法線平均後回寫
-    vert_loops = collections.defaultdict(list)
-    for li, l in enumerate(me.loops):
-        if l.vertex_index in seam_idx: vert_loops[l.vertex_index].append(li)
-    for vi, lis in vert_loops.items():
-        avg = Vector((0,0,0))
-        for li in lis: avg += loops_n[li]
-        if avg.length > 1e-6:
-            avg.normalize()
-            for li in lis: loops_n[li] = avg
-    me.normals_split_custom_set([tuple(n) for n in loops_n])
-    print("seam normals averaged on", len(vert_loops), "verts")
+# ---------- ①b 頸帶幾何平滑（08-16 user 定案：脖區建模面形千奇百怪→只動 xyz、
+#            UV0/拓樸/頂點數一字不動；帶外零變化＝邊界固定） ----------
+SMOOTH_BAND = 0.05     # seam 平面上下各 5cm 內參與平滑
+SMOOTH_FADE = 0.015    # 帶緣 1.5cm 內權重淡出到 0（邊界固定不動）
+SMOOTH_ITER = 8
+SMOOTH_FACTOR = 0.5
+gSm = body.vertex_groups.get("NeckSmooth") or body.vertex_groups.new(name="NeckSmooth")
+n_in = 0
+for v in me.vertices:
+    s = abs((mw @ v.co - c).dot(nrm))
+    if s > SMOOTH_BAND:
+        gSm.add([v.index], 0.0, 'REPLACE'); continue
+    w = 1.0 if s < SMOOTH_BAND - SMOOTH_FADE else (SMOOTH_BAND - s) / SMOOTH_FADE
+    gSm.add([v.index], max(0.0, min(1.0, w)), 'REPLACE'); n_in += 1
+sm = body.modifiers.new("NeckSmooth", 'SMOOTH')
+sm.iterations = SMOOTH_ITER; sm.factor = SMOOTH_FACTOR; sm.vertex_group = "NeckSmooth"
+# 平滑必須在 armature 修飾器之前作用於 rest 網格：暫時移到堆疊最前
+bpy.context.view_layer.objects.active = body; body.select_set(True)
+with bpy.context.temp_override(object=body, active_object=body):
+    while body.modifiers.find(sm.name) > 0:
+        bpy.ops.object.modifier_move_up(modifier=sm.name)
+    # 記錄平滑前後位移量（自檢：只有帶內動、量級 mm 級）
+    before = {v.index: v.co.copy() for v in me.vertices}
+    bpy.ops.object.modifier_apply(modifier=sm.name)
+# 位移鉗位：單頂點最多 SMOOTH_MAX_MM（保剪影；平滑只該抹掉 mm 級歪面，超過=在改形）
+SMOOTH_MAX_MM = 8.0
+clamped = 0
+for i, b in before.items():
+    d = me.vertices[i].co - b
+    if d.length * 1000.0 > SMOOTH_MAX_MM:
+        me.vertices[i].co = b + d.normalized() * (SMOOTH_MAX_MM / 1000.0); clamped += 1
+disp = [(me.vertices[i].co - before[i]).length for i in before]
+moved = [d for d in disp if d > 1e-6]
+print(f"neck smooth: band verts={n_in} moved={len(moved)} max={max(moved)*1000:.2f}mm mean={sum(moved)/max(1,len(moved))*1000:.2f}mm clamped={clamped}")
+assert len(me.vertices) == n1, "smooth changed vertex count?!"
+body.vertex_groups.remove(body.vertex_groups["NeckSmooth"])  # 工作用群不進 SK（apply 後重取參照）
+
+# ---------- ② 全身柔化法線重烘（沿用 sumo_soft_normals_bake 管線；含焊縫區） ----------
+def bake_soft_normals(ob, it=12, fac=0.5):
+    src = ob.copy(); src.data = ob.data.copy(); src.name = ob.name + "_NormalSrc"
+    bpy.context.collection.objects.link(src)
+    m = src.modifiers.new("Soften", 'SMOOTH'); m.iterations = it; m.factor = fac
+    bpy.context.view_layer.objects.active = src
+    with bpy.context.temp_override(object=src, active_object=src):
+        # 副本上 armature 等修飾器一律先移除（只要 rest 幾何的平滑法線）
+        for mm in list(src.modifiers):
+            if mm.name != m.name: src.modifiers.remove(mm)
+        bpy.ops.object.modifier_apply(modifier=m.name)
+    dt = ob.modifiers.new("NormalXfer", 'DATA_TRANSFER')
+    dt.object = src; dt.use_loop_data = True; dt.data_types_loops = {'CUSTOM_NORMAL'}; dt.loop_mapping = 'TOPOLOGY'
+    bpy.context.view_layer.objects.active = ob
+    with bpy.context.temp_override(object=ob, active_object=ob):
+        while ob.modifiers.find(dt.name) > 0:
+            bpy.ops.object.modifier_move_up(modifier=dt.name)
+        bpy.ops.object.modifier_apply(modifier=dt.name)
+    bpy.data.objects.remove(src, do_unlink=True)
+    assert ob.data.has_custom_normals, "normal transfer failed"
+bake_soft_normals(body)
+print("soft normals re-baked (whole body incl. seam)")
 
 # ---------- ③ 頸帶權重 ----------
 def group(name):
@@ -101,11 +145,12 @@ BODY_GROUPS = {"Spine1", "Spine2", "LeftShoulder", "RightShoulder", "LeftArm", "
                "Jiggle_Belly", "Jiggle_Chest_L", "Jiggle_Chest_R"}  # 身側質量含胸/肚彈跳骨（等比縮、保相對份額）
 def smooth(t): 
     t = max(0.0, min(1.0, t)); return t*t*(3-2*t)
+BAND_BODY = 0.02   # 08-16 乳頭沉修：身側帶只到 seam 下 2cm（上胸頂點不進 Neck/Head 帶）
 changed = 0
 for v in me.vertices:
     s = (mw @ v.co - c).dot(nrm)
-    if abs(s) > BAND: continue
-    t = (s + BAND) / (2*BAND)          # 0 身側 → 1 頭側
+    if s > BAND or s < -BAND_BODY: continue
+    t = (s + BAND_BODY) / (BAND + BAND_BODY)   # 0 身側緣 → 1 頭側緣（非對稱帶）
     head_w = smooth(t)
     neck_w = NECK_PEAK * (1.0 - abs(2*t - 1.0))   # 帳篷
     # 現有非 Head/Neck/MARK/Jiggle 群 = 身體群，等比縮到 rem

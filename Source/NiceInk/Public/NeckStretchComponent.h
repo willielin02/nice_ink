@@ -72,8 +72,10 @@ public:
 	// 短脖頸皮「袖套」（08-16 user 定案：站立/作畫另設程序化脖子）：切縫上下各
 	// OuterSteps 圈 rest 真幾何貼在殼面上（真法線/同源膚色），沿法線外推 seam 側 +、
 	// 最外圈 −（邊緣潛入殼面）；弦長 > SleeveMaxChord（甦醒升起）整片塌回不畫
+	// 08-16 終案後預設關：站立/作畫=縫合版（不走伸縮脖）、切開版只剩沉睡者（原設計
+	// 安座即收合）；袖套程式保留備選（orbit「安座隱藏」契約在 true 時會破）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck")
-	bool bNeckSleeveEnabled = true;
+	bool bNeckSleeveEnabled = false;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "60"))
 	float NeckSleeveMaxChordCm = 15.0f;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Neck", meta = (ClampMin = "0", ClampMax = "2"))

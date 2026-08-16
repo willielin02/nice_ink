@@ -4324,9 +4324,8 @@ bool ANiceInkCharacter::EnsurePoseableAsset(UPoseableMeshComponent* Poseable)
 	{
 		BowMeshWhole = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/SK_Sumo_Whole.SK_Sumo_Whole"));
 	}
-	// BowBody 首載＝切開版（08-15 user 定案：站立/作畫/睡姿全用切開版＋程序化伸縮脖，
-	// 縫合版 SK_Sumo_Whole 資產保留可切回）
-	USkeletalMesh* First = BowMesh.Get();
+	// BowBody 首載＝縫合版（08-16 終案；缺席退回切開版）
+	USkeletalMesh* First = (Poseable == BowBody && BowMeshWhole) ? BowMeshWhole.Get() : BowMesh.Get();
 	if (Poseable == BowBody)
 	{
 		bBowBodyIsWhole = (First == BowMeshWhole && BowMeshWhole != nullptr);
@@ -4783,7 +4782,7 @@ void ANiceInkCharacter::ApplyBowPose()
 	{
 		return;
 	}
-	SetBowBodyVariant(/*bWhole=*/false); // 作畫姿＝切開版＋程序化伸縮脖（08-15 user 定案：與甦醒者同品質同一條脖子）
+	SetBowBodyVariant(/*bWhole=*/true); // 作畫姿＝縫合版（08-16 終案：原生 UV0 可畫、脖區幾何平滑＋軟法線重烘＋非對稱權重帶）
 	const float Az = EffectiveDrawAz();
 	const float Tilt = EffectiveDrawTilt();
 	// 門檻 0.05°（原 0.2 的量化微跳已由 One Euro 靜止凍結取代——濾波輸出靜止時
@@ -6604,7 +6603,7 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 
 	if (!bStandDoubleActive)
 	{
-		SetBowBodyVariant(/*bWhole=*/false); // 站立/走路＝切開版＋程序化伸縮脖（08-15 user 定案）
+		SetBowBodyVariant(/*bWhole=*/true); // 站立/走路＝縫合版（08-16 終案）
 		bStandDoubleActive = true;
 		bGaitIdleWritten = false;
 		bStandLookWritten = false;
