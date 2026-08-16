@@ -39,6 +39,12 @@
 #include "NiceInkTypes.h"
 #include "Sound/SoundBase.h"
 #include "UObject/ConstructorHelpers.h"
+#include "HAL/IConsoleManager.h"
+
+// 08-16 中線疤二分儀器：站立/作畫用縫合版(1)或切開版(0)——runtime 切換好定罪「是不是網格」
+static int32 GNiStandWhole = 1;
+static FAutoConsoleVariableRef CVarNiStandWhole(TEXT("ni.StandWhole"), GNiStandWhole,
+	TEXT("1=stand/lean use SK_Sumo_Whole (default); 0=use cut SK_Sumo (bisect)"));
 
 namespace
 {
@@ -4782,7 +4788,7 @@ void ANiceInkCharacter::ApplyBowPose()
 	{
 		return;
 	}
-	SetBowBodyVariant(/*bWhole=*/true); // 作畫姿＝縫合版（08-16 終案：原生 UV0 可畫、脖區幾何平滑＋軟法線重烘＋非對稱權重帶）
+	SetBowBodyVariant(/*bWhole=*/GNiStandWhole != 0); // 作畫姿＝縫合版（08-16 終案：原生 UV0 可畫、脖區幾何平滑＋軟法線重烘＋非對稱權重帶）
 	const float Az = EffectiveDrawAz();
 	const float Tilt = EffectiveDrawTilt();
 	// 門檻 0.05°（原 0.2 的量化微跳已由 One Euro 靜止凍結取代——濾波輸出靜止時
@@ -6603,7 +6609,7 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 
 	if (!bStandDoubleActive)
 	{
-		SetBowBodyVariant(/*bWhole=*/true); // 站立/走路＝縫合版（08-16 終案）
+		SetBowBodyVariant(/*bWhole=*/GNiStandWhole != 0); // 站立/走路＝縫合版（08-16 終案）
 		bStandDoubleActive = true;
 		bGaitIdleWritten = false;
 		bStandLookWritten = false;

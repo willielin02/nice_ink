@@ -18,7 +18,7 @@ from mathutils import Vector
 
 MASTER = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_character_master.blend"
 OUT_FBX = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_skeletal_whole.fbx"
-BAND = 0.10   # 頸帶頭側半寬（m）：08-16 抬頭側面橫紋修 6→10cm（剪切攤到更多排）
+BAND = 0.05   # 頸帶頭側半寬（m）：08-16 喉部污斑定罪＝10cm 帶讓下顎底（臉貼圖陰影區）跟身體垂下露出→收回 5cm；拉伸紋真兇是縫邊硬跳（已修）不是帶寬
 NECK_PEAK = 0.30  # Neck 帳篷峰值（08-16 0.45→0.30：Head↔Spine1 更直接的漸變＝更平順）
 
 bpy.ops.wm.open_mainfile(filepath=MASTER)
@@ -42,6 +42,9 @@ for pidx, poly in enumerate(me.polygons):
         master_loop_n[_lkey(me.vertices[l.vertex_index].co, fc)] = Vector(l.normal)
 print("master loop normals snapshot:", len(master_loop_n))
 
+import os
+STAGE = os.environ.get('NI_STAGE', 'all')   # 二分用：weld | smooth | normals | all
+print('STAGE', STAGE)
 # ---------- ① 焊縫 ----------
 face_count = collections.Counter()
 for p in me.polygons:
@@ -97,21 +100,23 @@ for _i, _p in enumerate(seam_pts): kd_seam.insert(_p, _i)
 kd_seam.balance()
 def ring_dist(world_co):
     return kd_seam.find(world_co)[2]
-RING_MAX = 0.10   # 縫環 10cm 外＝絕對不是脖子帶（頭側權重帶 BAND 0.10 為上限）
+RING_MAX = 0.07   # 縫環 7cm 外＝絕對不是脖子帶（≥ max(BAND, SMOOTH_BAND)）
 
 # ---------- ①b 頸帶幾何平滑（08-16 user 定案：脖區建模面形千奇百怪→只動 xyz、
 #            UV0/拓樸/頂點數一字不動；帶外零變化＝邊界固定） ----------
 SMOOTH_BAND = 0.07     # seam 平面上下各 5cm 內參與平滑
 SMOOTH_FADE = 0.015    # 帶緣 1.5cm 內權重淡出到 0（邊界固定不動）
-SMOOTH_ITER = 30
+SMOOTH_ITER = 30 if STAGE != 'weld' else 0
 SMOOTH_FACTOR = 0.5
 gSm = body.vertex_groups.get("NeckSmooth") or body.vertex_groups.new(name="NeckSmooth")
 n_in = 0
+SMOOTH_BAND_HEAD = 0.025   # 08-16 喉部污斑定罪：頭側平滑 7cm 把下顎底/喉前抹凹＝臉貼圖下顎陰影糊成一坨→頭側只 2.5cm
 for v in me.vertices:
     s = ring_dist(mw @ v.co)   # 到縫環距離（不是平面距離）
-    if s > SMOOTH_BAND:
+    band_here = SMOOTH_BAND if (mw @ v.co - c).dot(nrm) < 0.0 else SMOOTH_BAND_HEAD
+    if s > band_here:
         gSm.add([v.index], 0.0, 'REPLACE'); continue
-    w = 1.0 if s < SMOOTH_BAND - SMOOTH_FADE else (SMOOTH_BAND - s) / SMOOTH_FADE
+    w = 1.0 if s < band_here - SMOOTH_FADE else (band_here - s) / SMOOTH_FADE
     gSm.add([v.index], max(0.0, min(1.0, w)), 'REPLACE'); n_in += 1
 sm = body.modifiers.new("NeckSmooth", 'SMOOTH')
 sm.iterations = SMOOTH_ITER; sm.factor = SMOOTH_FACTOR; sm.vertex_group = "NeckSmooth"
@@ -165,10 +170,10 @@ def bake_soft_normals(ob, it=12, fac=0.5):
         bpy.ops.object.modifier_apply(modifier=dt.name)
     bpy.data.objects.remove(src, do_unlink=True)
     assert ob.data.has_custom_normals, "normal transfer failed"
-bake_soft_normals(body, it=40)  # 08-16 帶內法線來源加倍平滑（帶外反正 100% 抄 master）：抬頭拉伸橫紋=排陰影，法線比幾何更能壓
+bake_soft_normals(body, it=4)  # 08-16 喉部污斑：帶內法線來源 40 趟過度平滑＝下顎底向下法線的暗面被抹寬成一坨；4 趟＝法線跟著實際（已平滑）幾何走
 # 帶外原封抄回 master 法線；帶內以 SMOOTH_BAND 內距離做淡入（帶緣=master、seam=重烘）
 me.calc_normals_split() if hasattr(me, "calc_normals_split") else None
-NBLEND_BAND = SMOOTH_BAND
+NBLEND_BAND = SMOOTH_BAND if STAGE not in ('weld','smooth') else -1.0
 out_n = []; n_master = n_blend = n_miss = 0
 for poly in me.polygons:
     fc = poly.center
@@ -223,7 +228,7 @@ for _i, (_p, _) in enumerate(_body_ref): kd_body.insert(_p, _i)
 kd_body.balance()
 print("body-side reference verts:", len(_body_ref))
 n_transfer = 0
-for v in me.vertices:
+for v in (me.vertices if STAGE in ('all', 'all4') else []):  # all=正式（含下方 limit 4）
     if ring_dist(mw @ v.co) > RING_MAX: continue   # 縫環 10cm 外一律不碰
     s = (mw @ v.co - c).dot(nrm)
     if s > BAND or s < -BAND_BODY: continue
@@ -266,6 +271,21 @@ for v in me.vertices:
     if abs(tot - 1.0) > 0.02:
         _diag[tuple(sorted(gi_name[g.group] for g in v.groups if g.weight > 0.01 and gi_name[g.group] in bone_names))] += 1
 print("off-sum group combos:", _diag.most_common(6))
+# ③b 下顎底臉罩淡出：閘門是 T_FaceMask 貼圖（UV0）不是 FaceMask 頂點色（頂點色歸零實測零效果）
+#     → 改在 sumo_face_mask_jawfade.py 處理貼圖；本腳本不動頂點色。
+# 08-16 中線疤真兇（NiShot 二分 weld/smooth/normals/all/all4 定罪）：頸帶權重把帶內頂點
+# 推到 5~6 影響骨 → UE section MaxBoneInfluences 4→6 → 整個身體 section 換 8 影響 GPU 蒙皮
+# 路徑 → 肚子中線鏡射縫/喉部污斑（渲染緩衝逐位相同也看得見＝路徑差不是資料差）。
+# 鐵則：每頂點影響骨上限 4＝與切開版同路徑（cut section maxInfl=4）。
+if STAGE in ('all', 'all4'):
+    bpy.context.view_layer.objects.active = body; body.select_set(True)
+    with bpy.context.temp_override(object=body, active_object=body):
+        bpy.ops.object.mode_set(mode='EDIT'); bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.object.mode_set(mode='WEIGHT_PAINT')
+        bpy.ops.object.vertex_group_limit_total(group_select_mode='BONE_DEFORM', limit=4)
+        bpy.ops.object.vertex_group_normalize_all(group_select_mode='BONE_DEFORM', lock_active=False)
+        bpy.ops.object.mode_set(mode='OBJECT')
+    print("limit_total 4 applied")
 # ---------- ④ 材質槽合併＋匯出（同原腳本） ----------
 if len(body.material_slots) > 1:
     mi = np.zeros(len(me.polygons), np.int32)

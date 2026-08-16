@@ -188,7 +188,7 @@ void UNiceInkGameInstance::NiDumpSK(const FString& AssetPath, const FString& Out
 	const bool bHasColor = LOD.StaticVertexBuffers.ColorVertexBuffer.GetNumVertices() == N;
 	const uint32 NumUV = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetNumTexCoords();
 	FString Out; Out.Reserve(N * 160);
-	Out += TEXT("sec,i,px,py,pz,nx,ny,nz,tx,ty,tz,u0,v0,u1,v1,r,g,b,a,b0,w0,b1,w1,b2,w2,b3,w3\n");
+	Out += TEXT("sec,i,px,py,pz,nx,ny,nz,tx,ty,tz,u0,v0,u1,v1,r,g,b,a,b0,w0,b1,w1,b2,w2,b3,w3,u2,v2,by0,by1,by2\n");
 	for (int32 S = 0; S < LOD.RenderSections.Num(); ++S)
 	{
 		const FSkelMeshRenderSection& Sec = LOD.RenderSections[S];
@@ -200,6 +200,8 @@ void UNiceInkGameInstance::NiDumpSK(const FString& AssetPath, const FString& Out
 			const FVector3f T = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.VertexTangentX(i);
 			const FVector2f UV0 = NumUV > 0 ? LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 0) : FVector2f::ZeroVector;
 			const FVector2f UV1 = NumUV > 1 ? LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 1) : FVector2f::ZeroVector;
+			const FVector3f Bn = LOD.StaticVertexBuffers.StaticMeshVertexBuffer.VertexTangentY(i);
+			const FVector2f UV2 = NumUV > 2 ? LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetVertexUV(i, 2) : FVector2f::ZeroVector;
 			const FColor C = bHasColor ? LOD.StaticVertexBuffers.ColorVertexBuffer.VertexColor(i) : FColor::Black;
 			int32 B[4] = {0,0,0,0}; float W[4] = {0,0,0,0};
 			for (int32 j = 0; j < 4; ++j)
@@ -208,12 +210,34 @@ void UNiceInkGameInstance::NiDumpSK(const FString& AssetPath, const FString& Out
 				B[j] = Sec.BoneMap.IsValidIndex(Local) ? (int32)Sec.BoneMap[Local] : -1;
 				W[j] = LOD.SkinWeightVertexBuffer.GetBoneWeight(i, j) / 65535.0f;
 			}
-			Out += FString::Printf(TEXT("%d,%u,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%.4f,%d,%.4f,%d,%.4f,%d,%.4f\n"),
+			Out += FString::Printf(TEXT("%d,%u,%.4f,%.4f,%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.6f,%.6f,%.6f,%.6f,%d,%d,%d,%d,%d,%.4f,%d,%.4f,%d,%.4f,%d,%.4f,%.6f,%.6f,%.4f,%.4f,%.4f\n"),
 				S, i, P.X, P.Y, P.Z, Nn.X, Nn.Y, Nn.Z, T.X, T.Y, T.Z, UV0.X, UV0.Y, UV1.X, UV1.Y, C.R, C.G, C.B, C.A,
-				B[0], W[0], B[1], W[1], B[2], W[2], B[3], W[3]);
+				B[0], W[0], B[1], W[1], B[2], W[2], B[3], W[3], UV2.X, UV2.Y, Bn.X, Bn.Y, Bn.Z);
 		}
 	}
 	FFileHelper::SaveStringToFile(Out, *OutPath);
+	UE_LOG(LogTemp, Warning, TEXT("NiDumpSK fmt: hiPrecTangent=%d fullPrecUV=%d maxInfl=%d use16BitBoneIdx=%d hasCloth=%d hasMorph=%d ver=%d numBones=%d requiredBones=%d"),
+		LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetUseHighPrecisionTangentBasis() ? 1 : 0,
+		LOD.StaticVertexBuffers.StaticMeshVertexBuffer.GetUseFullPrecisionUVs() ? 1 : 0,
+		(int32)LOD.SkinWeightVertexBuffer.GetMaxBoneInfluences(), LOD.SkinWeightVertexBuffer.Use16BitBoneIndex() ? 1 : 0,
+		LOD.HasClothData() ? 1 : 0, SK->GetMorphTargets().Num(), (int32)LOD.BuffersSize, SK->GetRefSkeleton().GetNum(), LOD.RequiredBones.Num());
+	for (int32 S = 0; S < LOD.RenderSections.Num(); ++S)
+	{
+		const FSkelMeshRenderSection& Sec = LOD.RenderSections[S];
+		UE_LOG(LogTemp, Warning, TEXT("NiDumpSK sec%d: mat=%d base=%u tris=%u verts=%u maxInfl=%d recomputeTangent=%d recomputeVtxMask=%d castShadow=%d disabled=%d bones=%d"),
+			S, Sec.MaterialIndex, Sec.BaseIndex, Sec.NumTriangles, Sec.NumVertices, Sec.MaxBoneInfluences, Sec.bRecomputeTangent ? 1 : 0, (int32)Sec.RecomputeTangentsVertexMaskChannel, Sec.bCastShadow ? 1 : 0, Sec.bDisabled ? 1 : 0, Sec.BoneMap.Num());
+	}
+	// ref pose：每骨 CS 位置（bind pose 差異＝同骨轉換下蒙皮結果不同）
+	{
+		const FReferenceSkeleton& RS = SK->GetRefSkeleton();
+		FString Bones;
+		for (int32 b = 0; b < RS.GetNum(); ++b)
+		{
+			const FTransform& T = RS.GetRefBonePose()[b];
+			Bones += FString::Printf(TEXT("%s|%.3f,%.3f,%.3f|%.4f,%.4f,%.4f,%.4f;"), *RS.GetBoneName(b).ToString(), T.GetLocation().X, T.GetLocation().Y, T.GetLocation().Z, T.GetRotation().X, T.GetRotation().Y, T.GetRotation().Z, T.GetRotation().W);
+		}
+		FFileHelper::SaveStringToFile(Bones, *(OutPath + TEXT(".bones.txt")));
+	}
 	UE_LOG(LogTemp, Warning, TEXT("NiDumpSK: %s -> %s (%u verts, %d sections, uv=%u, color=%d)"), *AssetPath, *OutPath, N, LOD.RenderSections.Num(), NumUV, bHasColor ? 1 : 0);
 }
 

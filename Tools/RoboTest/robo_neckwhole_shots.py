@@ -55,13 +55,14 @@ class Probe:
         i = 1 if side else 0
         dyaw = (0.0, 90.0, 180.0, 270.0)[i % 4] if isinstance(side, bool) else float(side)
         ang = math.radians(yaw0 + dyaw)
-        dist = 45.0 if name.startswith('close') else 85.0   # close_*=脖側特寫（08-16 抬頭拉伸紋調查）
-        cam = unreal.Vector(mloc.x + dist * math.cos(ang), mloc.y + dist * math.sin(ang), mloc.z + (55.0 if name.startswith('close') else 40.0))
+        dist = 45.0 if name.startswith('close') else (130.0 if name.startswith('belly') else 85.0)   # close_*=脖側特寫；belly_*=軀幹正面（08-16 中線疤 A/B）
+        camz = 55.0 if name.startswith('close') else (10.0 if name.startswith('belly') else 40.0)
+        cam = unreal.Vector(mloc.x + dist * math.cos(ang), mloc.y + dist * math.sin(ang), mloc.z + camz)
         h.set_actor_location(cam, False, True)
         look = unreal.MathLibrary.find_look_at_rotation(
-            unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z + 62.0))
+            unreal.Vector(cam.x, cam.y, cam.z + 62.0), unreal.Vector(mloc.x, mloc.y, mloc.z + (30.0 if name.startswith('belly') else 62.0)))
         pc.set_control_rotation(look)
-        unreal.SystemLibrary.execute_console_command(server, f"HighResShot {'1920x1080' if name.startswith('close') else '1280x720'} filename=neckwhole_{name}")
+        unreal.SystemLibrary.execute_console_command(server, f"HighResShot {'1920x1080' if (name.startswith('close') or name.startswith('belly')) else '1280x720'} filename=neckwhole_{name}")
         log(f"shot {name} dyaw={dyaw}")
 
     def step(self):
@@ -70,6 +71,11 @@ class Probe:
             if time.monotonic() - self.t0 > 8.0:
                 eps = unreal.find_object(None, "/Script/UnrealEd.Default__EditorPerformanceSettings")
                 if eps: eps.set_editor_property("bThrottleCPUWhenNotForeground", False)
+                # A/B：Saved/robo_standwhole.txt 內容 0/1 → ni.StandWhole（process 全域 cvar，PIE 開前設）
+                try:
+                    _flag = open("C:/games/Unreal Engine/nice_ink/Saved/robo_standwhole.txt").read().strip()
+                    unreal.SystemLibrary.execute_console_command(None, f"ni.StandWhole {_flag}"); log(f"ni.StandWhole {_flag}")
+                except Exception as _e: log("no standwhole flag: " + str(_e))
                 unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).editor_request_begin_play(); self.advance("wait_pie")
         elif s == "wait_pie":
             w = self.server()
@@ -92,6 +98,8 @@ class Probe:
                 for pname, act in (("stand", pitch(0)), ("up", pitch(60)), ("down", pitch(-60))):
                     for qi, q in enumerate(quads):
                         self.plan.append((f"{pname}_q{qi}", act if qi == 0 else None, q))
+                for qi, q in enumerate((0.0, 180.0)):
+                    self.plan.append((f"belly_q{qi}", pitch(0) if qi == 0 else None, q))
                 # 脖側特寫：抬頭到頂（89→視覺 12°）＋平視對照，四個斜側角
                 for pname, act in (("close_up", pitch(89)), ("close_flat", pitch(0))):
                     for qi, q in enumerate((60.0, 120.0, 240.0, 300.0)):

@@ -16,6 +16,9 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSaveGame.h"
+#include "HAL/IConsoleManager.h"
+static int32 GNiMenuTattoos = 1;
+static FAutoConsoleVariableRef CVarNiMenuTattoos(TEXT("ni.MenuTattoos"), GNiMenuTattoos, TEXT("0=dancer skips cloud tattoos (bisect)"));
 
 ANiceInkMenuStage::ANiceInkMenuStage()
 {
@@ -172,7 +175,7 @@ void ANiceInkMenuStage::DressDancerFromPersona()
 	}
 
 	// 雲端刺青：靜默登入拉到資產後，把碳黑/永久重播上替身畫布（一次性）
-	if (!bCloudTattoosApplied)
+	if (!bCloudTattoosApplied && GNiMenuTattoos != 0)
 	{
 		if (UNiceInkSaveGame* Save = Persona->GetCloudSaveView())
 		{

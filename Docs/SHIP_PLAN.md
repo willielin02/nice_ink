@@ -1012,3 +1012,17 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   迴歸 lookpitch 9/0、gait 10/0、orbit 24、feign 26。**教訓：對賬對象＝引擎真正渲染的
   緩衝（不是 blend 記憶體）；「帶」的定義要跟幾何走（環距離）不跟平面走；user 說還在
   ＝我的量尺錯了，先換量尺再轉旋鈕。**
+  **續③（user 「幾乎沒變」＋截圖：肚子中線一條、喉部髒一坨、抬頭脖子與下頷同粗）→ 停止
+  轉旋鈕、改做 runtime 二分**：新儀器 cvar `ni.StandWhole 0/1`（站立用縫合/切開版）＋
+  `ni.MenuTattoos`、選單 NiShot 五幀網格、build 腳本 `NI_STAGE=weld|smooth|normals|all|all4`
+  逐級匯入拍照。結果：**渲染緩衝逐位相同仍看得見差異＝路徑差不是資料差**——①中線疤真兇
+  ＝頸帶權重讓帶內頂點 5~6 影響骨→UE section MaxBoneInfluences 4→6→整個身體 section 換
+  8 影響 GPU 蒙皮路徑→鏡射縫變色（all4=limit_total 4 一刀消失）→鐵則：每頂點影響骨≤4
+  ＝與切開版同路徑；②喉部污斑＝下顎底向下法線的暗面（假頭燈）被 40 趟過度平滑的法線
+  來源抹寬（切開版是硬摺=一條線）；FaceMask 頂點色歸零零效果→證明臉閘門=T_FaceMask
+  貼圖（UV0）；貼圖沿頭側 2~6cm 淡出（sumo_face_mask_jawfade.py、原檔 face_mask_orig.png）
+  ＋法線來源 4 趟＝跟實際幾何走→暗面收成自然下顎陰影；③抬頭下顎垂：頭側權重帶 10cm
+  →5cm（下顎底不再跟身體垂）。iter/驗證：lookpitch 9/0、gait 10/0、maxInfl=4 實錄。
+  **教訓：HighResShot 同名不覆蓋（00001/00002 疊號）＝比對圖要先刪舊檔；grep 過濾管線會
+  吞掉關鍵訊息（匯入時間戳）＝驗證行不能被過濾；「資料相同仍不同」→ 查引擎路徑選擇
+  （影響數/頂點格式/section 旗標）。**
