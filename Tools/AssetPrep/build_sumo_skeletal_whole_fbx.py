@@ -18,8 +18,8 @@ from mathutils import Vector
 
 MASTER = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_character_master.blend"
 OUT_FBX = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_skeletal_whole.fbx"
-BAND = 0.06   # 頸帶半寬（m）：焊縫上下各 6cm 參與 Neck/Head 漸變
-NECK_PEAK = 0.45  # Neck 帳篷峰值（s=0）；其餘給 Head/身體
+BAND = 0.10   # 頸帶頭側半寬（m）：08-16 抬頭側面橫紋修 6→10cm（剪切攤到更多排）
+NECK_PEAK = 0.30  # Neck 帳篷峰值（08-16 0.45→0.30：Head↔Spine1 更直接的漸變＝更平順）
 
 bpy.ops.wm.open_mainfile(filepath=MASTER)
 if bpy.context.object and bpy.context.object.mode != 'OBJECT':
@@ -27,6 +27,20 @@ if bpy.context.object and bpy.context.object.mode != 'OBJECT':
 body = bpy.data.objects["SumoRetopo"]; arm = bpy.data.objects["Skeleton_Plus-size"]; me = body.data
 mw = body.matrix_world
 n0 = len(me.vertices)
+
+# ---------- ⓪ 快照 master 的 custom loop normals（08-16 審計：全身重烘與 master 差 p95 12°/
+#            max 73°＝把 user 08-05 驗收過的法線整組換掉＝身體中線「蟹足腫」真兇）。
+#            帶外一律原封抄回；帶內才用重烘值（帶緣淡入）。key=loop 的 (頂點座標, 面心) ----------
+me.calc_normals_split() if hasattr(me, "calc_normals_split") else None
+def _lkey(vco, fc):
+    return (round(vco.x,5), round(vco.y,5), round(vco.z,5), round(fc.x,4), round(fc.y,4), round(fc.z,4))
+master_loop_n = {}
+for pidx, poly in enumerate(me.polygons):
+    fc = poly.center
+    for li in poly.loop_indices:
+        l = me.loops[li]
+        master_loop_n[_lkey(me.vertices[l.vertex_index].co, fc)] = Vector(l.normal)
+print("master loop normals snapshot:", len(master_loop_n))
 
 # ---------- ① 焊縫 ----------
 face_count = collections.Counter()
@@ -79,7 +93,7 @@ print("seam normal", tuple(round(x,3) for x in nrm), "centroid", tuple(round(x,3
 #            UV0/拓樸/頂點數一字不動；帶外零變化＝邊界固定） ----------
 SMOOTH_BAND = 0.05     # seam 平面上下各 5cm 內參與平滑
 SMOOTH_FADE = 0.015    # 帶緣 1.5cm 內權重淡出到 0（邊界固定不動）
-SMOOTH_ITER = 8
+SMOOTH_ITER = 12
 SMOOTH_FACTOR = 0.5
 gSm = body.vertex_groups.get("NeckSmooth") or body.vertex_groups.new(name="NeckSmooth")
 n_in = 0
@@ -100,7 +114,7 @@ with bpy.context.temp_override(object=body, active_object=body):
     before = {v.index: v.co.copy() for v in me.vertices}
     bpy.ops.object.modifier_apply(modifier=sm.name)
 # 位移鉗位：單頂點最多 SMOOTH_MAX_MM（保剪影；平滑只該抹掉 mm 級歪面，超過=在改形）
-SMOOTH_MAX_MM = 8.0
+SMOOTH_MAX_MM = 12.0
 clamped = 0
 for i, b in before.items():
     d = me.vertices[i].co - b
@@ -108,7 +122,7 @@ for i, b in before.items():
         me.vertices[i].co = b + d.normalized() * (SMOOTH_MAX_MM / 1000.0); clamped += 1
 disp = [(me.vertices[i].co - before[i]).length for i in before]
 moved = [d for d in disp if d > 1e-6]
-print(f"neck smooth: band verts={n_in} moved={len(moved)} max={max(moved)*1000:.2f}mm mean={sum(moved)/max(1,len(moved))*1000:.2f}mm clamped={clamped}")
+print(f"neck smooth: band verts={n_in} moved={len(moved)} max={(max(moved) if moved else 0)*1000:.2f}mm mean={sum(moved)/max(1,len(moved))*1000:.2f}mm clamped={clamped}")
 assert len(me.vertices) == n1, "smooth changed vertex count?!"
 body.vertex_groups.remove(body.vertex_groups["NeckSmooth"])  # 工作用群不進 SK（apply 後重取參照）
 
@@ -133,7 +147,34 @@ def bake_soft_normals(ob, it=12, fac=0.5):
     bpy.data.objects.remove(src, do_unlink=True)
     assert ob.data.has_custom_normals, "normal transfer failed"
 bake_soft_normals(body)
-print("soft normals re-baked (whole body incl. seam)")
+# 帶外原封抄回 master 法線；帶內以 SMOOTH_BAND 內距離做淡入（帶緣=master、seam=重烘）
+me.calc_normals_split() if hasattr(me, "calc_normals_split") else None
+NBLEND_BAND = SMOOTH_BAND
+out_n = []; n_master = n_blend = n_miss = 0
+for poly in me.polygons:
+    fc = poly.center
+    for li in poly.loop_indices:
+        l = me.loops[li]; v = me.vertices[l.vertex_index]
+        baked = Vector(l.normal)
+        s_ = abs((mw @ v.co - c).dot(nrm))
+        # 帶內頂點位置被平滑動過→用「平滑前」位置＋平滑前面心查 key
+        pre_co = before.get(v.index, v.co)
+        pre_fc = sum((before.get(me.loops[j].vertex_index, me.vertices[me.loops[j].vertex_index].co) for j in poly.loop_indices), Vector((0,0,0))) / max(1, len(poly.loop_indices))
+        m_ = master_loop_n.get(_lkey(pre_co, pre_fc))
+        if s_ >= NBLEND_BAND:
+            if m_ is not None: out_n.append(m_); n_master += 1
+            else: out_n.append(baked); n_miss += 1
+        else:
+            # 帶內主體＝重烘（平滑副本轉印＝逐排連續）；只在帶緣最後 20% 淡入 master
+            # （08-16 抬頭側面橫紋定罪：帶內混入 master 的切殼移植法線＝逐排參考系不同）
+            t = max(0.0, (s_ / NBLEND_BAND - 0.8) / 0.2)
+            if m_ is not None and t > 0.0:
+                mixv = (baked * (1.0 - t) + m_ * t)
+                out_n.append(mixv.normalized() if mixv.length > 1e-6 else baked); n_blend += 1
+            else:
+                out_n.append(baked); n_blend += 1
+me.normals_split_custom_set([tuple(n) for n in out_n])
+print(f"normals: outside band restored from master={n_master} (miss={n_miss}), band blended={n_blend}")
 
 # ---------- ③ 頸帶權重 ----------
 def group(name):
