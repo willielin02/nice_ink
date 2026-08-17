@@ -492,6 +492,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.5", ClampMax = "8"))
 	float JiggleButtHz = 3.2f;
 
+	// 收斂終止門檻（2026-08-18）：偏移與相對速度都低於此＝**寫入精確 rest、彈簧歸零**。
+	// 指數衰減是漸近的（數學上永不到零）——「等它自己衰完」不是保證，明確終止才是。
+	// 靜止態＝逐位 rest 是契約，不是巧合。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0.001", ClampMax = "0.2"))
+	float JiggleSettleEpsCm = 0.02f;
+
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
@@ -1252,6 +1258,14 @@ private:
 	};
 	FJiggleBoneState JiggleStates[5];
 	void UpdateJiggleBones(float DeltaSeconds);
+
+public:
+	// 立刻回到 rest（2026-08-18）：把本層疊上去的偏移/旋轉從骨頭扣回去、彈簧狀態歸零。
+	// 「彈跳結束＝身體各部位在原位」是契約——凡是流程要求身體當場穩定的點
+	//（入睡、換網格、隱藏）都經這裡，不再各自 bValid=false（那只在同 tick 剛好有
+	// ResetBowBodyBones 時才安全＝隱形的順序依賴）。
+	void SettleJiggleNow();
+private:
 
 	// robo 走路注入/側視相機
 	FVector2D DebugWalkDirWorld = FVector2D::ZeroVector;

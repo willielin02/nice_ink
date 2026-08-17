@@ -3959,10 +3959,7 @@ void ANiceInkCharacter::ApplySleepVisual()
 	// 這裡強制貼齊＝兩條路徑的躺姿逐位相同。
 	if (bAsleep)
 	{
-		for (FJiggleBoneState& S : JiggleStates)
-		{
-			S.bValid = false; // 下一 tick 的 UpdateJiggleBones 會直接對齊錨點
-		}
+		SettleJiggleNow(); // 沉睡者要的「穩定不動姿勢」＝總規則的呼叫點，不是特例
 	}
 
 	Body->SetEyesClosed(bAsleep && (!bEyesOpen || IsFeigningSleep())); // 裝睡＝閉眼貼圖照舊
@@ -4436,10 +4433,7 @@ void ANiceInkCharacter::SetBowBodyVariant(bool bWhole)
 	ResetBowBodyBones();
 	bGaitIdleWritten = false;
 	bStandLookWritten = false;
-	for (FJiggleBoneState& S : JiggleStates)
-	{
-		S.bValid = false;
-	}
+	SettleJiggleNow(); // Reset 已經清乾淨骨頭，這裡只會落到「歸零」那半邊
 	UE_LOG(LogTemp, Log, TEXT("NiBody: BowBody variant -> %s"), bBowBodyIsWhole ? TEXT("whole") : TEXT("cut"));
 }
 
@@ -7650,6 +7644,41 @@ void ANiceInkCharacter::ApplyStandLookPitch(float DeltaSeconds)
 	WriteBowPoseConverged(Ref, CS, LookVerifyBones);
 }
 
+void ANiceInkCharacter::SettleJiggleNow()
+{
+	// 立刻回 rest：把本層留在骨頭裡的偏移/旋轉原樣扣回去，再把彈簧狀態歸零。
+	// 判準＝「骨頭裡還是我上次寫的那個值」（記帳精確後這條才可靠）；姿勢層已經
+	// 重寫過（ResetBowBodyBones 等）＝讀值對不上＝本來就乾淨，只需歸零。
+	static const TCHAR* SettleBoneNames[5] = {
+		TEXT("Jiggle_Belly"), TEXT("Jiggle_Chest_L"), TEXT("Jiggle_Chest_R"),
+		TEXT("Jiggle_Butt_L"), TEXT("Jiggle_Butt_R") };
+	const bool bCanTouchBones = BowBody && BowBody->GetSkinnedAsset();
+	bool bRestored = false;
+	for (int32 B = 0; B < 5; ++B)
+	{
+		FJiggleBoneState& S = JiggleStates[B];
+		if (bCanTouchBones && S.bValid &&
+			(!S.LastOffsetCS.IsNearlyZero() ||
+			 S.LastDeltaRotCS.AngularDistance(FQuat::Identity) > 0.003f))
+		{
+			const FName Bone(SettleBoneNames[B]);
+			FTransform T = BowBody->GetBoneTransformByName(Bone, EBoneSpaces::ComponentSpace);
+			if (T.GetLocation().Equals(S.LastWrittenCS, 0.01f))
+			{
+				T.SetLocation(T.GetLocation() - S.LastOffsetCS);
+				T.SetRotation(S.LastDeltaRotCS.Inverse() * T.GetRotation());
+				BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
+				bRestored = true;
+			}
+		}
+		S = FJiggleBoneState(); // bValid=false＋偏移記帳歸零（下次活化直接對齊錨點）
+	}
+	if (bRestored)
+	{
+		BowBody->RefreshBoneTransforms();
+	}
+}
+
 void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 {
 	// 軟肉彈跳（2026-08-04 user 委託）：胸×2/肚/臀×2 五骨＝世界空間阻尼彈簧追錨點。
@@ -7660,38 +7689,15 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		TEXT("Jiggle_Butt_L"), TEXT("Jiggle_Butt_R") };
 	if (!BowBody || !BowBody->GetSkinnedAsset() || !BowBody->IsVisible())
 	{
-		for (FJiggleBoneState& S : JiggleStates)
-		{
-			S.bValid = false; // 隱藏期不模擬；下一個使用者活化時 ResetBowBodyBones 清基準
-		}
+		// 隱藏期不模擬。先把殘留扣回去再歸零——留著偏移＝下次現身時那顆偏移會被
+		// 當成 rest 收編（2026-08-18 定罪的同一條病）。
+		SettleJiggleNow();
 		return;
 	}
 	const FTransform CompT = BowBody->GetComponentTransform();
 	if (!bJiggleEnabled)
 	{
-		// 關閉瞬間把殘留偏移/旋轉還原（不然肚子停在半空/歪著）
-		bool bRestored = false;
-		for (int32 B = 0; B < 5; ++B)
-		{
-			FJiggleBoneState& S = JiggleStates[B];
-			if (S.bValid && (!S.LastOffsetCS.IsNearlyZero() ||
-				S.LastDeltaRotCS.AngularDistance(FQuat::Identity) > 0.003f))
-			{
-				FTransform T = BowBody->GetBoneTransformByName(FName(JiggleBoneNames[B]), EBoneSpaces::ComponentSpace);
-				if (T.GetLocation().Equals(S.LastWrittenCS, 0.01f))
-				{
-					T.SetLocation(T.GetLocation() - S.LastOffsetCS);
-					T.SetRotation(S.LastDeltaRotCS.Inverse() * T.GetRotation());
-					BowBody->SetBoneTransformByName(FName(JiggleBoneNames[B]), T, EBoneSpaces::ComponentSpace);
-					bRestored = true;
-				}
-			}
-			S.bValid = false;
-		}
-		if (bRestored)
-		{
-			BowBody->RefreshBoneTransforms();
-		}
+		SettleJiggleNow(); // 關閉瞬間把殘留偏移/旋轉還原（不然肚子停在半空/歪著）
 		return;
 	}
 	const float FreqOf[5] = { JiggleBellyHz, JiggleChestHz, JiggleChestHz, JiggleButtHz, JiggleButtHz };
@@ -7765,6 +7771,19 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 			S.PosW += S.VelW * StepH;
 		}
 
+		// 收斂終止（2026-08-18）：偏移與**相對**速度同時進門檻＝就地貼齊錨點。
+		// 指數衰減永遠到不了零，靠門檻寫入精確 rest 才有「停下＝在原位」的構造保證；
+		// 相對速度一起看＝走路中高速穿越錨點那一幀不會被誤判成靜止。
+		const float SettleEps = FMath::Max(JiggleSettleEpsCm, 0.001f);
+		bool bSettled = false;
+		if (FVector::DistSquared(S.PosW, AnchorW) < FMath::Square(SettleEps) &&
+			(S.VelW - AnchorVel).SizeSquared() < FMath::Square(SettleEps * W))
+		{
+			S.PosW = AnchorW;
+			S.VelW = AnchorVel;
+			bSettled = true;
+		}
+
 		// 醉倒期降增益：翻倒的角加速度是步行的一個數量級以上，原增益會把彈簧
 		// 整段釘在鉗位（＝形變而非晃動）。降到線性域內才是「肉在晃」。
 		FVector OffsetW = (S.PosW - AnchorW) * (JiggleGain * CollapseScaleNow);
@@ -7807,17 +7826,35 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		// 骨頭沿旋轉繞樞軸走＋徑向平移（肚：樞軸=骨頭＝頭不動、只轉）
 		const FVector NewLoc = PivotCS + DeltaQ.RotateVector(BaseCS - PivotCS) + Radial;
 		const FQuat NewRot = DeltaQ * BaseRot;
-		S.LastOffsetCS = NewLoc - BaseCS;
-		S.LastWrittenCS = NewLoc;
-		S.LastDeltaRotCS = DeltaQ;
-		S.LastWrittenRotCS = NewRot;
-		if (!NewLoc.Equals(T.GetLocation(), 0.02f) ||
-			NewRot.AngularDistance(T.GetRotation()) > 0.003f) // 靜止收斂＝零寫入
+		// 靜止收斂＝零寫入；但**收斂終止的那一次必須真的寫下去**（省寫門檻 0.02cm／
+		// 0.17° 會把「最後一步歸零」吞掉，骨頭就停在門檻內的殘留上＝還是沒回原位）。
+		// （收斂態的門檻不能壓到浮點回讀噪音以下——CS→骨空間→CS 的來回誤差 ~1e-5，
+		//   壓太死＝靜止時每幀都在寫骨＋RefreshBoneTransforms。1e-3cm/1e-4rad＝
+		//   比殘留小兩個數量級、比噪音大兩個數量級。）
+		const float WriteEpsCm = bSettled ? 1e-3f : 0.02f;
+		const float WriteEpsRad = bSettled ? 1e-4f : 0.003f;
+		if (!NewLoc.Equals(T.GetLocation(), WriteEpsCm) ||
+			NewRot.AngularDistance(T.GetRotation()) > WriteEpsRad)
 		{
 			T.SetLocation(NewLoc);
 			T.SetRotation(NewRot);
 			BowBody->SetBoneTransformByName(Bone, T, EBoneSpaces::ComponentSpace);
 			bWrote = true;
+			S.LastWrittenCS = NewLoc;
+			S.LastWrittenRotCS = NewRot;
+			S.LastOffsetCS = NewLoc - BaseCS;
+			S.LastDeltaRotCS = DeltaQ;
+		}
+		else
+		{
+			// 省寫的那一幀：記帳必須記「骨頭裡實際留著什麼」，不是「本來想寫什麼」。
+			// （2026-08-18 定罪：舊碼無條件記 NewLoc ⇒ 跳過寫入後讀值≠記帳值 ⇒
+			//  上面的基準還原分支不成立 ⇒ **當下歪掉的骨位被當成新的 rest 收編**。
+			//  省寫最容易在擺盪折返點觸發＝位移最大處，所以肉是凍在擺幅頂端。）
+			S.LastWrittenCS = T.GetLocation();
+			S.LastWrittenRotCS = T.GetRotation();
+			S.LastOffsetCS = S.LastWrittenCS - BaseCS;
+			S.LastDeltaRotCS = T.GetRotation() * BaseRot.Inverse();
 		}
 	}
 	if (bWrote)
