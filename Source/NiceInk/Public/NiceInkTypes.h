@@ -40,6 +40,26 @@ enum class ENiceInkAccusationResult : uint8
 	Wrong
 };
 
+// 入睡儀式的分拍（2026-08-16；SPEC「入場與轉酒瓶」→「入座昏睡」之間的演出）。
+// **零硬切鐵則**：每一拍的結束狀態 ≡ 下一拍的起始狀態，全程無 teleport；
+// 崩塌終點 ≡ GetVictimLieTransform() ⇒ 睡姿接管當幀零跳變。
+//
+// 開場（BottleSpin 相位）＝Gather → Spin → Approach → PickUp → Drink → Collapse
+// 回合 2+（Seating 相位）＝              Approach → PickUp → Drink → Collapse
+//   （罰酒／入座酒走同一序列＝user 定案「都不要有硬切」的必然推論：只做開場
+//     等於第二回合起又傳送落地）
+UENUM(BlueprintType)
+enum class ENiCeremonyStep : uint8
+{
+	None,      // 非儀式期間
+	Gather,    // 全員從席位走到圈上角位、面向圈心
+	Spin,      // 酒瓶原地轉、ease-out 停在受害者正前方（先抽後演）
+	Approach,  // 受害者走進圈心、停在瓶邊
+	PickUp,    // 屈膝前彎、右臂 IK 伸向瓶頸、瓶附著到手
+	Drink,     // 起身、瓶抬到嘴、頭後仰
+	Collapse   // 瓶脫手、膝軟、整體翻倒到躺姿
+};
+
 // 一位玩家的 avatar 資產組（FacePipeline 產出、已入引擎）。
 // 以索引複製（PlayerState.AvatarIndex），各端自行載入資產。
 USTRUCT(BlueprintType)

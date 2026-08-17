@@ -73,6 +73,63 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	float PhaseEndServerTime = 0.0f;
 
+	// --- 入睡儀式（2026-08-16）---
+	// 客戶端的所有儀式視覺都是 (Step, t, 這幾個參數, 世界幾何) 的**純函式**：
+	// 無狀態、無累積、遲到者自動對齊。t = (ServerNow - StepStartTime)/StepDuration。
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	ENiCeremonyStep CeremonyStep = ENiCeremonyStep::None;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float CeremonyStepStartTime = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float CeremonyStepDuration = 0.0f;
+
+	// 圍圈幾何（伺服器在儀式開始時算一次後複製——GameMode 只活在伺服器，
+	// 但客戶端的走位/姿勢/鏡頭都要這組數字）
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	FVector CeremonyCenter = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float CeremonyRadiusCm = 160.0f;
+
+	// 崩塌終點（＝GameMode::GetVictimLieTransform）。**必須複製**：客戶端也要跑
+	// 同一條翻倒插值，而 GameMode 只活在伺服器
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	FVector CeremonyLieLocation = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float CeremonyLieYaw = 0.0f;
+
+	// 圍圈角位的旋轉偏移（度）；伺服器掃描擇優後複製＝客戶端零重算分歧
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float CeremonySlotOffsetDeg = 0.0f;
+
+	// 席位 → 圍圈角位：**保序指派**（席位序恰為道場的角向序——實測 seat0..5 的
+	// 方位角 323/37/143/184/217/287 為循環遞增）⇒ 路徑天然不交叉。
+	// 回傳該席位在場上的排名（0..N-1）；不在場回 INDEX_NONE。
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	int32 GetCeremonySlotRank(int32 SeatIndex) const;
+
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	float GetCeremonySlotAngleDeg(int32 SeatIndex) const;
+
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	FVector GetCeremonySlotLocation(int32 SeatIndex) const;
+
+	// 酒瓶轉動：起點角與終點角（度，**不取模**＝終角含整圈數）。
+	// 減速曲線各端自算 ⇒ 逐位相同的終角＝畫面與宣判永不矛盾
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float BottleStartYaw = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float BottleEndYaw = 0.0f;
+
+	// 儀式進度 t∈[0,1]（純讀；非儀式期間回 0）
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	float GetCeremonyAlpha() const;
+
 	// --- 翻身提案（2026-07-15 user 定案：作畫者之一提出、其餘作畫者同意後翻身）---
 	// 一次一案；INDEX_NONE＝無提案。表決細節在 GameMode（server-only），這裡只放 HUD 顯示位。
 

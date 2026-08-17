@@ -69,6 +69,13 @@ canvas 做不到毛玻璃半透明）**。
    把拒絕原因送回請求者畫面＋UE_LOG 進檔（你自己能 grep）。
 4. **分清三種病**：客戶端沒送出／伺服器拒絕／伺服器同意但客戶端視覺沒跟上——診斷訊息要能區分這三段。
 5. 修好後**必須重跑同一個驗證**（robo 或使用者），不要「應該好了」。
+6. **契約不可只驗上限**（2026-08-16 血價）：「不該跳」類契約若只寫「逐幀位移 < X」，
+   則「什麼都沒發生」永遠通過——酒瓶從頭到尾沒動也拿到 PASS（真因是握骨名依賴另一條
+   路徑的一次性校準）。**該動的必須同時驗「真的有動」的下限。** 這隻是截圖自查抓到的，
+   當時 11 個數字契約全綠。
+7. **「我沒改」不是靠讀 diff 宣稱的，是靠量的**（2026-08-18 血價）：user 質問外觀變了，
+   我讀自己的 diff 說「一行都沒改」，實測逐骨對賬才發現有 0.9cm 殘差。
+   改動有沒有波及某個表現，**用同機位、同狀態的 A/B 傾印對賬**（robo_sleeppose_ab 是範本）。
 
 ## UE 陷阱年鑑（每一條都吃過虧，症狀→原因→解法）
 
@@ -100,6 +107,23 @@ canvas 做不到毛玻璃半透明）**。
   remove_doubles 焊回縫再轉印；引擎端看 log `NeckStretch: ... seamNormalGap`（>2° 出事）。
   同案教訓：跨切縫的補丁在小張角要用**孿生頂點對應 k→k**，角度重取樣只屬長管
   （8° 時弦 0.4cm 端點卻滑 1.54cm＝針孔）；症狀換色不換位置＝沒打中真兇。
+- **complex-as-simple 碰撞對 shape overlap 不可見**（2026-08-18 血價）：道場部件全是
+  complex-as-simple，`OverlapBlockingTestByChannel`／`OverlapMultiByChannel` 對三角網格
+  查不到 ⇒ 用膠囊 overlap 掃「可站立區域」會把整片牆判成淨空、可走域一路延伸到掃描邊界。
+  **line trace 打得到、overlap 打不到。** 而純射線量牆距也會被結構誤導（長廳＋兩端門洞＝
+  某方向 12m 內量不到邊界）。**場地量測的終極可信來源＝列出部件 actor 的名字與包圍盒**
+  ——射線/overlap 都會被場景結構騙，包圍盒不會。
+- **場地探針必須排除活體**：力士的 `Body` 擋 `ECC_Visibility` ⇒ 地板射線打到人頭（z≈140）、
+  膠囊重疊撞到彼此 ⇒ 整條路徑假 blocked。量到的是玩家不是場地。
+- **unity build 會把不同 .cpp 的匿名 namespace 併進同一個 TU**：新加的
+  `SmoothStep01` 撞到 `NeckStretchComponent.cpp` 的同名匿名函式（C2084 主體已宣告）
+  ——匿名 namespace 不保證隔離，取名要唯一。
+- **世界空間彈簧有「傳送保護」，連續移動會繞過它**（2026-08-16~18）：jiggle 的
+  「單幀錨點移動 >100cm 直接貼齊」保護，在舊制（受害者傳送落地）每次都觸發＝彈簧從不被
+  激勵；改成**連續倒下**後每幀都在門檻內，於是「整具網格繞 90° 高速掃掠」變成真實激勵、
+  整段釘死在 `JiggleMaxCm` 鉗位（實測 max 8.00 = 鉗位、mean 5.03）＝形變而非晃動。
+  修＝崩塌期降增益（`JiggleCollapseScale`）＋**入睡瞬間強制貼齊彈簧**（否則落地殘留
+  0.9cm 餘振，A/B 對賬會出現差異）。**凡「舊制靠瞬移繞過的保護」，改成連續就會全部醒過來。**
 - **headless `-ExecutePythonScript` 用 PowerShell 管線接 Select-String 會在啟動後即死**（log 停在
   Total Editor Startup Time、exit 255）→ `Start-Process -Wait` 不接管線、事後 grep log。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。
@@ -204,6 +228,18 @@ canvas 做不到毛玻璃半透明）**。
   縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
   FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
+  **`NiceInkBottle`＋入睡儀式（2026-08-16~18；帳本=Docs/OPENING_CEREMONY_PLAN.md）＝
+  轉酒瓶→拾瓶→喝→醉倒的全程序化演出（user 兩條定案：①先抽後演——伺服器先均勻抽人、
+  酒瓶只是把結果演出來；②**都不要有硬切**）：分拍狀態機 `ENiCeremonyStep`
+  （Gather/Spin＝開場的 BottleSpin 相位；**Approach/PickUp/Drink/Collapse＝每一回合的
+  Seating 相位**，入座酒與罰酒同一序列）；客戶端所有視覺＝(step, t, GameState 複製參數,
+  世界幾何) 的**純函式**（無狀態無累積、遲到者自動對齊）；走位＝合成輸入
+  （AddMovementInput 與真鍵同一入口）⇒ **全程零 SetActorTransform**、位置誤差由下一拍
+  吸收；**崩塌終點 ≡ GetVictimLieTransform()＋ServerSetAsleep(bAlreadyLying) 跳過傳送
+  ⇒ 睡姿接管當幀零跳變**（站→躺本來就是同一網格的剛體旋轉，那條 slerp 的中間態是
+  恆等中間姿勢不是近似）；右臂解析二骨 IK＝本案唯一新解算；瓶子交接＝捕捉當幀相對變換
+  （不動父子關係）；儀器=robo_ceremony_test（11 契約）/robo_ceremony_probe/
+  robo_ceremony_shots/robo_collapse_jiggle/robo_sleeppose_ab）、
   `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅式沿線描
   （自交避讓 2.6×帶半寬鐵律）＋割線機制 2D 移植（**08-04 與割線完全同制＝user
   鐵則「不准機制分岔」**：自由游標 v_max 追趕/無皮繩無域牆（bbox+4 防跑飛牆=
@@ -404,6 +440,13 @@ canvas 做不到毛玻璃半透明）**。
   待辦=雙機驗收/Steam 票證登入（正式終態）/品牌驗證（帳本=SHIP_PLAN B4~B6）。
   打包＝RunUAT BuildCookRun（cook 白名單在
   DefaultGame.ini；**只被 C++ 字串路徑引用的資產要 AlwaysCook**）。
+- **舞台位置（2026-08-18 user 定案「整個遊戲都在房間的正中央進行」）**：`VictimLieSpot`
+  **(430,40)**＝榻榻米中心＝儀式圈心＝崩塌終點；`SeatSpots`＝繞它 R=230 的六等分環。
+  關卡實測（**部件包圍盒**，不是射線猜的）：`floor_Shape` 中心 (403,27)、跨
+  x −309…1115 / y −352…406＝14.2×7.6m 長廳，拉門在東西兩端。舊配置擠在 (0,75)＝
+  最西端貼門口。**搬動舞台要同時搜出所有寫死該地點的地方**——`ClampToRoom`（鏡頭夾限，
+  原本還是桑拿房的值）、`ViewWide` fallback、探針常數；沒跟上的都會變成安靜的錯位。
+  現制單一來源＝`EnsureStageGeometry()` 把幾何寫進 GameState（PostLogin 即生效）。
 - 場地＝`L_Dojo`（道場獨立部件在 /Game/Dojo/Parts，基準點 (430.7,40.9,0)；07-30~31 場景修：
   兩門洞各四片拉門重排（軌距=板厚→任兩板零重疊=共面閃爍歸零）＋四張武道布掛軸
   （日の丸/空手道/大日本/柔術）拆除——流派錯棚+戰前讀感=平台風險，網格留 Parts 可逆，

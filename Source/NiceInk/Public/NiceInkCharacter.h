@@ -464,6 +464,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "1", ClampMax = "20"))
 	float JiggleMaxCm = 8.0f;         // 偏移鉗位（防穿模/防瞬移灌爆）
 
+	// 醉倒期的彈簧增益倍率（2026-08-16 user 抓「倒下時肚子浮誇地形變」）：
+	// jiggle 是**世界空間**彈簧，翻倒＝整具網格繞 ~90° 高速掃掠 ⇒ 遠離樞軸的肚骨
+	// 被甩出遠超步行調校的激勵——實測崩塌全程 jBelly **貼死 8.00 鉗位**（平均 5.03）
+	// ＝彈簧飽和＝繞脊椎轉角撞 25° 上限＝大面積蒙皮形變。舊制看不到是因為它**傳送**
+	// 落地，而彈簧有「單幀 >100cm 直接貼齊」的傳送保護（連續移動永遠不觸發）。
+	// 0.4＝峰值落回線性域（有晃、不釘鉗位）；1.0＝原樣；0＝倒下完全不晃。
+	// **晃多少是口味，交給 viewport**。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Body")
+	float JiggleCollapseScale = 0.4f;
+
 	// 08-15 user 抓「頭轉到某角度乳頭沉進乳房」：徑向往體內的偏移不對稱鉗（往外照舊 8cm）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Jiggle", meta = (ClampMin = "0", ClampMax = "8"))
 	float JiggleInwardMaxCm = 1.5f;
@@ -640,7 +650,62 @@ public:
 
 	// 入睡：鎖移動、閉眼、身體躺到指定位置（仰躺大字，定案 #18）。
 	// 甦醒現身：站回座位、睜眼、恢復移動。
-	void ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform);
+	// bAlreadyLying（2026-08-16 儀式版）＝崩塌動畫已經把身體放到躺位 ⇒ **跳過傳送**：
+	// 動畫終點與 LieTransform 逐位相同，睡姿接管當幀零跳變（零硬切的最後一哩）。
+	void ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform, bool bAlreadyLying = false);
+
+	// --- 入睡儀式（2026-08-16；所有端都跑，視覺＝GameState 複製參數的純函式）---
+
+	// 儀式期間？（＝輸入全停的單一閘門，不散落在各 Poll）
+	UFUNCTION(BlueprintPure, Category = "Nice Ink|Ceremony")
+	bool IsCeremonyActive() const;
+
+	// 本人是這段儀式的主角（要走去拿瓶、喝、倒下）？
+	bool IsCeremonyVictim() const;
+
+	// 酒瓶握在手上時的世界變換（瓶子每 tick 來問；姿勢層是唯一真相）
+	bool GetCeremonyBottleTransform(FTransform& Out) const;
+
+	// 儀式驅動（Tick 呼叫）：走位（合成輸入）＋姿勢＋崩塌
+	void UpdateCeremony(float DeltaSeconds);
+
+	// 儀式姿勢（屈膝/前彎/臂 IK/頭俯仰/翻倒）——BowBody 骨骼載體，與步態互斥
+	void ApplyCeremonyPose(float DeltaSeconds);
+
+	// robo：儀式狀態機讀摘要
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugRoboCeremonyStats() const;
+
+	// robo：固定世界機位＋注視點（截圖矩陣；ViewFrom 恆盯 actor 自己）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboViewAt(float CX, float CY, float CZ, float LX, float LY, float LZ);
+
+	// 持物骨（瓶子附著點）——不依賴作畫的一次性校準
+	FName CeremonyGripBoneName() const;
+
+	// --- 儀式姿勢旋鈕（viewport 即調）---
+	// 拾取值由實測反推：初版 standoff 58／bend 52／crouch 24 ⇒ 肩到瓶頸 96.4cm
+	// 而臂長只有 78.0cm（探針數字），差 18cm＝手永遠搆不到。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyStandoffCm = 40.0f;   // 站到瓶邊的距離
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyPickBendDeg = 64.0f;  // 俯身拾取的上身前彎
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyPickCrouchCm = 32.0f; // 屈膝下沉
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyDrinkBendDeg = 6.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyDrinkCrouchCm = 5.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyLookDownDeg = -26.0f; // 低頭看瓶
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyHeadBackDeg = 32.0f;  // 仰頭灌酒
 	// 08-15 甦醒朝向競態封死（user 抓「醒來全員鏡像到對側」再現、PIE 重現不出）：
 	// 睡姿 yaw 改成**複製屬性**（冪等、與封包順序無關），owner client 在 bAsleep 期間
 	// 每 tick 斷言 actor yaw／控制器 yaw＝此值——一次性 RPC 寫入不管誰先到、
@@ -1133,6 +1198,43 @@ private:
 	void UpdateWalkAnim(float DeltaSeconds);
 	void UpdateLegacyStatueWalk(float DeltaSeconds); // 骨骼資產缺席的退路（舊制原樣）
 	void ApplyGaitPose(float DeltaSeconds, float Speed2D); // 摺り足擺骨（CS 全身組合＋腿 IK）
+
+	// --- 入睡儀式的連續狀態量（2026-08-16）---
+	// **零硬切的實作定義**：這些量全部由 t∈[0,1] 的緩動曲線導出，且崩塌結束時
+	// 前五項恆為 0、翻倒項恆為 1 ⇒ 交給睡姿替身的當幀，BowBody 骨姿＝ref pose、
+	// 相對變換＝BodyLieRel*，與 UpdateSleepBodyDouble 首幀寫入的值**逐位相同**。
+	float CeremBendDeg = 0.0f;        // 上身前彎（Spine/Spine1 分攤——單骨深彎摺爆肚子）
+	float CeremCrouchCm = 0.0f;       // 髖下沉（腿二骨 IK；腳目標原地＝貼地構造保證）
+	float CeremArmAlpha = 0.0f;       // 右臂 IK 權重（0＝rest 手臂、1＝手在目標點）
+	FVector CeremHandTargetW = FVector::ZeroVector; // 右手世界目標（瓶頸／嘴）
+	float CeremHeadPitchDeg = 0.0f;   // 頭頸俯仰（Neck/Head 分攤，同 ApplyLookPitchToCS）
+	float CeremToppleAlpha = 0.0f;    // 站→躺的剛體插值（0=站、1=躺）
+	bool bCeremonyPoseActive = false; // BowBody 已切給儀式（進出時重置殘留）
+	// 酒瓶交接＝**捕捉當幀的相對變換**（KeepWorldTransform 的等價物）：
+	// 之後 bottleWorld = LocalT * gripWorld ⇒ 交接那一幀世界變換逐位不變＝零跳變。
+	// 用「握姿假設」去擺瓶子會在交接幀跳一下（瓶子躺著、手的持物軸朝下）。
+	FTransform CeremBottleLocalT = FTransform::Identity;
+	bool bCeremBottleLocalValid = false;
+	TWeakObjectPtr<class ANiceInkBottle> CeremBottle;
+	FTransform CeremLieTransformCache;   // 崩塌終點（＝GetVictimLieTransform，server 取得後各端沿用）
+	bool bCeremLieValid = false;
+	FVector GetCeremonyMouthWorld(float Alpha) const; // 手抬到嘴前的目標點
+	FVector CeremCollapseFromLoc = FVector::ZeroVector; // 崩塌起點（實際位置，不是理論值）
+	float CeremCollapseFromYaw = 0.0f;
+	bool bCeremCollapseCaptured = false;
+	// 走位卡住偵測（0.4s 無進展 → 垂直方向微調 0.3s；探針實測席位 0 的路徑擦過長凳）
+	FVector CeremLastWalkPos = FVector::ZeroVector;
+	float CeremStuckSeconds = 0.0f;
+	float CeremSideStepSeconds = 0.0f;
+	float CeremSideStepSign = 1.0f;
+	void UpdateCeremonyWalk(float DeltaSeconds, const class ANiceInkGameState* GS);
+
+public:
+	// 儀式起手時的席位變換（server 記；現身要站回這裡，不是圈心）
+	FTransform CeremonySeatTransform;
+	bool bCeremonySeatValid = false;
+
+private:
 
 	// 軟肉彈跳內部狀態（世界空間彈簧；各端本地）
 	struct FJiggleBoneState

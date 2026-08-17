@@ -30,6 +30,7 @@
 #include "Net/UnrealNetwork.h"
 #include "NiceInkAudio.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkBottle.h"
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkFaceShare.h"
@@ -126,13 +127,17 @@ namespace
 		}
 	}
 
-	// 桑拿房內部界限（實測 8.6×6.2×3m；含安全邊距）——鏡頭不出牆、不進天花板
+	// 道場內部界限——鏡頭不出牆、不進天花板。
+	// **2026-08-16 修**：原值是**桑拿房**的（x −270…170 / y −220…170），道場實測
+	// （部件包圍盒）floor_Shape 跨 x −309…1115 / y −352…406、天花板 z≈363——
+	// 舞台搬到房間正中央 (430,40) 後，舊 clamp 會把每一顆演出鏡頭拉回 x≤170
+	// ＝比舞台西邊 260cm，全部演出鏡頭失準。含 20cm 安全邊距。
 	FVector ClampToRoom(const FVector& P)
 	{
 		return FVector(
-			FMath::Clamp(P.X, -270.0f, 170.0f),
-			FMath::Clamp(P.Y, -220.0f, 170.0f),
-			FMath::Clamp(P.Z, 40.0f, 225.0f));
+			FMath::Clamp(P.X, -285.0f, 1090.0f),
+			FMath::Clamp(P.Y, -330.0f, 385.0f),
+			FMath::Clamp(P.Z, 40.0f, 340.0f));
 	}
 }
 
@@ -541,6 +546,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	}
 
 	UpdateSleepBodyDouble(DeltaSeconds); // 所有端：睡姿替身＋頭部轉動破綻
+	UpdateCeremony(DeltaSeconds);        // 所有端：入睡儀式（走位/拾瓶/喝/醉倒）
 	UpdateWalkAnim(DeltaSeconds);        // 所有端：站立移動的程式化步伐
 	UpdateMarkerSfx(DeltaSeconds);       // 稿筆摩擦聲（內部只服務本地端、失控時自停）
 
@@ -594,6 +600,15 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	if (bSystemMenuOpen)
 	{
 		// 選單開著＝遊戲輸入全停（滑鼠屬於選單按鈕）；系統演出鏡頭照常
+		UpdateCinematicCamera(PC);
+		return;
+	}
+
+	// 入睡儀式期間＝演出，玩家輸入全停（**單一閘門**，不散落在各 Poll——
+	// 掃射式的分散判斷對晚誕生的路徑必出漏網，veil 二鎖的血價）。
+	// ESC 系統選單（上面已輪詢）與演出鏡頭照常。
+	if (IsCeremonyActive())
+	{
 		UpdateCinematicCamera(PC);
 		return;
 	}
@@ -747,6 +762,10 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	case ENiceInkPhase::BottleSpin:
 		bWide = true; // 轉瓶儀式全景
 		break;
+	case ENiceInkPhase::Seating:
+		// 入睡儀式（Approach→Collapse）也是演出＝全景；儀式關閉時維持舊制第一人稱
+		bWide = IsCeremonyActive();
+		break;
 	case ENiceInkPhase::PostGame:
 		bThirdPerson = true; // 場間大廳：第三人稱端詳自己的刺青（SPEC 視角規則）
 		break;
@@ -875,10 +894,15 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
 	ANiceInkCharacter* Victim = FindByPlayerId(GetWorld(), GS->VictimPlayerId);
 
-	// 沒有受害者（轉瓶儀式）就看房間舞台中心
+	// 沒有受害者（轉瓶儀式）就看房間舞台中心——**不可寫死座標**：舞台位置是
+	// GameMode 的 VictimLieSpot（2026-08-16 搬到房間正中央），改一次要跟一次。
+	// GameMode 只活在伺服器 ⇒ 客戶端讀 GameState 複製下來的圈心。
+	const FVector StageCenter = (GS && !GS->CeremonyCenter.IsNearlyZero())
+		? GS->CeremonyCenter + FVector(0.0f, 0.0f, 56.0f)
+		: FVector(0.0f, 75.0f, 60.0f);
 	const FVector BodyCenter = (Victim && Victim->Body)
 		? Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 103.0f))
-		: FVector(0.0f, 75.0f, 60.0f);
+		: StageCenter;
 	const FVector CamPos = ClampToRoom(BodyCenter + FVector(-50.0f, -190.0f, 165.0f));
 
 	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
@@ -3066,7 +3090,7 @@ void ANiceInkCharacter::ClientSyncPoseTransform_Implementation(const FTransform&
 	}
 }
 
-void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform)
+void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTransform, bool bAlreadyLying)
 {
 	if (!HasAuthority() || bAsleep == bNewAsleep)
 	{
@@ -3087,8 +3111,13 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 		KickCharges = 0;
 		bMazeSprayGranted = false; // 技能授予去重：每回合每存檔點一次
 		bMazeKickGranted = false;
-		SeatTransform = GetActorTransform();
-		SetActorTransform(LieTransform, false, nullptr, ETeleportType::TeleportPhysics);
+		// 現身要站回去的位置：儀式版＝儀式開始前的席位（CeremonySeatTransform 由
+		// 儀式起手記下），否則＝當下（舊制傳送前的位置）
+		SeatTransform = bAlreadyLying && bCeremonySeatValid ? CeremonySeatTransform : GetActorTransform();
+		if (!bAlreadyLying)
+		{
+			SetActorTransform(LieTransform, false, nullptr, ETeleportType::TeleportPhysics);
+		}
 		GetCharacterMovement()->StopMovementImmediately();
 		GetCharacterMovement()->DisableMovement();
 		SleepLieYawDeg = LieTransform.Rotator().Yaw; // 複製屬性＝owner 每 tick 斷言的權威 yaw
@@ -3924,6 +3953,18 @@ void ANiceInkCharacter::ApplySleepVisual()
 
 	bSleepPoseDirty = true; // 睡/醒/翻身任何切換＝替身下次 tick 重擺（含抬頭方向重算）
 
+	// 入睡瞬間把軟肉彈簧貼齊錨點（2026-08-18 A/B 對賬補的殘差）：舊制受害者是
+	// **傳送**落地，彈簧的「單幀 >100cm 直接貼齊」保護每次都觸發、殘差恆 0；
+	// 儀式版是連續倒下，落地時彈簧還在餘振（實測肚骨殘留 0.9cm/0.42°）。
+	// 這裡強制貼齊＝兩條路徑的躺姿逐位相同。
+	if (bAsleep)
+	{
+		for (FJiggleBoneState& S : JiggleStates)
+		{
+			S.bValid = false; // 下一 tick 的 UpdateJiggleBones 會直接對齊錨點
+		}
+	}
+
 	Body->SetEyesClosed(bAsleep && (!bEyesOpen || IsFeigningSleep())); // 裝睡＝閉眼貼圖照舊
 
 	// 無聲甦醒＝睜眼看得到自己的身體與正在落下的筆跡（2026-07-15 user 定案：
@@ -4480,6 +4521,27 @@ void ANiceInkCharacter::DebugRoboSideView(bool bEnable)
 	{
 		PC->SetViewTargetWithBlend(this, 0.0f);
 	}
+}
+
+void ANiceInkCharacter::DebugRoboViewAt(float CX, float CY, float CZ, float LX, float LY, float LZ)
+{
+	// 固定世界機位＋固定注視點（截圖矩陣用；DebugRoboViewFrom 恆盯 actor 自己，
+	// 拍不到「場中央的酒瓶」這類主體）。不經 ClampToRoom＝機位由呼叫者負責。
+	APlayerController* PC = Cast<APlayerController>(GetController());
+	if (!PC || !GetWorld())
+	{
+		return;
+	}
+	if (!DebugSideCam)
+	{
+		FActorSpawnParameters SP;
+		SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		DebugSideCam = GetWorld()->SpawnActor<ACameraActor>(SP);
+	}
+	const FVector CamLoc(CX, CY, CZ);
+	const FVector Focus(LX, LY, LZ);
+	DebugSideCam->SetActorLocationAndRotation(CamLoc, (Focus - CamLoc).Rotation());
+	PC->SetViewTargetWithBlend(DebugSideCam, 0.0f);
 }
 
 void ANiceInkCharacter::DebugRoboViewFrom(float DX, float DY, float DZ)
@@ -6571,7 +6633,8 @@ void ANiceInkCharacter::UpdateWalkAnim(float DeltaSeconds)
 	{
 		return;
 	}
-	const bool bEligible = !bAsleep && !bLeanLocked;
+	// 儀式姿勢（拾瓶/喝/醉倒）接管同一個 BowBody 載體時，步態讓位
+	const bool bEligible = !bAsleep && !bLeanLocked && !bCeremonyPoseActive;
 	if (!bEligible)
 	{
 		bStandDoubleActive = false; // 睡/鎖接管；回站時重新活化（含殘留重置）
@@ -6943,6 +7006,578 @@ void ANiceInkCharacter::ApplyGaitPose(float DeltaSeconds, float Speed2D)
 	bGaitPrevFootValid = true;
 }
 
+// ===================== 入睡儀式（2026-08-16）=====================
+// 零硬切的實作定義：所有量由 t∈[0,1] 緩動曲線導出、拍與拍端點逐位相接、
+// 全程無 teleport、崩塌終點 ≡ GetVictimLieTransform()。
+// 走位＝合成輸入（與真鍵同一條 AddMovementInput）⇒ CMC 預測正常、步態自然發生。
+
+namespace
+{
+	// smoothstep：端點一階導數為 0＝接得上前後的靜止段。
+	// **名字不可叫 SmoothStep01**——NeckStretchComponent.cpp 有同名匿名函式，
+	// unity build 併同一個 TU 時會撞（實錘 C2084）。
+	FORCEINLINE float CeremEase01(float T)
+	{
+		const float X = FMath::Clamp(T, 0.0f, 1.0f);
+		return X * X * (3.0f - 2.0f * X);
+	}
+}
+
+bool ANiceInkCharacter::IsCeremonyActive() const
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	return GS && GS->CeremonyStep != ENiCeremonyStep::None;
+}
+
+bool ANiceInkCharacter::IsCeremonyVictim() const
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	return GS && GS->VictimPlayerId != INDEX_NONE && GetInkAuthorId() == GS->VictimPlayerId;
+}
+
+FName ANiceInkCharacter::CeremonyGripBoneName() const
+{
+	// **不可依賴 PenGripBoneName**：那是 ApplyBowPose 首次入鎖才做的一次性校準，
+	// 開場儀式時沒人畫過畫 ⇒ 恆為 NAME_None ⇒ 瓶子永遠不跟手（08-16 截圖實錘：
+	// c10 以 maxBottleStep=0.00cm「通過」＝空洞通過，因為根本沒東西在動）。
+	if (PenGripBoneName != NAME_None)
+	{
+		return PenGripBoneName;
+	}
+	if (BowBody && BowBody->GetSkinnedAsset())
+	{
+		const FReferenceSkeleton& Ref = BowBody->GetSkinnedAsset()->GetRefSkeleton();
+		if (Ref.FindBoneIndex(TEXT("RightHandProp")) != INDEX_NONE)
+		{
+			return FName(TEXT("RightHandProp"));
+		}
+		if (Ref.FindBoneIndex(TEXT("RightHand")) != INDEX_NONE)
+		{
+			return FName(TEXT("RightHand"));
+		}
+	}
+	return NAME_None;
+}
+
+bool ANiceInkCharacter::GetCeremonyBottleTransform(FTransform& Out) const
+{
+	const FName Grip = CeremonyGripBoneName();
+	if (!bCeremBottleLocalValid || !BowBody || !BowBody->GetSkinnedAsset() || Grip == NAME_None)
+	{
+		return false;
+	}
+	const FTransform GripW = BowBody->GetBoneTransformByName(Grip, EBoneSpaces::WorldSpace);
+	Out = CeremBottleLocalT * GripW;
+	return true;
+}
+
+void ANiceInkCharacter::UpdateCeremony(float DeltaSeconds)
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS)
+	{
+		return;
+	}
+	const ENiCeremonyStep Step = GS->CeremonyStep;
+
+	// 儀式結束：交還 BowBody 給步態（狀態全清＝殘留不會漏進下一個使用者）
+	if (Step == ENiCeremonyStep::None)
+	{
+		if (bCeremonyPoseActive)
+		{
+			bCeremonyPoseActive = false;
+			bStandDoubleActive = false; // 讓 UpdateWalkAnim 重新活化（含 ResetBowBodyBones）
+			bGaitIdleWritten = false;
+		}
+		CeremBendDeg = CeremCrouchCm = CeremArmAlpha = CeremHeadPitchDeg = 0.0f;
+		CeremToppleAlpha = 0.0f;
+		bCeremCollapseCaptured = false;
+		bCeremBottleLocalValid = false;
+		CeremStuckSeconds = CeremSideStepSeconds = 0.0f;
+		bCeremonySeatValid = false; // 下一回合的儀式重錄席位（現身要站回**當時**的席位）
+		return;
+	}
+
+	// 席位記錄（server；現身要站回席位而不是圈心）
+	if (HasAuthority() && !bCeremonySeatValid)
+	{
+		CeremonySeatTransform = GetActorTransform();
+		bCeremonySeatValid = true;
+	}
+
+	const bool bVictim = IsCeremonyVictim();
+	const float T = GS->GetCeremonyAlpha();
+
+	// 走位（Gather／Approach）＝合成輸入；姿勢照常由步態負責
+	UpdateCeremonyWalk(DeltaSeconds, GS);
+
+	if (!bVictim || Step == ENiCeremonyStep::Gather || Step == ENiCeremonyStep::Spin ||
+		Step == ENiCeremonyStep::Approach)
+	{
+		// 這些拍全是「走路／站著看」＝步態的地盤，儀式姿勢不介入
+		if (bCeremonyPoseActive)
+		{
+			bCeremonyPoseActive = false;
+			bStandDoubleActive = false;
+			bGaitIdleWritten = false;
+		}
+		return;
+	}
+
+	// --- 以下：受害者的 PickUp / Drink / Collapse ---
+
+	// 酒瓶（全端各自找一次）
+	if (!CeremBottle.IsValid())
+	{
+		for (TActorIterator<ANiceInkBottle> It(GetWorld()); It; ++It)
+		{
+			CeremBottle = *It;
+			break;
+		}
+	}
+	const ANiceInkBottle* Bottle = CeremBottle.Get();
+
+	// 姿勢量（旋鈕；旁人也看得到＝全端同式）
+	const float PickBendDeg = CeremonyPickBendDeg;
+	const float PickCrouchCm = CeremonyPickCrouchCm;
+	const float DrinkBendDeg = CeremonyDrinkBendDeg;
+	const float DrinkCrouchCm = CeremonyDrinkCrouchCm;
+	const float LookDownDeg = CeremonyLookDownDeg;
+	const float HeadBackDeg = CeremonyHeadBackDeg;
+
+	switch (Step)
+	{
+	case ENiCeremonyStep::PickUp:
+	{
+		const float S = CeremEase01(T);
+		CeremBendDeg = PickBendDeg * S;
+		CeremCrouchCm = PickCrouchCm * S;
+		CeremArmAlpha = S;
+		CeremHeadPitchDeg = LookDownDeg * S;
+		CeremHandTargetW = Bottle ? Bottle->GetNeckWorldLocation() : GetActorLocation();
+		CeremToppleAlpha = 0.0f;
+		break;
+	}
+	case ENiCeremonyStep::Drink:
+	{
+		const float S = CeremEase01(T);
+		CeremBendDeg = FMath::Lerp(PickBendDeg, DrinkBendDeg, S);
+		CeremCrouchCm = FMath::Lerp(PickCrouchCm, DrinkCrouchCm, S);
+		CeremArmAlpha = 1.0f;
+		// 頭：先直起再仰（後半段才灌）——sin 型讓仰角在中後段達峰並維持
+		CeremHeadPitchDeg = FMath::Lerp(LookDownDeg, HeadBackDeg, CeremEase01(T * 1.4f));
+		// 手：從瓶子原處抬到嘴前（嘴＝Head 骨的臉前方；CS 臉朝 +Y、上 +Z）
+		CeremHandTargetW = GetCeremonyMouthWorld(S);
+		CeremToppleAlpha = 0.0f;
+
+		// 交接：瓶子改由手驅動。捕捉「當幀的相對變換」＝世界變換逐位不變
+		const FName GripBone = CeremonyGripBoneName();
+		if (!bCeremBottleLocalValid && Bottle && BowBody && BowBody->GetSkinnedAsset() &&
+			GripBone != NAME_None)
+		{
+			const FTransform GripW = BowBody->GetBoneTransformByName(GripBone, EBoneSpaces::WorldSpace);
+			CeremBottleLocalT = Bottle->GetActorTransform().GetRelativeTransform(GripW);
+			bCeremBottleLocalValid = true;
+		}
+		break;
+	}
+	case ENiCeremonyStep::Collapse:
+	{
+		bCeremBottleLocalValid = false; // 瓶已脫手
+
+		// 起點＝**實際**位置（不是理論值）：走位誤差由這裡吸收，永遠不需要 snap
+		if (!bCeremCollapseCaptured)
+		{
+			bCeremCollapseCaptured = true;
+			CeremCollapseFromLoc = GetActorLocation();
+			CeremCollapseFromYaw = GetActorRotation().Yaw;
+			// 崩塌期間身體由插值驅動：CMC 讓位（與睡姿同一慣例）
+			GetCharacterMovement()->StopMovementImmediately();
+			GetCharacterMovement()->DisableMovement();
+		}
+
+		// τ<Knee：膝軟（先垮）；τ∈[Knee,Settle]：翻倒；τ>Settle：沉降到位
+		constexpr float KneeFrac = 0.30f;
+		constexpr float SettleFrac = 0.88f;
+		const float Knee = CeremEase01(T / KneeFrac);
+		// 姿勢量在翻倒段一路衰減到 0（**必須真的到 0**：睡姿替身接手的是 ref pose）
+		const float Fade = 1.0f - CeremEase01((T - KneeFrac) / (SettleFrac - KneeFrac));
+		CeremBendDeg = FMath::Lerp(DrinkBendDeg, 26.0f, Knee) * Fade;
+		CeremCrouchCm = FMath::Lerp(DrinkCrouchCm, 34.0f, Knee) * Fade;
+		CeremArmAlpha = FMath::Lerp(1.0f, 0.0f, Knee);
+		CeremHeadPitchDeg = FMath::Lerp(HeadBackDeg, 6.0f, Knee) * Fade;
+
+		// 翻倒：重力型 ease（越倒越快），τ>SettleFrac 恆 1
+		const float Fall = FMath::Clamp((T - KneeFrac) / (SettleFrac - KneeFrac), 0.0f, 1.0f);
+		CeremToppleAlpha = 1.0f - FMath::Cos(Fall * HALF_PI); // 0→1，起始慢、末端快
+		if (T >= SettleFrac)
+		{
+			CeremToppleAlpha = 1.0f;
+		}
+
+		// actor 位置：實際起點 → 躺位（終點逐位＝GetVictimLieTransform 的位置；
+		// 由 GameState 複製下來——GameMode 只活在伺服器，客戶端要跑同一條插值）
+		{
+			const FVector P = FMath::Lerp(CeremCollapseFromLoc, GS->CeremonyLieLocation, CeremToppleAlpha);
+			SetActorLocation(P, false, nullptr, ETeleportType::TeleportPhysics);
+			// yaw 也走 topple 參數（**不能用指數追趕**：那永遠到不了終值，
+			// 睡姿接管時就會有殘差＝可見的最後一跳）
+			const float Yaw = CeremCollapseFromYaw +
+				FMath::FindDeltaAngleDegrees(CeremCollapseFromYaw, GS->CeremonyLieYaw) * CeremToppleAlpha;
+			SetActorRotation(FRotator(0.0f, Yaw, 0.0f));
+		}
+		break;
+	}
+	default:
+		break;
+	}
+
+	ApplyCeremonyPose(DeltaSeconds);
+}
+
+FVector ANiceInkCharacter::GetCeremonyMouthWorld(float Alpha) const
+{
+	// 嘴＝Head 骨往臉前下方（CS 臉朝 +Y、上 +Z）。手抬到嘴前＝瓶口自然靠上來。
+	if (!BowBody || !BowBody->GetSkinnedAsset())
+	{
+		return GetActorLocation();
+	}
+	const FTransform HeadW = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace);
+	const FTransform CompT = BowBody->GetComponentTransform();
+	const FVector MouthW = HeadW.GetLocation() +
+		CompT.TransformVectorNoScale(FVector(0.0f, 16.0f, -8.0f));
+	// Alpha＝從瓶子原處抬到嘴前的進度
+	return FMath::Lerp(CeremHandTargetW, MouthW, Alpha);
+}
+
+void ANiceInkCharacter::UpdateCeremonyWalk(float DeltaSeconds, const ANiceInkGameState* GS)
+{
+	// 走位只由**本地控制端**合成輸入（＝與真鍵同一條 AddMovementInput）：
+	// CMC 預測正常、他端由既有複製＋步態呈現、零 rubber-band、零 teleport。
+	if (!IsLocallyControlled() || !GS || bAsleep || bLeanLocked)
+	{
+		return;
+	}
+	const ENiCeremonyStep Step = GS->CeremonyStep;
+	FVector Target;
+	if (Step == ENiCeremonyStep::Gather)
+	{
+		const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
+		if (!PS || PS->SeatIndex < 0)
+		{
+			return;
+		}
+		Target = GS->GetCeremonySlotLocation(PS->SeatIndex);
+	}
+	else if (Step == ENiCeremonyStep::Approach && IsCeremonyVictim())
+	{
+		// 站到瓶邊（從自己來的方向靠近，面向圈心）——不站在瓶子上。
+		// 距離是旋鈕：太遠＝手構不到（實測 58cm 時肩到瓶頸 96cm > 臂長 78cm）
+		const FVector Approach = (GetActorLocation() - GS->CeremonyCenter).GetSafeNormal2D();
+		Target = GS->CeremonyCenter +
+			(Approach.IsNearlyZero() ? FVector(0, -1, 0) : Approach) * CeremonyStandoffCm;
+	}
+	else
+	{
+		return;
+	}
+
+	Target.Z = GetActorLocation().Z;
+	const FVector Delta = Target - GetActorLocation();
+	const float Dist = Delta.Size2D();
+
+	// 到位＝停止輸入（BrakingDecelerationWalking 2048 ⇒ ~0.12s 煞停，天然連續）
+	constexpr float ArriveCm = 18.0f;
+	if (Dist <= ArriveCm)
+	{
+		CeremStuckSeconds = 0.0f;
+		// 面向圈心（緩轉，不硬切）
+		const FVector ToCenter = (GS->CeremonyCenter - GetActorLocation()).GetSafeNormal2D();
+		if (!ToCenter.IsNearlyZero())
+		{
+			const float WantYaw = ToCenter.Rotation().Yaw;
+			if (AController* C = GetController())
+			{
+				const FRotator Cur = C->GetControlRotation();
+				const float NewYaw = Cur.Yaw + FMath::FindDeltaAngleDegrees(Cur.Yaw, WantYaw) *
+					FMath::Clamp(DeltaSeconds * 6.0f, 0.0f, 1.0f);
+				C->SetControlRotation(FRotator(0.0f, NewYaw, 0.0f));
+			}
+		}
+		return;
+	}
+
+	// 卡住偵測（探針實測：席位 0 → 角位的直線擦過東側長凳）：0.4s 沒進展就
+	// 側走 0.3s 繞過去。CMC 本來就會沿障礙滑行，這只是防凹角死鎖的保險。
+	FVector Dir = Delta.GetSafeNormal2D();
+	const float Moved = FVector::Dist2D(GetActorLocation(), CeremLastWalkPos);
+	CeremLastWalkPos = GetActorLocation();
+	if (CeremSideStepSeconds > 0.0f)
+	{
+		CeremSideStepSeconds -= DeltaSeconds;
+		Dir = Dir.RotateAngleAxis(CeremSideStepSign * 55.0f, FVector::UpVector);
+	}
+	else if (Moved < 1.0f * DeltaSeconds * 60.0f * 0.25f)
+	{
+		CeremStuckSeconds += DeltaSeconds;
+		if (CeremStuckSeconds > 0.4f)
+		{
+			CeremStuckSeconds = 0.0f;
+			CeremSideStepSeconds = 0.3f;
+			CeremSideStepSign = -CeremSideStepSign;
+		}
+	}
+	else
+	{
+		CeremStuckSeconds = 0.0f;
+	}
+
+	AddMovementInput(Dir, 1.0f);
+
+	// 身體朝向跟著走（bUseControllerRotationYaw 照舊生效）
+	if (AController* C = GetController())
+	{
+		const FRotator Cur = C->GetControlRotation();
+		const float NewYaw = Cur.Yaw + FMath::FindDeltaAngleDegrees(Cur.Yaw, Dir.Rotation().Yaw) *
+			FMath::Clamp(DeltaSeconds * 8.0f, 0.0f, 1.0f);
+		C->SetControlRotation(FRotator(0.0f, NewYaw, 0.0f));
+	}
+}
+
+void ANiceInkCharacter::ApplyCeremonyPose(float DeltaSeconds)
+{
+	// 儀式姿勢：與步態互斥、同一個 BowBody 載體。全部量在崩塌結束時歸 0
+	// ⇒ 交給睡姿替身的當幀＝ref pose，逐位相接。
+	if (!Body || !BowBody || !EnsureBowBodyAsset())
+	{
+		return;
+	}
+	if (!bCeremonyPoseActive)
+	{
+		bCeremonyPoseActive = true;
+		bStandDoubleActive = false; // 步態的活化旗標讓開（離場時它會自己重新活化）
+		bGaitIdleWritten = false;
+		SetBowBodyVariant(/*bWhole=*/false);
+		ResetBowBodyBones();
+		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
+		BowBody->SetOwnerNoSee(true); // 第一人稱不見自己身體（SPEC 視角規則）
+	}
+	Body->SetVisibility(false); // 碰撞保留（UV 解算照打）
+	BowBody->SetVisibility(true);
+
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	const int32 NumBones = Ref.GetNum();
+	TArray<FTransform> CS;
+	CS.SetNum(NumBones);
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		const int32 Parent = Ref.GetParentIndex(i);
+		CS[i] = Ref.GetRefBonePose()[i] * (Parent != INDEX_NONE ? CS[Parent] : FTransform::Identity);
+	}
+	auto IdxOf = [&](const TCHAR* N) { return Ref.FindBoneIndex(FName(N)); };
+
+	const int32 HipsIdx = IdxOf(TEXT("Hips"));
+	const int32 SpineIdx = IdxOf(TEXT("Spine"));
+	const int32 Spine1Idx = IdxOf(TEXT("Spine1"));
+	if (HipsIdx == INDEX_NONE || SpineIdx == INDEX_NONE)
+	{
+		return;
+	}
+
+	// ① 屈膝下沉：整體下移，腿隨後由 IK 把腳釘回原地（＝腳不離地的構造保證）
+	const FVector PelvisOfs(0.0f, 0.0f, -CeremCrouchCm);
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		CS[i].SetLocation(CS[i].GetLocation() + PelvisOfs);
+	}
+
+	// ② 上身前彎：Spine/Spine1 分攤（單骨深彎會摺爆肚子蒙皮——ApplyBowPose 的血價）
+	if (FMath::Abs(CeremBendDeg) > 0.05f)
+	{
+		// CS +X＝角色左側 ⇒ 繞 +X 轉正角＝臉向 +Y 轉向 -Z＝前彎
+		const float Half = FMath::DegreesToRadians(CeremBendDeg * 0.5f);
+		RotSubtreeAboutPivotCS(Ref, CS, SpineIdx, FQuat(FVector::XAxisVector, -Half),
+			CS[SpineIdx].GetLocation());
+		if (Spine1Idx != INDEX_NONE)
+		{
+			RotSubtreeAboutPivotCS(Ref, CS, Spine1Idx, FQuat(FVector::XAxisVector, -Half),
+				CS[Spine1Idx].GetLocation());
+		}
+	}
+
+	// ③ 腿：二骨 IK 把腳釘回 ref 地面位置（照抄 ApplyGaitPose 的解析式）
+	struct FLegDef { const TCHAR* Up; const TCHAR* Low; const TCHAR* Foot; const TCHAR* Toe; };
+	static const FLegDef Legs[2] = {
+		{ TEXT("LeftUpLeg"), TEXT("LeftLeg"), TEXT("LeftFoot"), TEXT("LeftToeBase") },
+		{ TEXT("RightUpLeg"), TEXT("RightLeg"), TEXT("RightFoot"), TEXT("RightToeBase") },
+	};
+	for (const FLegDef& Leg : Legs)
+	{
+		const int32 UpIdx = IdxOf(Leg.Up);
+		const int32 LowIdx = IdxOf(Leg.Low);
+		const int32 FootIdx = IdxOf(Leg.Foot);
+		const int32 ToeIdx = IdxOf(Leg.Toe);
+		if (UpIdx == INDEX_NONE || LowIdx == INDEX_NONE || FootIdx == INDEX_NONE)
+		{
+			continue;
+		}
+		const FVector RefHip = CS[UpIdx].GetLocation();
+		const FVector RefKnee = CS[LowIdx].GetLocation() - PelvisOfs;
+		const FVector RefFoot = CS[FootIdx].GetLocation() - PelvisOfs; // 純 ref＝地面錨
+		const FVector RefHipPure = RefHip - PelvisOfs;
+
+		const float L1 = FVector::Dist(RefHipPure, RefKnee);
+		const float L2 = FVector::Dist(RefKnee, RefFoot);
+		FVector D = RefFoot - RefHip;
+		float DLen = D.Size();
+		DLen = FMath::Clamp(DLen, FMath::Abs(L1 - L2) + 0.5f, (L1 + L2) - 0.5f);
+		const FVector DHat = D.GetSafeNormal();
+		const FVector RefAxis = (RefFoot - RefHipPure).GetSafeNormal();
+		const FVector KneeOff = RefKnee - RefHipPure;
+		const FVector PoleRef = (KneeOff - FVector::DotProduct(KneeOff, RefAxis) * RefAxis).GetSafeNormal();
+		FVector Pole = (PoleRef - FVector::DotProduct(PoleRef, DHat) * DHat).GetSafeNormal();
+		if (Pole.IsNearlyZero())
+		{
+			Pole = PoleRef;
+		}
+		const float A = (L1 * L1 - L2 * L2 + DLen * DLen) / (2.0f * DLen);
+		const float H = FMath::Sqrt(FMath::Max(L1 * L1 - A * A, 1.0f));
+		const FVector Knee = RefHip + DHat * A + Pole * H;
+		const FVector FootSolved = RefHip + DHat * DLen;
+
+		CS[UpIdx].SetRotation(FQuat::FindBetweenNormals((RefKnee - RefHipPure).GetSafeNormal(),
+			(Knee - RefHip).GetSafeNormal()) * CS[UpIdx].GetRotation());
+		CS[UpIdx].SetLocation(RefHip);
+		CS[LowIdx].SetRotation(FQuat::FindBetweenNormals((RefFoot - RefKnee).GetSafeNormal(),
+			(FootSolved - Knee).GetSafeNormal()) * CS[LowIdx].GetRotation());
+		CS[LowIdx].SetLocation(Knee);
+		FTransform FootT = CS[FootIdx];
+		FootT.SetLocation(FootSolved);
+		CS[FootIdx] = FootT;
+		if (ToeIdx != INDEX_NONE)
+		{
+			CS[ToeIdx] = FTransform(Ref.GetRefBonePose()[ToeIdx]) * CS[FootIdx];
+		}
+	}
+
+	// ④ 右臂二骨 IK（本案唯一的新解算；結構＝腿 IK 的鏡像）
+	if (CeremArmAlpha > 0.001f)
+	{
+		const int32 ArmIdx = IdxOf(TEXT("RightArm"));
+		const int32 ForeIdx = IdxOf(TEXT("RightForeArm"));
+		const int32 HandIdx = IdxOf(TEXT("RightHand"));
+		if (ArmIdx != INDEX_NONE && ForeIdx != INDEX_NONE && HandIdx != INDEX_NONE)
+		{
+			const FTransform CompT = BowBody->GetComponentTransform();
+			const FVector TargetCS = CompT.InverseTransformPosition(CeremHandTargetW);
+			const FVector Shoulder = CS[ArmIdx].GetLocation();
+			const FVector RefElbow = CS[ForeIdx].GetLocation();
+			const FVector RefHand = CS[HandIdx].GetLocation();
+			const float L1 = FVector::Dist(Shoulder, RefElbow);
+			const float L2 = FVector::Dist(RefElbow, RefHand);
+
+			// alpha 混成目標點（0＝rest 手位）＝手臂永不瞬移
+			const FVector Want = FMath::Lerp(RefHand, TargetCS, FMath::Clamp(CeremArmAlpha, 0.0f, 1.0f));
+			FVector D = Want - Shoulder;
+			float DLen = D.Size();
+			DLen = FMath::Clamp(DLen, FMath::Abs(L1 - L2) + 0.5f, (L1 + L2) - 0.5f);
+			const FVector DHat = D.GetSafeNormal();
+			// 肘極向＝rest 幾何導出（與腿 IK 同手法：保留原本的肘外開方向）
+			const FVector RefAxis = (RefHand - Shoulder).GetSafeNormal();
+			const FVector ElbowOff = RefElbow - Shoulder;
+			const FVector PoleRef = (ElbowOff - FVector::DotProduct(ElbowOff, RefAxis) * RefAxis).GetSafeNormal();
+			FVector Pole = (PoleRef - FVector::DotProduct(PoleRef, DHat) * DHat).GetSafeNormal();
+			if (Pole.IsNearlyZero())
+			{
+				Pole = PoleRef;
+			}
+			const float A = (L1 * L1 - L2 * L2 + DLen * DLen) / (2.0f * DLen);
+			const float H = FMath::Sqrt(FMath::Max(L1 * L1 - A * A, 1.0f));
+			const FVector Elbow = Shoulder + DHat * A + Pole * H;
+			const FVector HandSolved = Shoulder + DHat * DLen;
+
+			const FQuat UpperDelta = FQuat::FindBetweenNormals((RefElbow - Shoulder).GetSafeNormal(),
+				(Elbow - Shoulder).GetSafeNormal());
+			// **前臂的 delta 必須相對「已被上臂帶走之後」的狀態算**（08-16 實錘：
+			// 直接用 ref 方向會把上臂那一段重複計算一次，手幾乎不動＝handErr 71.9cm）。
+			// 腿 IK 沒這問題是因為它逐骨直接 Set，不走子樹疊加。
+			const FVector ForeDirAfterUpper = UpperDelta.RotateVector(RefHand - RefElbow).GetSafeNormal();
+			const FQuat LowerDelta = FQuat::FindBetweenNormals(ForeDirAfterUpper,
+				(HandSolved - Elbow).GetSafeNormal());
+			// 子樹整體帶走（手掌/手指/持物骨跟著前臂）
+			RotSubtreeAboutPivotCS(Ref, CS, ArmIdx, UpperDelta, Shoulder);
+			RotSubtreeAboutPivotCS(Ref, CS, ForeIdx, LowerDelta, CS[ForeIdx].GetLocation());
+		}
+	}
+
+	// ⑤ 頭頸俯仰（Neck/Head 分攤；與 ApplyLookPitchToCS 同結構、同符號）
+	if (FMath::Abs(CeremHeadPitchDeg) > 0.05f)
+	{
+		const int32 NeckIdx = IdxOf(TEXT("Neck"));
+		const int32 HeadIdx = IdxOf(TEXT("Head"));
+		if (NeckIdx != INDEX_NONE && HeadIdx != INDEX_NONE)
+		{
+			const float Share = FMath::Clamp(LookPitchHeadShare, 0.0f, 1.0f);
+			RotSubtreeAboutPivotCS(Ref, CS, NeckIdx,
+				FQuat(FVector::XAxisVector, FMath::DegreesToRadians(CeremHeadPitchDeg * (1.0f - Share))),
+				CS[NeckIdx].GetLocation());
+			RotSubtreeAboutPivotCS(Ref, CS, HeadIdx,
+				FQuat(FVector::XAxisVector, FMath::DegreesToRadians(CeremHeadPitchDeg * Share)),
+				CS[HeadIdx].GetLocation());
+		}
+	}
+
+	static const TArray<FName> CeremVerifyBones = {
+		FName(TEXT("LeftFoot")), FName(TEXT("RightFoot")),
+		FName(TEXT("RightHand")), FName(TEXT("Head")) };
+	WriteBowPoseConverged(Ref, CS, CeremVerifyBones);
+
+	// ⑥ 翻倒：站姿↔躺姿本來就是**同一網格的剛體旋轉**（sumo 無烘焙睡姿），
+	// 所以這條 slerp 的中間態不是近似、是恆等的中間姿勢。終值逐位＝
+	// ApplySleepVisual 會寫入的 BodyLieRel*，睡姿接管當幀零跳變。
+	const FQuat StandQ = BodyStandRelRot.Quaternion();
+	const FQuat LieQ = BodyLieRelRot.Quaternion();
+	const FQuat NowQ = FQuat::Slerp(StandQ, LieQ, CeremToppleAlpha).GetNormalized();
+	const FVector NowLoc = FMath::Lerp(BodyStandRelLoc, BodyLieRelLoc, CeremToppleAlpha);
+	Body->SetRelativeLocationAndRotation(NowLoc, NowQ);
+	BowBody->SetRelativeLocationAndRotation(NowLoc, NowQ);
+}
+
+FString ANiceInkCharacter::DebugRoboCeremonyStats() const
+{
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	const FVector L = GetActorLocation();
+	const FRotator BodyR = Body ? Body->GetRelativeRotation() : FRotator::ZeroRotator;
+
+	// 手 IK 診斷（量測先於機理）：手世界位置、目標、肩到目標距離 vs 臂長
+	FVector HandW = FVector::ZeroVector;
+	float ReachNeed = -1.0f, ArmLen = -1.0f;
+	if (BowBody && BowBody->GetSkinnedAsset())
+	{
+		HandW = BowBody->GetBoneTransformByName(TEXT("RightHand"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector ShoulderW =
+			BowBody->GetBoneTransformByName(TEXT("RightArm"), EBoneSpaces::WorldSpace).GetLocation();
+		const FVector ElbowW =
+			BowBody->GetBoneTransformByName(TEXT("RightForeArm"), EBoneSpaces::WorldSpace).GetLocation();
+		ArmLen = static_cast<float>(FVector::Dist(ShoulderW, ElbowW) + FVector::Dist(ElbowW, HandW));
+		ReachNeed = static_cast<float>(FVector::Dist(ShoulderW, CeremHandTargetW));
+	}
+
+	return FString::Printf(
+		TEXT("step=%d t=%.3f victim=%d loc=%.1f,%.1f,%.1f yaw=%.1f bend=%.1f crouch=%.1f arm=%.2f ")
+		TEXT("head=%.1f topple=%.3f bodyRelP=%.1f bodyRelY=%.1f bodyRelR=%.1f asleep=%d ")
+		TEXT("handW=%.1f,%.1f,%.1f tgtW=%.1f,%.1f,%.1f handErr=%.1f reachNeed=%.1f armLen=%.1f"),
+		GS ? static_cast<int32>(GS->CeremonyStep) : -1,
+		GS ? GS->GetCeremonyAlpha() : -1.0f,
+		IsCeremonyVictim() ? 1 : 0,
+		L.X, L.Y, L.Z, GetActorRotation().Yaw,
+		CeremBendDeg, CeremCrouchCm, CeremArmAlpha, CeremHeadPitchDeg, CeremToppleAlpha,
+		BodyR.Pitch, BodyR.Yaw, BodyR.Roll, bAsleep ? 1 : 0,
+		HandW.X, HandW.Y, HandW.Z, CeremHandTargetW.X, CeremHandTargetW.Y, CeremHandTargetW.Z,
+		static_cast<float>(FVector::Dist(HandW, CeremHandTargetW)), ReachNeed, ArmLen);
+}
+
 float ANiceInkCharacter::CurrentLookPitchForPose(float DeltaSeconds)
 {
 	// 本人＝相機 pitch 零延遲（旁人相機/第三人稱鏡頭下看自己）；他端＝複製值平滑追趕
@@ -7060,6 +7695,15 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		return;
 	}
 	const float FreqOf[5] = { JiggleBellyHz, JiggleChestHz, JiggleChestHz, JiggleButtHz, JiggleButtHz };
+	// 醉倒拍的增益倍率（見 JiggleCollapseScale 註解）
+	float CollapseScaleNow = 1.0f;
+	if (const ANiceInkGameState* JigGS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr)
+	{
+		if (JigGS->CeremonyStep == ENiCeremonyStep::Collapse && IsCeremonyVictim())
+		{
+			CollapseScaleNow = FMath::Max(JiggleCollapseScale, 0.0f);
+		}
+	}
 	// 旋轉耦合幾何（2026-08-05 user 抓「晃動時陰影更糟」：純平移不轉法線＝
 	// 形狀在動、明暗凍結＝肉在「滑」不在「滾」。修法＝偏移的切向分量換成
 	// 繞體內樞軸的旋轉——法線隨骨轉、明暗即時響應；徑向殘餘留平移。
@@ -7121,7 +7765,9 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 			S.PosW += S.VelW * StepH;
 		}
 
-		FVector OffsetW = (S.PosW - AnchorW) * JiggleGain;
+		// 醉倒期降增益：翻倒的角加速度是步行的一個數量級以上，原增益會把彈簧
+		// 整段釘在鉗位（＝形變而非晃動）。降到線性域內才是「肉在晃」。
+		FVector OffsetW = (S.PosW - AnchorW) * (JiggleGain * CollapseScaleNow);
 		OffsetW = OffsetW.GetClampedToMaxSize(JiggleMaxCm);
 		const FVector OffsetCS = CompT.InverseTransformVectorNoScale(OffsetW);
 		S.LastSpringCm = static_cast<float>(OffsetCS.Size());

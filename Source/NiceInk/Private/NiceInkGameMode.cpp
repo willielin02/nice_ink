@@ -1,5 +1,6 @@
 #include "NiceInkGameMode.h"
 
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameSession.h"
@@ -8,6 +9,7 @@
 #include "InkTypes.h"
 #include "Kismet/GameplayStatics.h"
 #include "Misc/Crc.h"
+#include "NiceInkBottle.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkGameInstance.h"
@@ -55,6 +57,7 @@ FString ANiceInkGameMode::InitNewPlayer(APlayerController* NewPlayerController, 
 
 void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 {
+	EnsureStageGeometry(); // 舞台幾何要在任何鏡頭/走位讀它之前就有效
 	// 房間碼上牆：建房時 SessionSubsystem 存進 GameInstance，這裡轉進 GameState
 	// 複製全員（大廳顯示給朋友唸）。無 session 流程（PIE/robo/直連）＝空＝不顯示。
 	if (ANiceInkGameState* GS = GetGameState<ANiceInkGameState>())
@@ -282,6 +285,14 @@ void ANiceInkGameMode::AbortRound(bool bEnoughPlayers)
 	ForceExitAllLeans();
 	ClearFlipProposal();
 	RoundCleanupAllCharacters();
+
+	// 儀式中途作廢：步進歸零、瓶子回地上（未歸零＝下一輪的純函式讀到殘留步）
+	SetCeremonyStep(ENiCeremonyStep::None, 0.0f);
+	PendingVictimId = INDEX_NONE;
+	if (CeremonyBottle.IsValid())
+	{
+		CeremonyBottle->ServerSetHeld(nullptr);
+	}
 
 	// 殘留的沉睡者拉起來（受害者中離時不會有；防禦寫法）
 	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
@@ -755,6 +766,329 @@ float ANiceInkGameMode::ProbeFloorZ(const FVector& At) const
 	return 0.0f;
 }
 
+FString ANiceInkGameMode::DebugRoomCenterProbe() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return TEXT("ROOMPROBE no-world");
+	}
+
+	// **只用 line trace**（2026-08-16 血價）：道場部件是 complex-as-simple 碰撞，
+	// 膠囊 overlap 對三角網格查不到 ⇒ 首版「可站立」測試把整片牆判成淨空、
+	// 可走域一路延伸到掃描邊界。射線打得到，overlap 打不到。
+	FCollisionQueryParams Ignore(SCENE_QUERY_STAT(NiRoomProbe), /*bTraceComplex=*/true);
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		Ignore.AddIgnoredActor(*It); // 活體不算場地
+	}
+
+	auto FloorAt = [World, &Ignore](const FVector2D& P, float& OutZ) -> bool
+	{
+		FHitResult Hit;
+		if (!World->LineTraceSingleByChannel(Hit, FVector(P.X, P.Y, 150.0f),
+			FVector(P.X, P.Y, -1000.0f), ECC_Visibility, Ignore))
+		{
+			return false;
+		}
+		OutZ = static_cast<float>(Hit.ImpactPoint.Z);
+		return OutZ > -50.0f && OutZ < 60.0f; // 高台/桌面不算地板
+	};
+
+	// 「在房間裡」＝四面八方的水平射線都在合理距離內打到東西（牆）。
+	// 房間中心＝**離最近的牆最遠的點**（pole of inaccessibility）。
+	constexpr int32 NumRays = 24;
+	constexpr float RayLen = 1200.0f;
+	auto Enclosure = [&](const FVector2D& P, float FloorZ, float& OutMinDist, int32& OutMisses)
+	{
+		OutMinDist = RayLen;
+		OutMisses = 0;
+		for (int32 i = 0; i < NumRays; ++i)
+		{
+			const float Rad = FMath::DegreesToRadians(360.0f * i / NumRays);
+			const FVector Dir(FMath::Cos(Rad), FMath::Sin(Rad), 0.0f);
+			// 胸高＋膝高各一條：矮傢俱（長凳）與高牆都算「邊界」
+			float Best = RayLen;
+			bool bAnyHit = false;
+			for (float H : { 45.0f, 120.0f })
+			{
+				FHitResult Hit;
+				const FVector Start(P.X, P.Y, FloorZ + H);
+				if (World->LineTraceSingleByChannel(Hit, Start, Start + Dir * RayLen,
+					ECC_Visibility, Ignore))
+				{
+					bAnyHit = true;
+					Best = FMath::Min(Best, static_cast<float>(Hit.Distance));
+				}
+			}
+			if (!bAnyHit)
+			{
+				++OutMisses; // 這個方向沒有邊界＝不在封閉空間內
+			}
+			OutMinDist = FMath::Min(OutMinDist, Best);
+		}
+	};
+
+	TArray<FString> Out;
+	Out.Add(FString::Printf(TEXT("ROOMPROBE rays=%d rayLen=%.0f (line-trace only: complex-as-simple 對 overlap 不可見)"),
+		NumRays, RayLen));
+
+	// 掃描：候選中心 50cm 網格
+	constexpr float Step = 50.0f;
+	constexpr float ScanMin = -700.0f, ScanMax = 700.0f;
+	struct FCand { FVector2D P; float Clear; };
+	TArray<FCand> Inside;
+	FVector2D BbMin(FLT_MAX, FLT_MAX), BbMax(-FLT_MAX, -FLT_MAX), Sum(0, 0);
+	for (float X = ScanMin; X <= ScanMax; X += Step)
+	{
+		for (float Y = ScanMin; Y <= ScanMax; Y += Step)
+		{
+			const FVector2D P(X, Y);
+			float Z = 0.0f;
+			if (!FloorAt(P, Z))
+			{
+				continue;
+			}
+			float MinD = 0.0f;
+			int32 Misses = 0;
+			Enclosure(P, Z, MinD, Misses);
+			if (Misses > 0 || MinD < 40.0f)
+			{
+				continue; // 開放側/貼牆
+			}
+			Inside.Add({ P, MinD });
+			BbMin.X = FMath::Min(BbMin.X, X); BbMin.Y = FMath::Min(BbMin.Y, Y);
+			BbMax.X = FMath::Max(BbMax.X, X); BbMax.Y = FMath::Max(BbMax.Y, Y);
+			Sum += P;
+		}
+	}
+	Out.Add(FString::Printf(TEXT("INSIDE n=%d bbox min=(%.0f,%.0f) max=(%.0f,%.0f) size=(%.0f x %.0f) mid=(%.0f,%.0f) centroid=(%.1f,%.1f)"),
+		Inside.Num(), BbMin.X, BbMin.Y, BbMax.X, BbMax.Y,
+		BbMax.X - BbMin.X, BbMax.Y - BbMin.Y,
+		(BbMin.X + BbMax.X) * 0.5f, (BbMin.Y + BbMax.Y) * 0.5f,
+		Inside.Num() ? Sum.X / Inside.Num() : 0.0f, Inside.Num() ? Sum.Y / Inside.Num() : 0.0f));
+	if (Inside.Num() == 0)
+	{
+		return FString::Join(Out, TEXT("\n"));
+	}
+
+	// ASCII 地圖（100cm/格；數字＝該格離最近邊界的距離 ÷100，越大越中央）
+	Out.Add(TEXT("MAP (100cm/cell, rows=X asc, cols=Y asc; digit=clearance/100cm, S=seat, L=lieSpot, .=outside)"));
+	TMap<int32, float> Best100;
+	for (const FCand& C : Inside)
+	{
+		const int32 Key = FMath::RoundToInt(C.P.X / 100.0f) * 10000 + FMath::RoundToInt(C.P.Y / 100.0f);
+		float& V = Best100.FindOrAdd(Key, 0.0f);
+		V = FMath::Max(V, C.Clear);
+	}
+	for (int32 xi = FMath::RoundToInt(BbMin.X / 100.0f); xi <= FMath::RoundToInt(BbMax.X / 100.0f); ++xi)
+	{
+		FString Row = FString::Printf(TEXT("x=%5d "), xi * 100);
+		for (int32 yi = FMath::RoundToInt(BbMin.Y / 100.0f); yi <= FMath::RoundToInt(BbMax.Y / 100.0f); ++yi)
+		{
+			const float* V = Best100.Find(xi * 10000 + yi);
+			TCHAR Ch = V ? static_cast<TCHAR>(TEXT('0') + FMath::Min(9, FMath::FloorToInt(*V / 100.0f))) : TEXT('.');
+			for (const FVector2D& Sp : SeatSpots)
+			{
+				if (FMath::RoundToInt(Sp.X / 100.0f) == xi && FMath::RoundToInt(Sp.Y / 100.0f) == yi)
+				{
+					Ch = TEXT('S');
+				}
+			}
+			if (FMath::RoundToInt(VictimLieSpot.X / 100.0f) == xi &&
+				FMath::RoundToInt(VictimLieSpot.Y / 100.0f) == yi)
+			{
+				Ch = TEXT('L');
+			}
+			Row.AppendChar(Ch);
+		}
+		Out.Add(Row);
+	}
+
+	Inside.Sort([](const FCand& A, const FCand& B) { return A.Clear > B.Clear; });
+	Out.Add(TEXT("MOST-CENTRAL (max clearance to nearest boundary):"));
+	for (int32 i = 0; i < FMath::Min(8, Inside.Num()); ++i)
+	{
+		Out.Add(FString::Printf(TEXT("  #%d center=(%.0f,%.0f) clearance=%.0fcm"),
+			i, Inside[i].P.X, Inside[i].P.Y, Inside[i].Clear));
+	}
+
+	// 現況對照
+	float LieZ = 0.0f, LieClear = 0.0f;
+	int32 LieMiss = 0;
+	if (FloorAt(VictimLieSpot, LieZ))
+	{
+		Enclosure(VictimLieSpot, LieZ, LieClear, LieMiss);
+	}
+	Out.Add(FString::Printf(TEXT("CURRENT lieSpot=(%.0f,%.0f) clearance=%.0fcm misses=%d"),
+		VictimLieSpot.X, VictimLieSpot.Y, LieClear, LieMiss));
+	for (int32 i = 0; i < SeatSpots.Num(); ++i)
+	{
+		float Z = 0.0f, Cl = 0.0f;
+		int32 Ms = 0;
+		if (FloorAt(SeatSpots[i], Z))
+		{
+			Enclosure(SeatSpots[i], Z, Cl, Ms);
+		}
+		Out.Add(FString::Printf(TEXT("  seat%d=(%.0f,%.0f) clearance=%.0fcm misses=%d"),
+			i, SeatSpots[i].X, SeatSpots[i].Y, Cl, Ms));
+	}
+
+	const FString Result = FString::Join(Out, TEXT("\n"));
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Result);
+	return Result;
+}
+
+FString ANiceInkGameMode::DebugCeremonyProbe(float CenterX, float CenterY) const
+{
+	// 開場儀式場地探針（施工前量測，不猜）。輸出＝機讀行。
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return TEXT("PROBE no-world");
+	}
+
+	const FVector2D Center(CenterX, CenterY);
+
+	// 力士全部忽略（否則：Body 擋 ECC_Visibility ⇒ 地板射線打到人頭 z≈140；
+	// 膠囊重疊撞到彼此 ⇒ 整條路徑假 blocked。首輪探針就是這樣被污染的）
+	FCollisionQueryParams Ignore(SCENE_QUERY_STAT(NiCeremonyProbe), /*bTraceComplex=*/true);
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		Ignore.AddIgnoredActor(*It);
+	}
+
+	// 地板射線（與 ProbeFloorZ 同慣例：從 +150 起——+500 會打到屋頂外側）
+	auto FloorAt = [World, &Ignore](const FVector2D& P, float& OutZ, FString* OutWho) -> bool
+	{
+		FHitResult Hit;
+		const FVector Start(P.X, P.Y, 150.0f);
+		const FVector End(P.X, P.Y, -1000.0f);
+		if (World->LineTraceSingleByChannel(Hit, Start, End, ECC_Visibility, Ignore))
+		{
+			OutZ = static_cast<float>(Hit.ImpactPoint.Z);
+			if (OutWho && Hit.GetActor())
+			{
+				*OutWho = Hit.GetActor()->GetName();
+			}
+			return true;
+		}
+		OutZ = -9999.0f;
+		return false;
+	};
+
+	// 站位淨空：真膠囊尺寸（42×92）在該點的重疊測試（低空障礙＝柱/矮几都抓得到）；
+	// 回報擋路者名字＝診斷用（哪個道場部件擋住哪個角位）
+	auto ClearAt = [World, &Ignore](const FVector2D& P, float FloorZ, FString* OutWho) -> bool
+	{
+		const FVector At(P.X, P.Y, FloorZ + 92.0f);
+		TArray<FOverlapResult> Overlaps;
+		World->OverlapMultiByChannel(Overlaps, At, FQuat::Identity, ECC_Pawn,
+			FCollisionShape::MakeCapsule(42.0f, 92.0f), Ignore);
+		for (const FOverlapResult& O : Overlaps)
+		{
+			if (O.GetActor() && O.Component.IsValid() &&
+				O.Component->GetCollisionResponseToChannel(ECC_Pawn) == ECR_Block)
+			{
+				if (OutWho)
+				{
+					*OutWho = O.GetActor()->GetName();
+				}
+				return false;
+			}
+		}
+		return true;
+	};
+
+	TArray<FString> Out;
+	Out.Add(FString::Printf(TEXT("PROBE center=(%.1f,%.1f) lie=(%.1f,%.1f)"),
+		CenterX, CenterY, VictimLieSpot.X, VictimLieSpot.Y));
+
+	float CenterZ = 0.0f;
+	FString CenterWho;
+	const bool bCenterOk = FloorAt(Center, CenterZ, &CenterWho);
+	FString CenterBlocker;
+	const bool bCenterClear = bCenterOk && ClearAt(Center, CenterZ, &CenterBlocker);
+	Out.Add(FString::Printf(TEXT("CENTERFLOOR ok=%d z=%.1f on=%s clear=%d by=%s"),
+		bCenterOk ? 1 : 0, CenterZ, *CenterWho, bCenterClear ? 1 : 0, *CenterBlocker));
+
+	// 半徑掃描：每環 24 個角位（15°）
+	static const float Radii[] = { 120.0f, 140.0f, 160.0f, 180.0f, 200.0f, 220.0f };
+	constexpr int32 NumAng = 24;
+	for (float R : Radii)
+	{
+		int32 Hits = 0, Clears = 0;
+		float ZMin = TNumericLimits<float>::Max();
+		float ZMax = -TNumericLimits<float>::Max();
+		FString Bad;
+		for (int32 i = 0; i < NumAng; ++i)
+		{
+			const float Ang = 360.0f * i / NumAng;
+			const float Rad = FMath::DegreesToRadians(Ang);
+			const FVector2D P = Center + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * R;
+			float Z = 0.0f;
+			FString Who;
+			const bool bFloor = FloorAt(P, Z, nullptr);
+			const bool bClear = bFloor && ClearAt(P, Z, &Who);
+			if (bFloor)
+			{
+				++Hits;
+				ZMin = FMath::Min(ZMin, Z);
+				ZMax = FMath::Max(ZMax, Z);
+			}
+			if (bClear)
+			{
+				++Clears;
+			}
+			else
+			{
+				Bad += FString::Printf(TEXT("%d:%s "), static_cast<int32>(Ang),
+					bFloor ? *Who : TEXT("NOFLOOR"));
+			}
+		}
+		Out.Add(FString::Printf(TEXT("RING r=%.0f floor=%d/%d clear=%d/%d zMin=%.1f zMax=%.1f bad=[%s]"),
+			R, Hits, NumAng, Clears, NumAng,
+			Hits > 0 ? ZMin : -9999.0f, Hits > 0 ? ZMax : -9999.0f, *Bad));
+	}
+
+	// 席位→圈上角位的直線路徑取樣（走路會不會掉出世界／撞死）
+	const int32 NumSeats = SeatSpots.Num();
+	for (int32 S = 0; S < NumSeats; ++S)
+	{
+		const float SlotAng = 360.0f * S / FMath::Max(NumSeats, 1);
+		const float Rad = FMath::DegreesToRadians(SlotAng);
+		const FVector2D Slot = Center + FVector2D(FMath::Cos(Rad), FMath::Sin(Rad)) * 160.0f;
+		const FVector2D From = SeatSpots[S];
+		int32 Holes = 0, Blocks = 0;
+		FString Who;
+		constexpr int32 NumSamp = 20;
+		for (int32 k = 1; k <= NumSamp; ++k)
+		{
+			const FVector2D P = FMath::Lerp(From, Slot, static_cast<float>(k) / NumSamp);
+			float Z = 0.0f;
+			FString W;
+			if (!FloorAt(P, Z, nullptr))
+			{
+				++Holes;
+			}
+			else if (!ClearAt(P, Z, &W))
+			{
+				++Blocks;
+				if (Who.IsEmpty())
+				{
+					Who = W;
+				}
+			}
+		}
+		Out.Add(FString::Printf(TEXT("PATH seat=%d from=(%.0f,%.0f) slot=(%.0f,%.0f) dist=%.0f holes=%d blocks=%d by=%s"),
+			S, From.X, From.Y, Slot.X, Slot.Y, FVector2D::Distance(From, Slot), Holes, Blocks, *Who));
+	}
+
+	const FString Result = FString::Join(Out, TEXT("\n"));
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Result);
+	return Result;
+}
+
 FTransform ANiceInkGameMode::GetSeatTransform(int32 SeatIndex) const
 {
 	const FVector2D Spot = SeatSpots.Num() > 0 ? SeatSpots[SeatIndex % SeatSpots.Num()] : FVector2D::ZeroVector;
@@ -888,11 +1222,288 @@ void ANiceInkGameMode::HandleLaserRequest(ANiceInkCharacter* Requester)
 	PersistCharacter(Requester);
 }
 
+bool ANiceInkGameMode::IsCeremonySpotClear(const FVector& At) const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return true;
+	}
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(NiCeremonySlot), /*bTraceComplex=*/false);
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		Params.AddIgnoredActor(*It); // 活體不算場地（探針首輪被自己人污染的教訓）
+	}
+	return !World->OverlapBlockingTestByChannel(At + FVector(0.0f, 0.0f, 92.0f), FQuat::Identity,
+		ECC_Pawn, FCollisionShape::MakeCapsule(42.0f, 92.0f), Params);
+}
+
+float ANiceInkGameMode::ComputeCeremonySlotOffset() const
+{
+	// 掃描 72 個候選偏移（5°）：先要求全角位淨空，再取「總角位移最小」者
+	//（＝每個人走最短的路到自己的角位；席位序≡角向序 ⇒ 路徑天然不交叉）。
+	const ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return 0.0f;
+	}
+	TArray<int32> Seats;
+	for (const APlayerState* PS : GS->PlayerArray)
+	{
+		if (const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+		{
+			if (NIPS->SeatIndex >= 0)
+			{
+				Seats.AddUnique(NIPS->SeatIndex);
+			}
+		}
+	}
+	Seats.Sort();
+	const int32 N = Seats.Num();
+	if (N == 0)
+	{
+		return 0.0f;
+	}
+
+	const FVector Center = GS->CeremonyCenter;
+	const float R = GS->CeremonyRadiusCm;
+
+	// 每位玩家從圈心看出去的方位角（＝他「本來就在的方向」）
+	TArray<float> Bearings;
+	Bearings.SetNum(N);
+	for (int32 i = 0; i < N; ++i)
+	{
+		const FVector2D Spot = SeatSpots.IsValidIndex(Seats[i]) ? SeatSpots[Seats[i]] : FVector2D::ZeroVector;
+		Bearings[i] = FMath::RadiansToDegrees(FMath::Atan2(Spot.Y - Center.Y, Spot.X - Center.X));
+	}
+
+	float BestOffset = 0.0f;
+	float BestCost = TNumericLimits<float>::Max();
+	bool bFoundClear = false;
+	for (int32 k = 0; k < 72; ++k)
+	{
+		const float Offset = k * 5.0f;
+		bool bAllClear = true;
+		float Cost = 0.0f;
+		for (int32 i = 0; i < N; ++i)
+		{
+			const float Ang = Offset + 360.0f * i / N;
+			const float Rad = FMath::DegreesToRadians(Ang);
+			FVector At = Center + FVector(FMath::Cos(Rad), FMath::Sin(Rad), 0.0f) * R;
+			At.Z = ProbeFloorZ(At);
+			if (!IsCeremonySpotClear(At))
+			{
+				bAllClear = false;
+			}
+			Cost += FMath::Abs(FMath::FindDeltaAngleDegrees(Bearings[i], Ang));
+		}
+		// 淨空優先於距離：一旦找到淨空解，之後只跟淨空解比
+		if (bAllClear && !bFoundClear)
+		{
+			bFoundClear = true;
+			BestCost = TNumericLimits<float>::Max();
+		}
+		if (bAllClear == bFoundClear && Cost < BestCost)
+		{
+			BestCost = Cost;
+			BestOffset = Offset;
+		}
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiCeremony: slot offset %.0f deg (allClear=%d cost=%.0f n=%d)"),
+		BestOffset, bFoundClear ? 1 : 0, BestCost, N);
+	return BestOffset;
+}
+
+ANiceInkBottle* ANiceInkGameMode::GetOrSpawnBottle()
+{
+	if (CeremonyBottle.IsValid())
+	{
+		return CeremonyBottle.Get();
+	}
+	UWorld* World = GetWorld();
+	const ANiceInkGameState* GS = NIState();
+	if (!World || !GS)
+	{
+		return nullptr;
+	}
+	// 瓶子從此常駐房間中央（回合 2+ 的罰酒直接再撿一次＝免費復用）
+	FVector At = GS->CeremonyCenter;
+	At.Z = ProbeFloorZ(At);
+	FActorSpawnParameters SP;
+	SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ANiceInkBottle* B = World->SpawnActor<ANiceInkBottle>(ANiceInkBottle::StaticClass(), At,
+		FRotator::ZeroRotator, SP);
+	if (B)
+	{
+		B->RestLocation = At;
+		CeremonyBottle = B;
+	}
+	return B;
+}
+
+void ANiceInkGameMode::EnsureStageGeometry()
+{
+	// 舞台幾何寫進 GameState＝**單一來源**（GameMode 只活在伺服器，但客戶端的
+	// 演出鏡頭與儀式走位都要它）。改 VictimLieSpot 一處，全鏈跟著走。
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return;
+	}
+	FVector Center(VictimLieSpot.X, VictimLieSpot.Y, 0.0f);
+	Center.Z = ProbeFloorZ(Center);
+	GS->CeremonyCenter = Center;
+	GS->CeremonyRadiusCm = CeremonyCircleRadiusCm;
+	const FTransform LieT = GetVictimLieTransform();
+	GS->CeremonyLieLocation = LieT.GetLocation();
+	GS->CeremonyLieYaw = LieT.Rotator().Yaw;
+}
+
+void ANiceInkGameMode::SetCeremonyStep(ENiCeremonyStep Step, float Duration)
+{
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return;
+	}
+	GS->CeremonyStep = Step;
+	GS->CeremonyStepStartTime = GS->GetServerWorldTimeSeconds();
+	GS->CeremonyStepDuration = FMath::Max(Duration, 0.01f);
+	GetWorldTimerManager().ClearTimer(PhaseTimerHandle);
+	if (Step != ENiCeremonyStep::None)
+	{
+		GetWorldTimerManager().SetTimer(PhaseTimerHandle, this, &ANiceInkGameMode::OnCeremonyStepDone,
+			GS->CeremonyStepDuration, false);
+	}
+	UE_LOG(LogTemp, Log, TEXT("NiCeremony: step=%d dur=%.2f"), static_cast<int32>(Step), Duration);
+}
+
 void ANiceInkGameMode::EnterBottleSpin()
 {
 	ANiceInkGameState* GS = NIState();
-	GS->SetPhase(ENiceInkPhase::BottleSpin, BottleSpinSeconds);
-	SetPhaseTimer(BottleSpinSeconds, &ANiceInkGameMode::OnBottleSpinDone);
+	if (!bCeremonyEnabled)
+	{
+		GS->SetPhase(ENiceInkPhase::BottleSpin, BottleSpinSeconds);
+		SetPhaseTimer(BottleSpinSeconds, &ANiceInkGameMode::OnBottleSpinDone);
+		return;
+	}
+
+	if (GS->PlayerArray.Num() == 0)
+	{
+		GS->SetPhase(ENiceInkPhase::Lobby, 0.0f);
+		SetSessionInProgress(false);
+		return;
+	}
+
+	// **先抽後演**（user 定案）：人選現在就定，酒瓶只是把它演出來。
+	// 不寫進 GameState＝HUD 在轉瓶期間不劇透（Spin 結束才揭曉）。
+	PendingVictimId = INDEX_NONE;
+	if (DebugForcedVictimSeat >= 0)
+	{
+		for (APlayerState* PS : GS->PlayerArray)
+		{
+			const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
+			if (NIPS && NIPS->SeatIndex == DebugForcedVictimSeat)
+			{
+				PendingVictimId = NIPS->GetPlayerId();
+				break;
+			}
+		}
+	}
+	if (PendingVictimId == INDEX_NONE)
+	{
+		// 均勻隨機＝真公平（席位角度不等距，真物理＋扇區判定會偏心）
+		PendingVictimId = GS->PlayerArray[FMath::RandRange(0, GS->PlayerArray.Num() - 1)]->GetPlayerId();
+	}
+
+	// 圍圈幾何：圈心＝躺位（崩塌終點 ≡ 躺位 ⇒ 零位移修正的承重性質）
+	EnsureStageGeometry();
+	GS->CeremonySlotOffsetDeg = ComputeCeremonySlotOffset();
+
+	if (ANiceInkBottle* B = GetOrSpawnBottle())
+	{
+		GS->BottleStartYaw = B->GetActorRotation().Yaw;
+		GS->BottleEndYaw = GS->BottleStartYaw; // Gather 期間不轉；Spin 開始才算終角
+	}
+
+	GS->SetPhase(ENiceInkPhase::BottleSpin, CeremonyGatherSeconds + CeremonySpinSeconds);
+	SetCeremonyStep(ENiCeremonyStep::Gather, CeremonyGatherSeconds);
+}
+
+void ANiceInkGameMode::OnCeremonyStepDone()
+{
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return;
+	}
+
+	// 受害者中離防護：抽中的人不在了＝本回合作廢重來（AbortRound 內含人數判斷）
+	const bool bNeedVictim = GS->CeremonyStep != ENiCeremonyStep::Gather;
+	const int32 CheckId = (GS->CeremonyStep == ENiCeremonyStep::Spin) ? PendingVictimId : GS->VictimPlayerId;
+	if (bNeedVictim && (CheckId == INDEX_NONE ||
+		!ANiceInkCharacter::FindByPlayerId(GetWorld(), CheckId)))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiCeremony: victim %d gone mid-ceremony - abort"), CheckId);
+		SetCeremonyStep(ENiCeremonyStep::None, 0.0f);
+		AbortRound(GS->PlayerArray.Num() >= FMath::Max(MinPlayersToStart, 2));
+		return;
+	}
+
+	switch (GS->CeremonyStep)
+	{
+	case ENiCeremonyStep::Gather:
+	{
+		// 轉瓶終角＝瓶心指向受害者**當下實際位置**（大家剛走完位，比用角位更準）
+		const ANiceInkCharacter* Victim = ANiceInkCharacter::FindByPlayerId(GetWorld(), PendingVictimId);
+		float TargetYaw = GS->BottleStartYaw;
+		if (Victim)
+		{
+			const FVector To = Victim->GetActorLocation() - GS->CeremonyCenter;
+			TargetYaw = FMath::RadiansToDegrees(FMath::Atan2(To.Y, To.X));
+		}
+		const int32 Turns = FMath::RandRange(FMath::Max(CeremonySpinTurnsMin, 1),
+			FMath::Max(CeremonySpinTurnsMax, CeremonySpinTurnsMin));
+		if (const ANiceInkBottle* B = GetOrSpawnBottle())
+		{
+			GS->BottleStartYaw = B->GetActorRotation().Yaw;
+		}
+		GS->BottleEndYaw = GS->BottleStartYaw + Turns * 360.0f +
+			FMath::FindDeltaAngleDegrees(GS->BottleStartYaw, TargetYaw);
+		SetCeremonyStep(ENiCeremonyStep::Spin, CeremonySpinSeconds);
+		break;
+	}
+	case ENiCeremonyStep::Spin:
+		// 揭曉：此刻才寫進 GameState（HUD 的受害者欄同步亮起）
+		SetCeremonyStep(ENiCeremonyStep::None, 0.0f);
+		EnterSeating(PendingVictimId);
+		break;
+	case ENiCeremonyStep::Approach:
+		SetCeremonyStep(ENiCeremonyStep::PickUp, CeremonyPickupSeconds);
+		break;
+	case ENiCeremonyStep::PickUp:
+		// 手已在瓶頸上 ⇒ 改由手驅動瓶子，世界變換不變＝交接不可見
+		if (ANiceInkBottle* B = GetOrSpawnBottle())
+		{
+			B->ServerSetHeld(GetVictimCharacter());
+		}
+		SetCeremonyStep(ENiCeremonyStep::Drink, CeremonyDrinkSeconds);
+		break;
+	case ENiCeremonyStep::Drink:
+		if (ANiceInkBottle* B = GetOrSpawnBottle())
+		{
+			B->ServerDrop(); // 醉倒＝瓶先脫手
+		}
+		SetCeremonyStep(ENiCeremonyStep::Collapse, CeremonyCollapseSeconds);
+		break;
+	case ENiCeremonyStep::Collapse:
+		SetCeremonyStep(ENiCeremonyStep::None, 0.0f);
+		BeginVictimSleep(/*bAlreadyLying=*/true);
+		OnSeatingDone();
+		break;
+	default:
+		break;
+	}
 }
 
 void ANiceInkGameMode::OnBottleSpinDone()
@@ -961,10 +1572,43 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 	// 搖晃攻擊冷卻不跨回合
 	LastShakeTimeByPlayer.Reset();
 
+	// 入睡儀式（2026-08-16 user 定案「都不要有硬切」）：每一回合的入座酒／罰酒
+	// 都走同一段 Approach→PickUp→Drink→Collapse——只做開場＝第二回合起又傳送
+	// 落地，正好是要根除的硬切。真正的入睡在 Collapse 結束（BeginVictimSleep）。
+	if (bCeremonyEnabled)
+	{
+		EnsureStageGeometry();
+		if (FMath::IsNearlyZero(GS->CeremonySlotOffsetDeg))
+		{
+			GS->CeremonySlotOffsetDeg = ComputeCeremonySlotOffset();
+		}
+		GetOrSpawnBottle();
+		const float Total = CeremonyApproachSeconds + CeremonyPickupSeconds +
+			CeremonyDrinkSeconds + CeremonyCollapseSeconds;
+		GS->SetPhase(ENiceInkPhase::Seating, Total);
+		SetCeremonyStep(ENiCeremonyStep::Approach, CeremonyApproachSeconds);
+		return;
+	}
+
+	BeginVictimSleep(/*bAlreadyLying=*/false);
+	GS->SetPhase(ENiceInkPhase::Seating, SeatingSeconds);
+	SetPhaseTimer(SeatingSeconds, &ANiceInkGameMode::OnSeatingDone);
+}
+
+void ANiceInkGameMode::BeginVictimSleep(bool bAlreadyLying)
+{
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
+	{
+		return;
+	}
+	const int32 VictimPlayerId = GS->VictimPlayerId;
+
 	if (ANiceInkCharacter* Victim = GetVictimCharacter())
 	{
 		Victim->MulticastSetRoundIndex(GS->CurrentRound);
-		Victim->ServerSetAsleep(true, GetVictimLieTransform());
+		// bAlreadyLying＝崩塌動畫已經把身體放到躺位 ⇒ 跳過傳送（零跳變的最後一哩）
+		Victim->ServerSetAsleep(true, GetVictimLieTransform(), bAlreadyLying);
 
 		// 醉夢描圖（v4.0 定案 #49；迷宮退役）：難度檔＝罰酒杯數（酒越深夢越深＝
 		// 時間更長帶更窄、圖案池更複雜）；種子每回合新開。只發受害者。
@@ -988,9 +1632,6 @@ void ANiceInkGameMode::EnterSeating(int32 VictimPlayerId)
 			: FMath::RandRange(1, MAX_int32 - 1);
 		Victim->ClientStartTrace(TraceSeed, TraceParams);
 	}
-
-	GS->SetPhase(ENiceInkPhase::Seating, SeatingSeconds);
-	SetPhaseTimer(SeatingSeconds, &ANiceInkGameMode::OnSeatingDone);
 }
 
 void ANiceInkGameMode::OnSeatingDone()

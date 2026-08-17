@@ -48,19 +48,27 @@ public:
 	//     道場 actor 基準點為此西移 250cm——見 CLAUDE.md 陷阱年鑑「地板探針」條） ---
 
 	// 六個席位（2D；z 由地板探測決定）。
+	// **2026-08-16 全部搬到房間正中央**（user 定案「我希望整個遊戲都在房間的正中央進行」）：
+	// 關卡實測（部件包圍盒，不是射線猜的）——floor_Shape 中心 (403,27)、跨
+	// x −309…1115 / y −352…406＝14.2×7.6m 長廳；拉門在**東西兩端**（x≈−306 / x≈1110）；
+	// 三塊榻榻米中心 (431,41)、跨 x 130…732＝道場的天然舞台（也正是 CLAUDE.md 記的
+	// 部件基準點 430.7,40.9）。舊席位擠在 x −300…155＝長廳**最西端、緊貼西側門口**，
+	// 席位 3/4 幾乎貼牆（射線量到淨空只有 72cm / 6cm）。
+	// 現制＝繞舞台中心 (430,40) 半徑 230 的六等分環（儀式圍圈 R=160 在其內側，
+	// Gather 那一拍還是有「往中間靠攏」的動作）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
 	TArray<FVector2D> SeatSpots = {
-		FVector2D(155.0f, -40.0f),   // 東長凳
-		FVector2D(100.0f, 150.0f),   // 東北地板
-		FVector2D(-100.0f, 150.0f),  // 西北地板
-		FVector2D(-235.0f, 60.0f),   // 西長凳
-		FVector2D(-300.0f, -150.0f), // 西南走道
-		FVector2D(100.0f, -250.0f),  // 南側地板
+		FVector2D(660.0f, 40.0f),    // 東（0°）
+		FVector2D(545.0f, 239.0f),   // 東北（60°）
+		FVector2D(315.0f, 239.0f),   // 西北（120°）
+		FVector2D(200.0f, 40.0f),    // 西（180°）
+		FVector2D(315.0f, -159.0f),  // 西南（240°）
+		FVector2D(545.0f, -159.0f),  // 東南（300°）
 	};
 
-	// 受害者仰躺位置（淨空地板；頭朝 +X）
+	// 受害者仰躺位置＝舞台中心（榻榻米中心；亦為儀式圍圈圈心與崩塌終點）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
-	FVector2D VictimLieSpot = FVector2D(0.0f, 75.0f);
+	FVector2D VictimLieSpot = FVector2D(430.0f, 40.0f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Stage")
 	float VictimLieYaw = 0.0f;
@@ -81,6 +89,42 @@ public:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Flow")
 	float SeatingSeconds = 3.0f;
+
+	// --- 入睡儀式（2026-08-16；全部旋鈕、bCeremonyEnabled=false 一鍵退回舊制傳送）---
+	// 開場（BottleSpin 相位）＝Gather＋Spin；每回合入睡（Seating 相位）＝
+	// Approach＋PickUp＋Drink＋Collapse。**零硬切**：全程無 teleport，
+	// 崩塌終點 ≡ GetVictimLieTransform()。
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	bool bCeremonyEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyGatherSeconds = 2.5f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonySpinSeconds = 4.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyApproachSeconds = 1.6f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyPickupSeconds = 1.2f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyDrinkSeconds = 1.8f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyCollapseSeconds = 1.1f;
+
+	// 圍圈半徑（探針定值 160：躺位為圈心時 6 個 60° 角位全部淨空、間距 167cm）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	float CeremonyCircleRadiusCm = 160.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	int32 CeremonySpinTurnsMin = 3;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
+	int32 CeremonySpinTurnsMax = 5;
 
 	// 巡禮每幅約 20 秒（SPEC；playtest 調整）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Flow")
@@ -199,6 +243,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboShake();
 
+	// 開場儀式場地探針（2026-08-16；施工前量測——陷阱年鑑「換位置先跑地板探針」）：
+	// 對圈心周圍多組半徑逐 15° 打地板射線＋膠囊淨空測試，並取樣各席位→角位的直線路徑。
+	// python 讀不到 5.7 的 HitResult 反射 ⇒ 探測必須在 C++ 側做、回機讀字串。
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugCeremonyProbe(float CenterX, float CenterY) const;
+
+	// 房間中心探針（2026-08-16；user 定案「整個遊戲都在房間的正中央進行」）：
+	// 掃網格找可站立地板 → 回報可走域包圍盒與形心 → 對候選中心求「最大內接淨空圓」
+	// （所有環角都可站立的最大半徑），排序後回報前幾名。**「正中央」用量的不用猜。**
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugRoomCenterProbe() const;
+
 	// robo 測試：指定開場受害者的席位（-1＝隨機，正式行為）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedVictimSeat = -1;
@@ -288,6 +344,23 @@ private:
 	void OnBottleSpinDone();
 	void EnterSeating(int32 VictimPlayerId);
 	void OnSeatingDone();
+
+	// --- 入睡儀式（server 權威；客戶端只是這些複製參數的純函式）---
+	// 舞台幾何 → GameState（單一來源；PostLogin 與儀式起手各叫一次）
+	void EnsureStageGeometry();
+	void SetCeremonyStep(ENiCeremonyStep Step, float Duration);
+	void OnCeremonyStepDone();
+	// 真正的入睡（傳送/DreamTrace/回合索引）——儀式版由 Collapse 結束呼叫、
+	// 舊制版由 EnterSeating 立即呼叫
+	void BeginVictimSleep(bool bAlreadyLying);
+	// 圍圈角位旋轉偏移：掃描 72 個候選（5°），取「全角位淨空且總角位移最小」者
+	float ComputeCeremonySlotOffset() const;
+	bool IsCeremonySpotClear(const FVector& At) const;
+	class ANiceInkBottle* GetOrSpawnBottle();
+
+	// 抽中但尚未揭曉的受害者（轉瓶結束才寫進 GameState——HUD 不提前劇透）
+	int32 PendingVictimId = INDEX_NONE;
+	TWeakObjectPtr<class ANiceInkBottle> CeremonyBottle;
 	void EnterTour();
 	void AdvanceTour();
 	void EnterAccusation();

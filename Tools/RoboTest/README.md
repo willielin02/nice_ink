@@ -218,3 +218,32 @@
   ②道場 X 域 ~440cm——走路探針不准直走 >1.5s，一律「朝/背房間中心」由當下
   位置實算方向＋折返；③彈簧類數值探針要有防飽和契約——「有晃」(c5) 和
   「晃得像話」(c7) 是兩個獨立可 FAIL 的維度。
+
+## 入睡儀式套件（2026-08-16～18）
+
+- `robo_ceremony_test.py`＝**11 契約**常駐套件：c1 轉瓶終角指向受害者（±6°）、c2 揭曉時機
+  （Spin 結束前 VictimPlayerId 恆 INDEX_NONE）、c3 **零 teleport**（逐取樣位移上限）、
+  c4 崩塌連續性（Body 相對旋轉/位移逐幀角步有界）、c5 **交接零跳變**（崩塌終點 ≈ 躺位、
+  bodyRel 逐位＝BodyLieRelRot）、c6 六拍全走到、c7 儀式期間輸入無效、c8 圍圈到位、
+  c9 手到瓶頸、**c10 瓶子跟手（上限＋下限雙向）**、c11 回合 2+ 也走儀式。
+  結果檔 Saved/robo_ceremony_result.txt。
+  **c10 的下限是血價**：初版只驗上限，結果瓶子從頭到尾沒動也 PASS（真因＝握骨名依賴
+  作畫的一次性校準、儀式期恆 NAME_None）——**「不該跳」的契約必須配「該動」的下限**。
+- `robo_ceremony_probe.py`＝場地探針（施工前）：`DebugRoomCenterProbe`（房間中心／最大內接
+  淨空圓／**部件包圍盒傾印**）＋`DebugCeremonyProbe`（指定圈心的環形淨空與席位路徑）。
+  **量測順位鐵則**：膠囊 overlap 對 complex-as-simple 查不到（會把牆判成淨空）→ 純射線
+  會被結構誤導（長廳兩端門洞）→ **部件包圍盒才是不會騙人的來源**。探針一律排除活體
+  （力士 Body 擋 Visibility＝射線打到人頭）。
+- `robo_ceremony_shots.py`＝六拍 × 固定機位截圖矩陣（11 張，cerem_*.png）。機位走
+  **新鉤子 `DebugRoboViewAt(camX,camY,camZ, lookX,lookY,lookZ)`**——`DebugRoboViewFrom`
+  恆盯 actor 自己，拍不到「場中央的酒瓶」這類主體；python 在 PIE 世界沒有 spawn actor API。
+- `robo_collapse_jiggle.py`＝醉倒期軟肉彈簧診斷：逐 tick 取 jBelly＋jiggle 開/關 A/B 截圖。
+  定罪過「崩塌把世界空間彈簧激到撞死 JiggleMaxCm 鉗位」（max 8.00＝鉗位、mean 5.03）。
+- `robo_sleeppose_ab.py`＝**沉睡外觀 A/B 傾印對賬**（`CEREMONY = True/False` 改一行跑兩次
+  再 diff）：actor 變換＋Body/BowBody 相對變換＋25 根骨的 CS 位置與旋轉＋兩張截圖。
+  **「我沒改到那個表現」要用這支證明，不是靠讀 diff 宣稱**（08-18 血價：讀 diff 說沒改，
+  實測才發現落地殘留 0.9cm 彈簧餘振）。
+- python 坑（本批新增）：列舉屬性回的是物件不是 int（用 `.value`）；bool 屬性去掉開頭的 b
+  （`bLeanLocked`→`lean_locked`、`bAsleep`→`asleep`、`bCeremonyEnabled`→`ceremony_enabled`）；
+  元件沒有 `get_relative_rotation()`（走 `get_editor_property("relative_rotation")`）；
+  逐 tick 輪流取樣多角色時**相鄰樣本永遠不同人**，差分類契約要先依 pid 分組。
