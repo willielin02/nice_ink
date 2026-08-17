@@ -1089,3 +1089,102 @@ canvas HUD（token 制）、道場場景+fullbright、六人預生成 avatar 名
   1.4mm 級）——探針的 `own_dev`（扣共模）與 `dev`（絕對）已把兩層分開，別混記。
   既有 `c6_settle` 量的是彈簧內部狀態＝**空洞契約**（彈簧讀 0 而骨頭歪 3.6cm 照樣 PASS），
   已在 RoboTest README 標注它不是回原位的契約。**手感與外觀待 user viewport。**
+
+## 2026-08-18 追記㊴：褌布著色修（user「材質看起來很不像真的布」→ BUILT-自驗，外觀待 viewport）
+
+**定罪（先量再修）**：`L_Dojo` 光源 actor 清點＝`SkyLightComponent`×2、`PostProcessVolume`×4、
+**零 Directional/Point/Spot**；配 ini `r.DynamicGlobalIlluminationMethod=0`＋`r.ReflectionMethod=0`。
+均勻天光的漫射照度只有 SH 的 DC 項＝**與法線無關**，反射環境關閉＝無 IBL 高光 ⇒
+**`M_Fundoshi` 接的 Normal/Roughness 在畫面上恆等於沒接**，布只剩一張平的 albedo。
+而那張法線圖有真起伏（偏離平面角 mean 15.5°／p95 30.1°）——整份被丟掉。
+**這正是皮膚在 SPEC #37 得過的病**（ini 註解自己寫著「本作＝fullbright＋材質假光美術」），
+褌從沒領到那份治療。**排除的嫌疑（誠實記帳）**：織紋尺度是對的——貼圖主週期 2.31mm、
+身上一張貼圖蓋 20.8cm、線徑約 1.15mm；全身密度均勻（面積加權 p90/p10＝1.16）。
+
+**做了三件**：
+1. **貼圖可平鋪**（`fundoshi_make_tileable.py`，Moisan 週期分解＝只扣低頻諧和場、
+   與臉部 v6 Poisson 膜同族）：接縫落差／相鄰列基準 色 2.42×→**0.56×**、粗糙 1.26/1.44→0.39/0.35、
+   法線 1.22/1.37→0.69/0.32；守恆對賬＝平均值一位不變、**織紋高頻 std 0.12144→0.12133（動 0.09%）**。
+   源檔＝`SourceAssets/fundoshi_{color,rough,normal}_tileable.png`（原檔不覆蓋）。
+2. **`M_Fundoshi` 布料假光**（`Tools/AssetPrep/ue_fundoshi_cloth_shading.py`）：
+   `Nw=Transform(法線,Tangent→World)` → `NdotV=saturate(dot(Nw,CameraVectorWS))` →
+   `BaseColor = albedo × (lerp(ClothLightFloor,1,pow(NdotV,ClothLightPower))
+   + ClothSheenStrength×pow(1−NdotV,ClothSheenPower)) × ClothBrightness`；
+   tiling 也抽成 `ClothTileScale`（預設 1.0＝既有 12×12 不動）。全部 Scalar Parameter／group=Cloth。
+   **結構論證**：褌不是畫布（`BuildTriCache` 按槽名整段跳過），「皮膚零烘焙陰影」鐵律管不到它。
+3. **`bUsedWithSkeletalMesh` 持久化**（原本 log 每次 PIE 都喊 missing usage flag＝當場現編 shader）。
+
+**A/B 結果（`Tools/RoboTest/robo_fundoshi_shots.py`，同機位三張只動材質參數）**：
+布像素以「ClothBrightness=0 的黑圖」差分切出（23380 顆）；分頻對賬——
+**HF(織紋<3px) 1.00× ／ MID(3–10px) 1.33× ／ LOW(>10px) 1.50×**；均值 0.5187→0.4850，
+`ClothBrightness` 已校成 **1.07** 把均值對回改動前（A/B 必須單變因，不許「變暗」冒充「變好」）。
+**誠實結論：假光把「大形明暗」做出來了，織紋起伏依然是零**——遊戲距離下一個織紋週期
+只佔螢幕約 2px，法線貼圖被 mip 平均成平的。**線徑級起伏在這個距離結構上就交付不了，
+追它是打錯目標**；這個距離讀成布靠的是巨觀（摺痕、色調變化、剪影）。
+
+**殘留（有量測、待裁決）**：①albedo **巨觀變化近乎零**（低頻 sigma64 std＝**0.0014**）＝
+沒有色調不均／髒污／紗線粗細變化，讀起來像合成織紋不是掃描布料；②幾何無摺痕——
+cm 尺度摺痕在此距離約 14px、**mip 吃不掉，而且現在才第一次有消費者**（假光之前摺痕也是隱形的）；
+③UV **1377 島、織紋走向加權 std 21.7°／range 15~87°**（最大兩島 38% 面積走向 83~87°＝正確環身，
+其餘亂跳）——修它要重展 UV＋重匯 SK/SM（碰骨架/槽序/墨水 tri-cache，有真風險），未動。
+
+**踩到的坑**：`PlayNumberOfClients` 算的是**含伺服器的總人數**（設 1＝只有 listen server、
+永遠達不到開局門檻 2＝robo 空等）；5.7 的材質節點列舉只有 `ObjectIterator`+outermost 那條路通
+（`expression_collection`／`expressions`／`editor_only_data`／`get_material_expressions` 全滅）；
+3 客戶端 PIE 配材質現編 shader 撞 D3D12 `E_OUTOFMEMORY`（編輯器 15.3GB、幀計數凍在 262）。
+
+**授權缺口（C8 補一筆）**：`fundoshi_color/rough/normal.jpg`（2025-10-13，5.7/2.2/8.8MB）
+**無任何來源與授權記錄**，THIRD_PARTY_NOTICES 目前只把 dojo 標 PENDING——布紋是同一類缺口。
+
+## 2026-08-18 追記㊵：黑稽古廻し（幕下以下）＋加厚（user 裁決後續作；BUILT-自驗待 viewport）
+
+**user 兩條裁決**：①**用黑的、幕下以下**（白＝関取／黑＝幕下以下是相撲協會的規定，
+不是配色選擇；此裁決同時讓 SPEC 既有的丁髷規格更正確——大銀杏是関取正式場合用的）
+②**背後大結不做**（結必然坐在後腰窩上＝吃掉他要露的皮膚）。
+
+**做了四件**：
+1. **albedo 黑重定向**（`fundoshi_retarget_black.py`，乘法重定向）：均值 0.536→**0.1425**，
+   **相對對比 0.233→0.293 沒掉**——直接乘常數壓暗會把織紋 std 一起壓死（0.133×0.15=0.020≈不可見）；
+   低通用 FFT 高斯（本身週期）⇒ 平鋪性保住（接縫 0.57×/0.65×）。
+2. **sheen 從乘法改加法**（`ue_fundoshi_black.py`）：原式 `albedo×(headlight+sheen)` 在黑布上
+   **把光澤一起壓成黑的**；黑布讀成布靠的正是掠角光澤（黑色沒有色調空間）。
+   新式 `albedo×headlight×brightness + ClothSheenTint×sheen`＋新旋鈕 `ClothSheenTint`(0.55,0.55,0.58)。
+   實測：均值 0.1221→0.1333、LOW std/均值 從 4.9%(灰) 升到 **53%(黑)**＝黑底把形體明暗的相對對比放大一個量級。
+3. **加厚**（`fundoshi_thicken_and_align.py`）：實測原厚度中位數僅 **0.082cm**、範圍 0.02~0.29（極不均勻）
+   → 沿既有內→外配對方向重設為**均勻 0.500cm**。**內層位移 max = 0.000000 mm**（斷言）
+   ⇒ 覆蓋輪廓恆等、**露膚度零損失**。幾何動過 ⇒ 重跑 `fundoshi_normal_smooth.py`
+   （屁溝禁區位移 max **0.0°**＝user 核准的禁區守住）。UV0 密度 0.617 px/mm、
+   MARKER_UV_RADIUS 0.000584 **不變**＝墨水圖集版面沒動（動到＝舊刺青存檔全作廢）。
+4. **巨觀色調→頂點色 G**（`ue_fundoshi_tone.py`）：稽古廻し不洗只曬。寫 G 通道
+   （R=FaceMask 身體材質在用、不可碰；褌有自己的材質）＋旋鈕 `ClothToneVariation`(0=關)。
+   繞開「平鋪貼圖畫不了巨觀圖樣」的死結（12×12 會重複 144 次又被 1377 島切碎）。
+
+**放棄的一項（誠實記帳）＝UV 布紋走向對齊**：實作後量測誤差 **40.6°≈隨機(45°)**——
+真因是這條帶子橫向只有 2~3 個頂點、**rim 是單一連通分量**（2630/3567 外層頂點在緣上），
+rim 鄰居有一半跨到對面邊 ⇒ 拿 rim 切線當「沿纏繞方向」的估計本身是壞的。
+**且就算修好也幾乎看不到**：遊戲距離下織紋週期僅約 2px、被 mip 平均，robo A/B 實測 HF 倍率 **1.00×**。
+低效益×高風險 ⇒ 停手。程式留 `DO_UV_ALIGN=False`；正解是先解纏繞方向場，不是 rim 切線。
+
+**做不到的一項（幾何事實）＝纏繞層階**：實物一圈＝45cm÷四つ折り≈**11cm**、纏 3~4 圈
+⇒ 需 33~44cm 帶寬。本作褌：外層面積 2821cm²÷邊界總長 8.18m ⇒ **平均帶寬約 7cm**
+（最寬處前袋 26cm）＝**大約只有「一圈」的寬度**，層階放不下。
+要它就得加寬 3~5 倍＝吃掉 user 當初選這個造型換來的露膚度。**取捨已回報，user 未裁決。**
+
+**迴歸（單變因 A/B，attribution 不靠讀 diff）**：`robo_directdraw_test` 加厚後 58 PASS/7 FAIL；
+**把 SK/SM 用 git stash 退回改動前再跑一次＝58 PASS/7 FAIL、七個失敗名稱一字不差**
+⇒ **本批零迴歸**。那 7 個是工作樹既有失敗（ghosts／shader row-metered／palette／far-reach ×4），
+兩輪逐字相同＝「先疑檢查過時」的簽名；失敗集中在寫死座標的遠點測試，
+**高度懷疑是 08-18 舞台搬到道場正中央後探針常數沒跟上**（CLAUDE.md 自己警告過的失敗模式）。
+**這條另立待辦，不屬本批。**
+
+**新坑兩條**：①**存檔沒驗＝無聲失敗**——user 的四個試玩視窗鎖著 uasset 時，
+`save_asset` 回 False、log 只留一行 `Failed to move ... to temp directory`，
+腳本卻照樣跑完印 DONE（黑 albedo 整刀沒落地卻回報成功）。已加 `save_checked()`：
+驗回傳值＋失敗即炸。**同族＝殭屍編輯器鎖 umap。**
+②`PlayNumberOfClients` 算的是**含伺服器的總人數**（設 1＝只有 listen server、永遠達不到開局門檻 2）。
+
+**授權**：`fundoshi_{color,rough,normal}.jpg` 無來源記錄，已寫進 THIRD_PARTY_NOTICES 的 PENDING 段
+（換成有授權的掃描帆布可一併解掉「巨觀色調近乎零」＝低頻 std 0.0014）。
+
+**待 user viewport**：黑色與光澤的手感、厚度（正面機位看不出來，要掠角）、
+`ClothLightFloor/LightPower/SheenStrength/SheenPower/SheenTint/Brightness/ToneVariation/TileScale` 全是旋鈕。

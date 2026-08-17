@@ -46,6 +46,19 @@ linked or reproduced below. This file ships next to the game executable.
 - Source/license: **PENDING — must be confirmed by the project owner before
   commercial release.** (SourceAssets/dojo carries no attribution record.)
 
+## Textures
+
+### Fundoshi / mawashi cloth (canvas weave)
+- Files: `SourceAssets/fundoshi_color.jpg`, `fundoshi_rough.jpg`, `fundoshi_normal.jpg`
+  (dated 2025-10-13), and everything derived from them —
+  `fundoshi_*_tileable.png`, `fundoshi_color_black.png`, and the engine textures
+  `T_FundoshiColor` / `T_FundoshiRough` / `T_FundoshiNormal`.
+- Source/license: **PENDING — must be confirmed by the project owner before
+  commercial release.** No attribution record exists for these files.
+- Note: if these are replaced with a licensed scanned-canvas set, that also
+  resolves the "no macro tonal variation" defect measured on 2026-08-18
+  (low-frequency std 0.0014 = implausibly uniform for real fabric).
+
 ## Engine
 
 - Unreal Engine (c) Epic Games, Inc. — distributed under the Unreal Engine EULA.
