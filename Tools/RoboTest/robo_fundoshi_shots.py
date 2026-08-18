@@ -175,17 +175,14 @@ class Probe:
             self.advance("shots")
         elif s == "shots":
             server = get_world("UEDPIE_0")
-            # 黑廻し輪（08-18）：mask / 無 sheen / 現行預設——sheen 在黑底上買到什麼
+            # 08-18 啞光輪：不覆寫材質參數，直接驗現行預設；外加邊緣近拍
+            c = self.host()
             SEQ = [
-                (2.0, "mask",    lambda: self.set_cloth(1.0, 0.0, 0.0)),
-                (3.4, "shot",    lambda: unreal.SystemLibrary.execute_console_command(
-                    server, "HighResShot 1600x900 filename=fd_black")),
-                (4.8, "nosheen", lambda: self.set_cloth(0.45, 0.0, 1.0)),
-                (6.2, "shot",    lambda: unreal.SystemLibrary.execute_console_command(
-                    server, "HighResShot 1600x900 filename=fd_flat")),
-                (7.6, "lit",     lambda: self.set_cloth(0.45, 0.18, 1.0)),
-                (9.0, "shot",    lambda: unreal.SystemLibrary.execute_console_command(
-                    server, "HighResShot 1600x900 filename=fd_lit")),
+                (2.0, "shot", lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_matte")),
+                (3.4, "close", lambda: c.call_method("DebugRoboViewFrom", (35.0, -55.0, -5.0))),
+                (5.0, "shot", lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_edge")),
             ]
             if self.step_i < len(SEQ):
                 t, tag, fn = SEQ[self.step_i]
@@ -193,8 +190,7 @@ class Probe:
                     fn()
                     log(f"  step {self.step_i} {tag}")
                     self.step_i += 1
-            elif self.elapsed() >= 10.4:
-                self.set_cloth(0.45, 0.35, 1.0)
+            elif self.elapsed() >= 6.4:
                 log("RESULT DONE-PASS")
                 self.finish()
 
