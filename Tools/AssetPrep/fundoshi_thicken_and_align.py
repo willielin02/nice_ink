@@ -37,7 +37,7 @@ BACKUP = os.path.join(ROOT, "SourceAssets", "masters",
 # 程式留著（改 True 即復活），要做的正解是先解出纏繞方向場，不是 rim 切線。
 DO_UV_ALIGN = False
 
-THICK_CM = 0.50      # 目標厚度（實物：四つ折り帆布，5mm 是保守值）
+THICK_CM = 1.50      # 08-18 二調：5mm 的圓角在螢幕上不到 1px＝看不見。15mm 才讓圓角有 ~4px
 TONE_AMP = 0.10      # 頂點色 G 的色調振幅（±10%）
 TONE_SCALE = 0.25    # 色調變化的空間尺度（公尺）
 

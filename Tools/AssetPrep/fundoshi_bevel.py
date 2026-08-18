@@ -14,8 +14,8 @@ import bpy, bmesh, numpy as np, os, shutil
 ROOT = r"C:\games\Unreal Engine\nice_ink"
 MASTER = os.path.join(ROOT, "SourceAssets", "sumo_character_master.blend")
 BACKUP = os.path.join(ROOT, "SourceAssets", "masters", "sumo_character_master_v19_prebevel.blend")
-OFFSET_M = 0.0015     # 圓角半徑 1.5mm（厚度 5mm，留平的中段）
-SEGMENTS = 3
+OFFSET_M = 0.006      # 08-18 二調：圓角半徑 6mm（~4px @2m）；1.5mm 版在螢幕上 0.96px＝看不見
+SEGMENTS = 4
 
 if not os.path.exists(BACKUP):
     shutil.copy2(MASTER, BACKUP); print(f"BACKUP -> {BACKUP}")
