@@ -21,6 +21,7 @@ Run: blender --background --python fundoshi_shell.py
 """
 import bpy
 import numpy as np
+import os as _os
 import os
 import shutil
 from collections import defaultdict
@@ -40,6 +41,8 @@ SUBDIV_ROUNDS = 2
 SMOOTH_ITERS = 25
 LAM = 0.6
 
+TIER = _os.environ.get("FD_TIER", "hi")
+print(f"TIER={TIER}")
 bpy.ops.wm.open_mainfile(filepath=SRC)
 if bpy.context.object and bpy.context.object.mode != 'OBJECT':
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -285,10 +288,14 @@ for _pass in range(4):   # 預算制：兩級（牆腳 1.5mm/外圈 3mm）
     for fi, (a, b, c) in enumerate(faces):
         dmin = min(dcur[a], dcur[b], dcur[c])
         emax = max(_edge_len(a, b), _edge_len(b, c), _edge_len(c, a))
-        # 單級 8mm/3mm（兩級 1.5mm 連鎖爆 413k tris＝效能不可受）；
-        # 殘餘弦差交給沿邊法線平滑（免費）吃
-        if dmin < 0.008 and emax > 0.0030:
-            red.add(fi)
+        # 雙密度（08-20 洞見：貼臉只看得到睡姿受害者＝靜態單實例＝高密付得起；
+        # 站立骨骼身體沒人湊近＝輕量）。FD_TIER=hi 兩級細分、lo 單級粗
+        if TIER == "hi":
+            if (dmin < 0.004 and emax > 0.0015) or (dmin < 0.008 and emax > 0.0030):
+                red.add(fi)
+        else:
+            if dmin < 0.008 and emax > 0.0045:
+                red.add(fi)
     if not red:
         break
     # 紅面三邊全取中點；綠面（鄰居）按被切邊數共形拆分
@@ -508,10 +515,11 @@ for aa, bb, cc2 in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
     w2 = corner(new_co[tt2[:, aa]], new_co[tt2[:, bb]], new_co[tt2[:, cc2]])
     np.add.at(VN, tt2[:, aa], fn2 * w2[:, None])
 VN /= np.maximum(np.linalg.norm(VN, axis=1, keepdims=True), 1e-12)
-# 繞向對齊（面已可能 flip）：與位移法線同向
-flipped = np.dot(np.array(me2.polygons[0].normal), N[faces[0][0]]) < 0
-if flipped:
+# 繞向對齊：直接對位移法線場（08-20 bug：拿翻面後的面對翻面前的 VN
+# ＝自訂法線朝內＝形體光恆底值＝烏漆媽黑）
+if float(np.mean((VN * N).sum(1))) < 0:
     VN = -VN
+    print("VN flipped to outward")
 nbr2 = defaultdict(set)
 for a, b, c in faces:
     nbr2[a].update((b, c))
@@ -530,7 +538,7 @@ for _it in range(12):
         VN2[i] = acc / wsum
     VN = VN2 / np.maximum(np.linalg.norm(VN2, axis=1, keepdims=True), 1e-12)
 me2.normals_split_custom_set_from_vertices([tuple(v) for v in VN])
-print(f"aniso normal smooth: band verts={len(band)} flipped={flipped}")
+print(f"aniso normal smooth: band verts={len(band)}")
 
 old = ob.data
 ob.data = me2

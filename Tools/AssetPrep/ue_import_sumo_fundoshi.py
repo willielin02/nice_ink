@@ -60,9 +60,11 @@ def sm_task(filename, dest_path, dest_name):
     task.options = ui
     return task
 
+# 雙密度（2026-08-20）：貼臉只看得到睡姿受害者（SM 靜態單實例）＝高密付得起；
+# 站立骨骼身體（SK）沒人湊近＝輕量。兩檔由 fundoshi_shell.py FD_TIER 產出。
 tasks = [
-    sk_task(SA + r"\sumo_skeletal.fbx", "/Game/Characters", "SK_Sumo"),
-    sm_task(SA + r"\sumo_skeletal.fbx", "/Game/Characters", "SM_Sumo"),
+    sk_task(SA + r"\sumo_skeletal_lo.fbx", "/Game/Characters", "SK_Sumo"),
+    sm_task(SA + r"\sumo_skeletal_hi.fbx", "/Game/Characters", "SM_Sumo"),
 ]
 tools.import_asset_tasks(tasks)
 for t in tasks:
