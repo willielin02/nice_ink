@@ -160,8 +160,8 @@ devs = []
 for lp in base_loops:
     L = np.array(lp)
     P0 = co[L].copy()
-    P1 = _median_loop(P0, 0.0075)      # ±7.5mm 中值窗＝孤立缺口出局
-    P2 = _gauss_loop(P1, 0.008)        # σ8mm＝只留公分級走向
+    P1 = _median_loop(P0, 0.015)       # ±15mm 中值窗（08-20 user 定調：手繪線=位置標記，公分級擺動也是噪聲）
+    P2 = _gauss_loop(P1, 0.025)        # σ25mm＝只留 ~8cm 以上走向（邊緣品質=工程問題，非美術）
     # 切向鬆弛勻點距：中值/高斯會把點擠堆（相鄰點共位＝748 零面積面實錘）；
     # 全域弧長重取樣會讓點沿線滑 10mm+（偏離指標爆掉）——只沿切線局部勻距，
     # 側向形狀不動、無全域滑移。
@@ -198,7 +198,7 @@ devs = [np.linalg.norm(delta[np.array(lp)], axis=1) for lp in base_loops]
 dv = np.concatenate(devs) * 1000.0
 print(f"**邊界偏離手繪線(mm) p50={np.percentile(dv,50):.2f} p90={np.percentile(dv,90):.2f} "
       f"max={dv.max():.2f}（預算 ±5、缺口處容許 ~10）**")
-assert dv.max() < 15.0, "偏離爆預算"  # max 落在缺口修復處（12mm 工具遺留缺口的校正量）
+assert dv.max() < 30.0, "偏離爆預算"  # 大尺度平滑：偏離即修復量（噪聲非意圖），只防災難
 # 位移擴散進內部（邊界 Dirichlet）＋貼回皮膚
 bset0 = {v for lp in base_loops for v in lp}
 nbr0 = defaultdict(set)
