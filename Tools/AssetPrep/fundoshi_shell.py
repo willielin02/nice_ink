@@ -268,7 +268,7 @@ def _edge_len(a, b):
     return float(np.linalg.norm(co[a] - co[b]))
 
 
-for _pass in range(3):   # 預算制：邊緣帶 8mm、目標 3mm、防連鎖爆炸
+for _pass in range(4):   # 預算制：兩級（牆腳 1.5mm/外圈 3mm）
     # 邊界＝單面邊；d＝到邊界點雲距離
     ec2 = defaultdict(int)
     for a, b, c in faces:
@@ -283,7 +283,11 @@ for _pass in range(3):   # 預算制：邊緣帶 8mm、目標 3mm、防連鎖爆
     # 紅面＝碰到邊緣帶(14mm)且有長邊(>1.6mm)
     red = set()
     for fi, (a, b, c) in enumerate(faces):
-        if min(dcur[a], dcur[b], dcur[c]) < 0.008 and            max(_edge_len(a, b), _edge_len(b, c), _edge_len(c, a)) > 0.0030:
+        dmin = min(dcur[a], dcur[b], dcur[c])
+        emax = max(_edge_len(a, b), _edge_len(b, c), _edge_len(c, a))
+        # 單級 8mm/3mm（兩級 1.5mm 連鎖爆 413k tris＝效能不可受）；
+        # 殘餘弦差交給沿邊法線平滑（免費）吃
+        if dmin < 0.008 and emax > 0.0030:
             red.add(fi)
     if not red:
         break
@@ -487,6 +491,47 @@ mat = bpy.data.materials.get("M_Fundoshi")
 me2.materials.append(mat)
 for p in me2.polygons:
     p.use_smooth = True
+
+# 沿邊各向異性法線平滑：亮邊扇貝紋的載體＝著色法線沿邊方向的抖動。
+# 只在邊緣帶(d<12mm)、只跟「同距離帶」鄰居平滑（|Δd|<1mm 高斯權重）
+# ＝沿等距線抹平、不跨剖面（剖面明暗＝斷面立體感，不可糊）。
+d_final = np.empty(len(new_co))
+for i in range(0, len(new_co), 256):
+    cch = new_co[i:i + 256]
+    d_final[i:i + 256] = np.sqrt(((cch[:, None, :] - bco[None, :, :]) ** 2).sum(-1)).min(1)
+tt2 = np.array(faces)
+A2, B2, C2 = new_co[tt2[:, 0]], new_co[tt2[:, 1]], new_co[tt2[:, 2]]
+fn2 = np.cross(B2 - A2, C2 - A2)
+fn2 /= np.maximum(np.linalg.norm(fn2, axis=1, keepdims=True), 1e-18)
+VN = np.zeros((len(new_co), 3))
+for aa, bb, cc2 in ((0, 1, 2), (1, 2, 0), (2, 0, 1)):
+    w2 = corner(new_co[tt2[:, aa]], new_co[tt2[:, bb]], new_co[tt2[:, cc2]])
+    np.add.at(VN, tt2[:, aa], fn2 * w2[:, None])
+VN /= np.maximum(np.linalg.norm(VN, axis=1, keepdims=True), 1e-12)
+# 繞向對齊（面已可能 flip）：與位移法線同向
+flipped = np.dot(np.array(me2.polygons[0].normal), N[faces[0][0]]) < 0
+if flipped:
+    VN = -VN
+nbr2 = defaultdict(set)
+for a, b, c in faces:
+    nbr2[a].update((b, c))
+    nbr2[b].update((a, c))
+    nbr2[c].update((a, b))
+band = np.nonzero(d_final < 0.012)[0]
+for _it in range(12):
+    VN2 = VN.copy()
+    for i in band:
+        acc = VN[i].copy()
+        wsum = 1.0
+        for j in nbr2[int(i)]:
+            wgt = float(np.exp(-0.5 * ((d_final[i] - d_final[j]) / 0.001) ** 2))
+            acc += VN[j] * wgt
+            wsum += wgt
+        VN2[i] = acc / wsum
+    VN = VN2 / np.maximum(np.linalg.norm(VN2, axis=1, keepdims=True), 1e-12)
+me2.normals_split_custom_set_from_vertices([tuple(v) for v in VN])
+print(f"aniso normal smooth: band verts={len(band)} flipped={flipped}")
+
 old = ob.data
 ob.data = me2
 bpy.data.meshes.remove(old)
