@@ -175,14 +175,18 @@ class Probe:
             self.advance("shots")
         elif s == "shots":
             server = get_world("UEDPIE_0")
-            # 08-18 啞光輪：不覆寫材質參數，直接驗現行預設；外加邊緣近拍
+            # 08-19 鋁箔閃爍定罪輪：近拍 x 三開關（單變因）
             c = self.host()
             SEQ = [
-                (2.0, "shot", lambda: unreal.SystemLibrary.execute_console_command(
-                    server, "HighResShot 1600x900 filename=fd_matte")),
-                (3.4, "close", lambda: c.call_method("DebugRoboViewFrom", (35.0, -55.0, -5.0))),
-                (5.0, "shot", lambda: unreal.SystemLibrary.execute_console_command(
-                    server, "HighResShot 1600x900 filename=fd_edge")),
+                (2.0, "close", lambda: c.call_method("DebugRoboViewFrom", (35.0, -55.0, -5.0))),
+                (3.6, "shot",  lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_A_current")),
+                (4.4, "bump0", lambda: self.mid.set_scalar_parameter_value("ClothBumpStrength", 0.0)),
+                (5.8, "shot",  lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_B_bump0")),
+                (6.6, "flat",  lambda: self.mid.set_scalar_parameter_value("ClothLightFloor", 1.0)),
+                (8.0, "shot",  lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_C_nolight")),
             ]
             if self.step_i < len(SEQ):
                 t, tag, fn = SEQ[self.step_i]
@@ -190,7 +194,7 @@ class Probe:
                     fn()
                     log(f"  step {self.step_i} {tag}")
                     self.step_i += 1
-            elif self.elapsed() >= 6.4:
+            elif self.elapsed() >= 9.4:
                 log("RESULT DONE-PASS")
                 self.finish()
 
