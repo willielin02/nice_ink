@@ -221,7 +221,11 @@ for i in interior0:
 print("boundary rebuilt + interior diffused + snapped to skin")
 
 # ---- 2) 手寫中點 4:1 細分（無 T-junction 構造保證）----
-for _r in range(SUBDIV_ROUNDS):
+# 08-20 定罪：全域 2 輪後邊長 p90 仍 5.5mm——邊緣帶的坡道起皺線被 5mm 網格
+# 多邊形化＝user 貼臉看到的階梯鋸齒（低通調不掉：噪聲在網格不在曲線）。
+# 修＝全域 1 輪 + 邊緣帶自適應紅綠細分（保共形無 T-junction）到 <=1.6mm。
+SUBDIV_ROUNDS_EFF = 1
+for _r in range(SUBDIV_ROUNDS_EFF):
     co_l = list(co)
     mid = {}
 
@@ -258,6 +262,102 @@ for _r in range(SUBDIV_ROUNDS):
     tone = np.array([t if t is not None else np.array([0, 1, 0, 1]) for t in tone_l])
     faces, face_uvs = f2, u2
 print(f"SUBDIV verts={len(co)} tris={len(faces)}")
+
+# ---- 2b) 邊緣帶自適應紅綠細分 ----
+def _edge_len(a, b):
+    return float(np.linalg.norm(co[a] - co[b]))
+
+
+for _pass in range(3):   # 預算制：邊緣帶 8mm、目標 3mm、防連鎖爆炸
+    # 邊界＝單面邊；d＝到邊界點雲距離
+    ec2 = defaultdict(int)
+    for a, b, c in faces:
+        for e in ((a, b), (b, c), (c, a)):
+            ec2[(min(e), max(e))] += 1
+    bidx2 = np.array(sorted({v for e, k in ec2.items() if k == 1 for v in e}))
+    bco2 = co[bidx2]
+    dcur = np.empty(len(co))
+    for i in range(0, len(co), 256):
+        cch = co[i:i + 256]
+        dcur[i:i + 256] = np.sqrt(((cch[:, None, :] - bco2[None, :, :]) ** 2).sum(-1)).min(1)
+    # 紅面＝碰到邊緣帶(14mm)且有長邊(>1.6mm)
+    red = set()
+    for fi, (a, b, c) in enumerate(faces):
+        if min(dcur[a], dcur[b], dcur[c]) < 0.008 and            max(_edge_len(a, b), _edge_len(b, c), _edge_len(c, a)) > 0.0030:
+            red.add(fi)
+    if not red:
+        break
+    # 紅面三邊全取中點；綠面（鄰居）按被切邊數共形拆分
+    co_l = list(co)
+    midp = {}
+
+    def getmid(a, b):
+        key = (a, b) if a < b else (b, a)
+        if key in midp:
+            return midp[key]
+        i2 = len(co_l)
+        co_l.append(0.5 * (co_l[a] + co_l[b]))
+        wnew = defaultdict(float)
+        for g, w in wts[a].items():
+            wnew[g] += 0.5 * w
+        for g, w in wts[b].items():
+            wnew[g] += 0.5 * w
+        wts.append(dict(wnew))
+        tone_l.append(0.5 * (tone_arr[a] + tone_arr[b]))
+        midp[key] = i2
+        return i2
+
+    tone_arr = tone
+    tone_l = []
+    split_edges = set()
+    for fi in red:
+        a, b, c = faces[fi]
+        for e in ((a, b), (b, c), (c, a)):
+            split_edges.add((min(e), max(e)))
+    f2, u2 = [], []
+    for fi, ((a, b, c), (ua, ub, uc)) in enumerate(zip(faces, face_uvs)):
+        se = [(min(a, b), max(a, b)) in split_edges,
+              (min(b, c), max(b, c)) in split_edges,
+              (min(c, a), max(c, a)) in split_edges]
+        uva, uvb, uvc = np.array(ua), np.array(ub), np.array(uc)
+        if not any(se):
+            f2.append((a, b, c))
+            u2.append((ua, ub, uc))
+            continue
+        mab = getmid(a, b) if se[0] else None
+        mbc = getmid(b, c) if se[1] else None
+        mca = getmid(c, a) if se[2] else None
+        uab, ubc, uca = tuple(0.5 * (uva + uvb)), tuple(0.5 * (uvb + uvc)), tuple(0.5 * (uvc + uva))
+        cnt = sum(se)
+        if cnt == 3:
+            f2 += [(a, mab, mca), (mab, b, mbc), (mca, mbc, c), (mab, mbc, mca)]
+            u2 += [(ua, uab, uca), (uab, ub, ubc), (uca, ubc, uc), (uab, ubc, uca)]
+        elif cnt == 1:
+            if se[0]:
+                f2 += [(a, mab, c), (mab, b, c)]
+                u2 += [(ua, uab, uc), (uab, ub, uc)]
+            elif se[1]:
+                f2 += [(b, mbc, a), (mbc, c, a)]
+                u2 += [(ub, ubc, ua), (ubc, uc, ua)]
+            else:
+                f2 += [(c, mca, b), (mca, a, b)]
+                u2 += [(uc, uca, ub), (uca, ua, ub)]
+        else:  # cnt == 2：從共享頂點扇出
+            if se[0] and se[1]:
+                f2 += [(b, mbc, mab), (a, mab, mbc), (a, mbc, c)]
+                u2 += [(ub, ubc, uab), (ua, uab, ubc), (ua, ubc, uc)]
+            elif se[1] and se[2]:
+                f2 += [(c, mca, mbc), (b, mbc, mca), (b, mca, a)]
+                u2 += [(uc, uca, ubc), (ub, ubc, uca), (ub, uca, ua)]
+            else:
+                f2 += [(a, mab, mca), (b, mca, mab), (b, c, mca)]
+                u2 += [(ua, uab, uca), (ub, uca, uab), (ub, uc, uca)]
+    co = np.array(co_l)
+    tone = np.vstack([tone_arr, np.array(tone_l)]) if tone_l else tone_arr
+    faces, face_uvs = f2, u2
+    print(f"  adaptive pass: red={len(red)} -> verts={len(co)} tris={len(faces)}")
+print(f"ADAPTIVE done verts={len(co)} tris={len(faces)}")
+
 
 # ---- 3) 邊界（只被一面用到的邊）＋距離場 ----
 ecount = defaultdict(int)
@@ -332,7 +432,8 @@ def ss(x):
 # 但仍是單一位移殼＝無牆、無剖面框架、轉角自動平滑（高度場=平滑距離場的函數）。
 # 逐頂點蓋牆的兩種 B 定義都在轉角翻車（碎裂片）＝該路線廢棄。
 E = 0.009   # 2.2mm 網格要 4 排才彎得順（7mm=3 排=坡面細皺）；59 度仍是陡斷面
-h = -SINK * (1.0 - ss(d / SINK_RAMP)) + HMAX * np.sin(np.pi / 2 * np.clip(d / E, 0.0, 1.0))
+# 坡腳 C1 軟起：牆腳硬折痕線會被網格多邊形化＝階梯鋸齒的載體；3.5mm 內漸入
+h = -SINK * (1.0 - ss(d / SINK_RAMP)) +     HMAX * np.sin(np.pi / 2 * np.clip(d / E, 0.0, 1.0)) * ss(d / 0.0035)
 print(f"h(mm): 邊界 {h[bidx].mean()*1000:.2f}  p50={np.percentile(h,50)*1000:.1f}  "
       f"max={h.max()*1000:.1f}  平台(>=14.5)比例={(h >= 0.0145).mean()*100:.0f}%")
 new_co = co + N * h[:, None]
