@@ -92,6 +92,18 @@ class Probe:
             log("EXC:\n" + traceback.format_exc())
             self.finish()
 
+    def macro_cam(self, server):
+        gs = unreal.GameplayStatics.get_game_state(server)
+        vpid = gs.get_editor_property("VictimPlayerId")
+        vic = find_char(server, vpid)
+        c = self.host()
+        if not vic or not c:
+            return
+        vl = vic.get_actor_location()
+        focus = unreal.Vector(vl.x + 20.0, vl.y - 18.0, vl.z + 6.0)   # 髖側帶緣
+        cam = unreal.Vector(focus.x + 7.0, focus.y - 8.0, focus.z + 5.0)
+        c.call_method("DebugRoboViewAt", (cam.x, cam.y, cam.z, focus.x, focus.y, focus.z))
+
     def set_cloth(self, floor, sheen, bright):
         self.mid.set_scalar_parameter_value("ClothLightFloor", floor)
         self.mid.set_scalar_parameter_value("ClothSheenStrength", sheen)
@@ -104,7 +116,10 @@ class Probe:
                 eps = unreal.find_object(None, "/Script/UnrealEd.Default__EditorPerformanceSettings")
                 if eps:
                     eps.set_editor_property("bThrottleCPUWhenNotForeground", False)
-                unreal.get_editor_subsystem(unreal.LevelEditorSubsystem).editor_request_begin_play()
+                les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+                if les is None:
+                    return          # 編輯器還在開機——下個 tick 再試
+                les.editor_request_begin_play()
                 self.advance("wait_pie")
         elif s == "wait_pie":
             server = get_world("UEDPIE_0")
@@ -187,6 +202,13 @@ class Probe:
                 (6.6, "flat",  lambda: self.mid.set_scalar_parameter_value("ClothLightFloor", 1.0)),
                 (8.0, "shot",  lambda: unreal.SystemLibrary.execute_console_command(
                     server, "HighResShot 1600x900 filename=fd_C_nolight")),
+                (8.8, "reset", lambda: (self.mid.set_scalar_parameter_value("ClothLightFloor", 0.55),
+                                        self.mid.set_scalar_parameter_value("ClothBumpStrength", 0.15))),
+                # 貼臉倍率微距（08-20 血價：驗收倍率曾比 user 實際視角粗 8 倍）：
+                # victim 髖部 12cm、FOV90 => ~8px/mm ~= lean(38cm FOV36) 的 10px/mm 量級
+                (9.6, "macro", lambda: self.macro_cam(server)),
+                (11.2, "shot", lambda: unreal.SystemLibrary.execute_console_command(
+                    server, "HighResShot 1600x900 filename=fd_D_macro")),
             ]
             if self.step_i < len(SEQ):
                 t, tag, fn = SEQ[self.step_i]
@@ -194,7 +216,7 @@ class Probe:
                     fn()
                     log(f"  step {self.step_i} {tag}")
                     self.step_i += 1
-            elif self.elapsed() >= 9.4:
+            elif self.elapsed() >= 12.6:
                 log("RESULT DONE-PASS")
                 self.finish()
 
