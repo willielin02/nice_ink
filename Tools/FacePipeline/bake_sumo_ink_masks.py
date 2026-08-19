@@ -29,10 +29,12 @@ with open(UV_MAP_JSON, encoding="utf-8") as f:
     table = json.load(f)
 print(f"uv map: {table['face_polys']} polys / {len(table['tris'])} tris from {table['source']}")
 
-# 靜態禁畫＝直接從兩張手繪正源取聯集（不經中間檔——重畫遮罩後重跑本腳本即同步）
+# 靜態禁畫＝髮手繪正源 ∪ 褌**實際覆蓋**（fundoshi_mask_final.png＝fundoshi_plate.py 從布網格
+# 射線反推的衍生遮罩：骨盆區＝布真正蓋住的像素、其餘區（元結帶）＝手繪原樣）——
+# 布、禁畫、手繪範圍三者單一來源（2026-08-21）；重畫遮罩後先跑 fundoshi_plate.py 再跑本腳本。
 hair = cv2.imread(str(SA / "hair_mask.png"), cv2.IMREAD_GRAYSCALE)
-fund = cv2.imread(str(SA / "fundoshi_mask_sharp.png"), cv2.IMREAD_GRAYSCALE)
-assert hair is not None and fund is not None, "hair_mask.png / fundoshi_mask_sharp.png missing"
+fund = cv2.imread(str(SA / "fundoshi_mask_final.png"), cv2.IMREAD_GRAYSCALE)
+assert hair is not None and fund is not None, "hair_mask.png / fundoshi_mask_final.png missing"
 nodraw = np.maximum(cv2.resize(hair, (SIZE, SIZE), interpolation=cv2.INTER_LINEAR),
                     cv2.resize(fund, (SIZE, SIZE), interpolation=cv2.INTER_AREA))
 static_allowed = 255 - nodraw

@@ -50,10 +50,12 @@ static bool BakeSumoInkMask(FCtx& C, const cv::Mat& EyeMask, cv::Mat& OutAllowed
 	}
 
 	cv::Mat Hair, Fund;
+	// fundoshi_mask_final.png＝布網格射線反推的實際覆蓋（fundoshi_plate.py 衍生；
+	// 骨盆區＝布真正蓋住的像素、元結帶＝手繪原樣）——布/禁畫/手繪單一來源（2026-08-21）
 	if (!LoadImage(C.DataDir / TEXT("hair_mask.png"), Hair, /*bGrayscale=*/true) ||
-		!LoadImage(C.DataDir / TEXT("fundoshi_mask_sharp.png"), Fund, /*bGrayscale=*/true))
+		!LoadImage(C.DataDir / TEXT("fundoshi_mask_final.png"), Fund, /*bGrayscale=*/true))
 	{
-		Err = TEXT("hair_mask.png / fundoshi_mask_sharp.png missing");
+		Err = TEXT("hair_mask.png / fundoshi_mask_final.png missing");
 		return false;
 	}
 	cv::Mat HairR, FundR;
@@ -169,7 +171,7 @@ bool FNiFaceBakery::IsAvailable()
 		TEXT("models/face_detector.onnx"), TEXT("models/face_landmarks.onnx"),
 		TEXT("data/faceuv_mask_coverage.png"), TEXT("data/faceuv_expansion_data.json"),
 		TEXT("data/sumo_ink_uv_map.json"), TEXT("data/hair_mask.png"),
-		TEXT("data/fundoshi_mask_sharp.png") };
+		TEXT("data/fundoshi_mask_final.png") };
 	for (const TCHAR* N : Needed)
 	{
 		if (!FPaths::FileExists(Root / N))

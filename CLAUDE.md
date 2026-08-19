@@ -471,6 +471,10 @@ canvas 做不到毛玻璃半透明）**。
   ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000584`＝3.8mm 全身一致；線的跨縫
   ＝點刺制逐點解算天然安全；**排針（面積章）的跨縫＝InkBody 縫資料層＋表面攤平補丁
   逐點落墨（縫 2.5cm 內自動切換）**。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
+  **褌現制（08-21）＝光滑板**：`Tools/AssetPrep/fundoshi_plate.py`（CC 極限面＋手繪遮罩
+  σ15mm 等值線裁切＋牆腳＝手繪線沉 3mm；104k tris 單密度、FD_TIER 退役）；
+  **布/禁畫/手繪單一來源**＝衍生遮罩 `fundoshi_mask_final.png`（禁畫三消費者全讀它；
+  `fundoshi_mask_sharp.png` 仍是手繪 authoring 正源永不覆蓋）。
 - 臉部管線：`Tools/FacePipeline`（自拍→臉貼圖 v7、閉眼變體、眼球禁畫遮罩烘焙）；
   臉照片走 FaceUV（通道1），墨水走 UV0（通道0），互不影響。
   python 環境：`C:\games\Unreal Engine\nice_ink_face_pipeline\venv\Scripts\python.exe`。

@@ -40,9 +40,9 @@ def bake_sumo_ink_mask(eye_mask_path: Path, out_path: Path):
         table = json.load(f)
 
     hair = cv2.imread(str(SA / "hair_mask.png"), cv2.IMREAD_GRAYSCALE)
-    fund = cv2.imread(str(SA / "fundoshi_mask_sharp.png"), cv2.IMREAD_GRAYSCALE)
+    fund = cv2.imread(str(SA / "fundoshi_mask_final.png"), cv2.IMREAD_GRAYSCALE)   # 布實際覆蓋（單一來源，2026-08-21）
     if hair is None or fund is None:
-        raise SystemExit("hair_mask.png / fundoshi_mask_sharp.png missing in SourceAssets")
+        raise SystemExit("hair_mask.png / fundoshi_mask_final.png missing in SourceAssets")
     nodraw = np.maximum(cv2.resize(hair, (SIZE, SIZE), interpolation=cv2.INTER_LINEAR),
                         cv2.resize(fund, (SIZE, SIZE), interpolation=cv2.INTER_AREA))
     static_allowed = 255 - nodraw

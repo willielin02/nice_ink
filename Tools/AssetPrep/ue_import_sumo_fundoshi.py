@@ -60,8 +60,8 @@ def sm_task(filename, dest_path, dest_name):
     task.options = ui
     return task
 
-# 雙密度（2026-08-20）：貼臉只看得到睡姿受害者（SM 靜態單實例）＝高密付得起；
-# 站立骨骼身體（SK）沒人湊近＝輕量。兩檔由 fundoshi_shell.py FD_TIER 產出。
+# 2026-08-21 褌＝光滑板（fundoshi_plate.py）：單一密度 ~102k tris（含底板），雙密度 FD_TIER 退役——
+# build_sumo_skeletal_fbx.py 輸出 sumo_skeletal.fbx 後複製為 _hi/_lo 同檔（保留兩個檔名＝匯入流程不動）。
 tasks = [
     sk_task(SA + r"\sumo_skeletal_lo.fbx", "/Game/Characters", "SK_Sumo"),
     sm_task(SA + r"\sumo_skeletal_hi.fbx", "/Game/Characters", "SM_Sumo"),

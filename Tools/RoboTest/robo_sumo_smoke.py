@@ -126,7 +126,7 @@ class Test:
                 return
             # 三個世界全部角色：網格必須是 SM_Sumo、scale=1
             ok = True
-            for tag in ("UEDPIE_0", "UEDPIE_1", "UEDPIE_2"):
+            for tag in ("UEDPIE_0", "UEDPIE_1"):   # 2026-08-21: user 桌面重載下 3-client PIE 撞 D3D12 OOM——2 人 PIE、跨端驗證走 UEDPIE_1（server→client 複寫同義）
                 w = get_world(tag)
                 if not w:
                     ok = False
@@ -188,11 +188,11 @@ class Test:
         elif s == "verify_stroke":
             if self.elapsed() < 2.5:
                 return
-            w2 = get_world("UEDPIE_2")
+            w2 = get_world("UEDPIE_1")
             victim2 = find_char(w2, self.victim_pid)
             works = victim2.get_editor_property("InkCanvas").get_works()
             n = len(works)
-            log(f"client-2 stroke works={n} " + ("PASS" if n >= 1 else "FAIL"))
+            log(f"client-1 stroke works={n} " + ("PASS" if n >= 1 else "FAIL"))
             # 筆劃 UV 反解回世界（雙向解算煙測）
             server = get_world("UEDPIE_0")
             victim = find_char(server, self.victim_pid)
