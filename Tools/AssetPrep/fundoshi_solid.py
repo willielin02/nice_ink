@@ -33,7 +33,7 @@ RTOP = 0.005          # 上緣圓角半徑
 SEG = 3               # 圓角段數
 SINK = 0.0015         # 內層整體沉入皮膚（牆腳埋住）
 MED_WIN = 0.015       # 邊界中值窗（±15mm）
-GAUSS_SIGMA = 0.025   # 邊界高斯（只留 ~8cm 以上走向）
+GAUSS_SIGMA = 0.040   # 08-20 二調：user 要更順（只留 ~13cm 以上走向）
 SMOOTH_ITERS = 25
 LAM = 0.6
 
@@ -260,6 +260,24 @@ extra_v = []
 extra_w = []
 extra_t = []
 worst_boff = -1e9
+# B（面內朝外）改用「內部場」：轉角頂點的鄰居常常全是邊界＝符號測試失效＝
+# B 翻錯邊＝剖面鏈交叉＝頂緣碎裂片（σ40 掃描 0/1/5/6 號機位實錘）。
+# 穩健定義＝指向「半徑內內部頂點質心」的反方向，半徑自動擴大直到找到內部點。
+interior_arr = np.array([i for i in range(V) if i not in bset])
+interior_pos = co[interior_arr]
+def outward_B(P, Nv):
+    r = 0.012
+    for _try in range(6):
+        d2 = ((interior_pos - P) ** 2).sum(1)
+        sel = d2 < r * r
+        if sel.sum() >= 3:
+            inward = interior_pos[sel].mean(axis=0) - P
+            inward -= Nv * np.dot(inward, Nv)      # 投影到面內
+            ln = np.linalg.norm(inward)
+            if ln > 1e-9:
+                return -inward / ln
+        r *= 2.0
+    return None
 for lp in loops:
     m = len(lp)
     P_loop = co[np.array(lp)]
@@ -270,16 +288,13 @@ for lp in loops:
         Nv = N[vi]
         T = co[lp[(j + 1) % m]] - co[lp[j - 1]]
         T /= max(np.linalg.norm(T), 1e-12)
-        Bv = np.cross(Nv, T)
-        Bv /= max(np.linalg.norm(Bv), 1e-12)
-        interior_nb = [x for x in nbr[vi] if x not in bset]
-        if interior_nb:
-            Mpos = co[interior_nb].mean(axis=0)
-            if np.dot(Bv, P - Mpos) < 0:
+        Bv = outward_B(P, Nv)
+        if Bv is None:
+            Bv = np.cross(Nv, T)
+            Bv /= max(np.linalg.norm(Bv), 1e-12)
+            if prevB is not None and np.dot(Bv, prevB) < 0:
                 Bv = -Bv
-            prevB = Bv
-        elif prevB is not None and np.dot(Bv, prevB) < 0:
-            Bv = -Bv
+        prevB = Bv
         Rv = max(0.001, min(RTOP, 0.3 * width_of.get(int(vi), 1.0)))
         # 外層邊界頂點本人內縮＝圓弧終點（不疊共面條帶）
         outer[vi] = P + Nv * THICK - Rv * Bv
