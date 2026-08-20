@@ -483,18 +483,48 @@ P("loop lengths m:", [round(loop_len(l), 3) for l in loops])
 assert len(loops) == 3, f"expected 3 loops (waist + 2 legs), got {len(loops)}"
 
 raw_contour = {i: lin_co[l].copy() for i, l in enumerate(loops)}
+
+# ---- 6a) 公分級走向去噪（08-21 user 授權「公分級的走向也去噪、後腰窩 V 凹除外」）----
+# 沿弧長 σ=SIGMA_ARC 高斯平滑輪廓位置；保護區（後腰窩 縦褌 T 交接、user 刻意設計）
+# 權重=1 不動、外圍 4cm 軟過渡。平滑後沿法線射線貼回皮膚（射線方向一致＝零 zigzag；
+# nearest-point 貼回會在非平面 quad 側跳 5.7mm＝舊 zigzag 真兇，不用）。
+SIGMA_ARC = 0.040
+def protect_w(pts):
+    """1=保護（不平滑）。後腰窩=back(-y) 中央柱：|x|<0.11、y<-0.10；4cm 軟過渡"""
+    dx = np.maximum(np.abs(pts[:, 0]) - 0.11, 0.0)
+    dy = np.maximum(pts[:, 1] - (-0.10), 0.0)   # 往前（+y）超出 -0.10 的距離
+    d = np.sqrt(dx ** 2 + dy ** 2)
+    t = np.clip(d / 0.04, 0.0, 1.0)
+    return 1.0 - t * t * (3 - 2 * t)
 for li, l in enumerate(loops):
     c = lin_co[l]; n = len(l)
     seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
     s = np.concatenate([[0], np.cumsum(seg)])[:-1]; L = s[-1] + seg[-1]
-    out = c.copy()      # 等值線已在模糊場上＝平滑；位置不再動（零 zigzag）
-    # 貼回皮膚三角網格（雙線性孿生 vs 三角化皮膚在非平面 quad 差 ≤ 數 mm）→ 抬升量沿迴圈中值/高斯濾波
+    out = np.empty_like(c)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w = np.exp(-0.5 * (d / SIGMA_ARC) ** 2); w /= w.sum()
+        out[i] = (w[:, None] * c).sum(0)
+    pw = protect_w(c)
+    out = pw[:, None] * c + (1 - pw[:, None]) * out
+    # **不貼回皮膚**（08-21 血價：平滑曲線射回 3cm 多面體＝重新量化成面片段＝頂緣階梯平台）。
+    # 平滑點離皮 ≤~4mm（弦差）；頂緣=抬到光滑 U 上（下一段）、牆腳=另用射線落皮（藏皮下）。
+    for i in range(n):
+        lin_co[l[i]] = out[i]
+    dev = np.linalg.norm(lin_co[l] - raw_contour[li], axis=1) * 1000
+    P(f"loop {li}: arc-smooth σ{SIGMA_ARC*1000:.0f} dev p50 {np.percentile(dev,50):.2f} p90 {np.percentile(dev,90):.2f} max {dev.max():.2f} mm; protected frac {(pw>0.5).mean()*100:.1f}%")
+
+for li, l in enumerate(loops):
+    c = lin_co[l]; n = len(l)
+    seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
+    s = np.concatenate([[0], np.cumsum(seg)])[:-1]; L = s[-1] + seg[-1]
+    out = c.copy()
     hs = np.empty(n)
     for i in range(n):
         # 不再貼回三角化皮膚（quad 非平面處 ≤5.7mm 的側跳＝頂緣 zigzag 真兇）；牆腳＝雙線性孿生上的等值線本人，
         # 與遊戲三角化的差距由 SINK 吃掉（牆垂直＝可見線不動）
         h, ok = lift_h(lin_co[l[i]], vert_n[l[i]])
-        hs[i] = h if (ok and -0.002 < h < GAP_MAX) else np.nan
+        hs[i] = h if (ok and -0.006 < h < GAP_MAX) else np.nan
     # 補 nan（鄰近內插）→ 中值 5 → 高斯 σ6mm
     idxs = np.arange(n); good = ~np.isnan(hs)
     if (~good).any(): hs[~good] = np.interp(idxs[~good], idxs[good], hs[good], period=n)
@@ -503,7 +533,7 @@ for li, l in enumerate(loops):
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); hs_s[i] = (w * hs_m).sum()
-    hs_s = np.maximum(hs_s, EPS)
+    hs_s = np.maximum(hs_s, -0.004)   # 平滑線可高於 U 一點（頂緣=U 上點＝仍在皮外）
     topc = np.array([lin_co[l[i]] + hs_s[i] * vert_n[l[i]] for i in range(n)])
     # 頂緣本人沿迴圈 σ6mm 平滑：牆腳躺在多面體的稜線上（每 3cm 一個 7° 摺角）；
     # 頂緣若只是牆腳的平移就會複製這些摺角（渲染＝每 3cm 一個小凹痕/小耳朵）。
@@ -515,14 +545,16 @@ for li, l in enumerate(loops):
     tdev = np.linalg.norm(topS - topc, axis=1) * 1000
     for i in range(n):
         new_co[l[i]] = topS[i]
-    # 牆腳也沿迴圈 σ6mm 平滑：牆腳跨稜線時的垂直摺角＝牆上每 3cm 一條豎紋；
-    # 平滑後凸稜處埋入 ≤~0.7mm、凹谷處浮起 ≤~0.7mm，全在 SINK 3mm 之內（牆垂直＝可見線不動）
-    footc = lin_co[l].copy(); footS = np.empty_like(footc)
+    # 牆腳＝從頂緣沿 -n 射線落到皮膚（方向一致射線＝無 nearest 側跳；腳藏皮下、面片量化不可見）
+    miss_ft = 0
     for i in range(n):
-        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); footS[i] = (w[:, None] * footc).sum(0)
-    for i in range(n):
-        lin_co[l[i]] = footS[i]
+        v = l[i]; nvec = vert_n[v]
+        hit = skin_bvh.ray_cast(Vector(topS[i] + nvec * 0.001), Vector(-nvec), 0.08)
+        if hit[0] is not None:
+            lin_co[v] = np.array(hit[0])
+        else:
+            loc, _n2, _i2, _d2 = skin_bvh.find_nearest(Vector(topS[i])); lin_co[v] = np.array(loc); miss_ft += 1
+    if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
     P(f"loop {li}: top-ring smoothing move p50 {np.percentile(tdev,50):.2f} p90 {np.percentile(tdev,90):.2f} max {tdev.max():.2f} mm")
     dev = np.linalg.norm(lin_co[l] - raw_contour[li], axis=1) * 1000
     P(f"loop {li}: (no reprojection) move p50 {np.percentile(dev,50):.2f} p90 {np.percentile(dev,90):.2f} max {dev.max():.2f} mm; gap p50 {np.percentile(hs_s,50)*1000:.2f} max {hs_s.max()*1000:.2f}")
@@ -678,9 +710,16 @@ def tri_area(f):
         a, b, c = V[f[0]], V[f[1]], V[f[2]]; return 0.5 * np.linalg.norm(np.cross(b - a, c - a))
     a, b, c, d = V[f[0]], V[f[1]], V[f[2]], V[f[3]]
     return 0.5 * (np.linalg.norm(np.cross(b - a, c - a)) + np.linalg.norm(np.cross(c - a, d - a)))
-F2 = [f for f in F if tri_area(f) > 1e-10]
-P(f"degenerate faces removed: {len(F)-len(F2)}")
-F = F2
+# 退化面不刪（封閉實體上刪面＝開洞、水密斷言會炸）：微推頂點 0.03mm 使面積非零
+nudged = 0
+for _pass in range(4):
+    bad = [f for f in F if tri_area(f) <= 1e-10]
+    if not bad: break
+    for f in bad:
+        vi_ = int(f[1])
+        V[vi_] = V[vi_] + np.asarray(VN_src[vi_]) * 3e-5
+        nudged += 1
+P(f"degenerate faces nudged: {nudged}")
 P(f"assembled verts {len(V)} faces {len(F)} (top {len(top_faces)} wall {sum(len(l) for l in loops)} under {len(top_faces)})")
 
 # ---------------- 9) 圓柱 UV（沿用密度）----------------
