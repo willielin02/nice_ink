@@ -500,13 +500,16 @@ for li, l in enumerate(loops):
     c = lin_co[l]; n = len(l)
     seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
     s = np.concatenate([[0], np.cumsum(seg)])[:-1]; L = s[-1] + seg[-1]
-    out = np.empty_like(c)
+    out = np.empty_like(c); out12 = np.empty_like(c)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w = np.exp(-0.5 * (d / SIGMA_ARC) ** 2); w /= w.sum()
         out[i] = (w[:, None] * c).sum(0)
+        w2 = np.exp(-0.5 * (d / 0.012) ** 2); w2 /= w2.sum()
+        out12[i] = (w2[:, None] * c).sum(0)
+    # 保護區＝σ12 輕平滑（V 形狀半徑 5~8cm >> 12mm＝形狀保留、噪聲照除）；其餘 σ40
     pw = protect_w(c)
-    out = pw[:, None] * c + (1 - pw[:, None]) * out
+    out = pw[:, None] * out12 + (1 - pw[:, None]) * out
     # **不貼回皮膚**（08-21 血價：平滑曲線射回 3cm 多面體＝重新量化成面片段＝頂緣階梯平台）。
     # 平滑點離皮 ≤~4mm（弦差）；頂緣=抬到光滑 U 上（下一段）、牆腳=另用射線落皮（藏皮下）。
     for i in range(n):
@@ -567,12 +570,12 @@ for li, l in enumerate(loops):
     idxs = np.arange(n); good = ~np.isnan(hs)
     if (~good).any(): hs[~good] = np.interp(idxs[~good], idxs[good], hs[good], period=n)
     hs_m = np.array([np.median(hs[[(i + k) % n for k in (-2, -1, 0, 1, 2)]]) for i in range(n)])
+    # 頂緣高度＝貼死 U＋σ8 去噪（08-21：σ25 獨立平滑 ⇒ 邊高度 ≠ 內部布面高度 ⇒ 縫邊捲瘤；
+    # 頂緣與內部同在 U 上＝無捲、起伏=身體真形狀）
     hs_s = np.empty(n)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w = np.exp(-0.5 * (d / 0.025) ** 2); w /= w.sum(); hs_s[i] = (w * hs_m).sum()
-    pw_h = protect_w(lin_co[l])
-    hs_s = pw_h * hs_m + (1 - pw_h) * hs_s
+        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); hs_s[i] = (w2 * hs_m).sum()
     hs_s = np.maximum(hs_s, -0.004)   # 平滑線可高於 U 一點（頂緣=U 上點＝仍在皮外）
     topc = np.array([lin_co[l[i]] + hs_s[i] * vert_n[l[i]] for i in range(n)])
     # 頂緣本人沿迴圈 σ6mm 平滑：牆腳躺在多面體的稜線上（每 3cm 一個 7° 摺角）；
@@ -599,16 +602,28 @@ for li, l in enumerate(loops):
     if clamp_n: P(f"loop {li}: skin-clearance clamp raised {clamp_n} verts")
     for i in range(n):
         new_co[l[i]] = topS[i]
-    # 牆腳＝從頂緣沿 -n 射線落到皮膚（方向一致射線＝無 nearest 側跳；腳藏皮下、面片量化不可見）
+    # 牆腳＝從頂緣沿 -n 射線落到皮膚；**深度沿環 σ8 平滑**（08-21：腳深逐點抄皮膚面片
+    # ＝牆面一條條豎紋扭）＋「至少埋 0.5mm」回夾（平滑不可把腳抬出皮膚）
     miss_ft = 0
+    depth_ray = np.empty(n)
     for i in range(n):
         v = l[i]; nvec = vert_n[v]
         hit = skin_bvh.ray_cast(Vector(topS[i] + nvec * 0.001), Vector(-nvec), 0.08)
         if hit[0] is not None:
-            lin_co[v] = np.array(hit[0])
+            depth_ray[i] = float(np.dot(topS[i] - np.array(hit[0]), nvec))
         else:
-            loc, _n2, _i2, _d2 = skin_bvh.find_nearest(Vector(topS[i])); lin_co[v] = np.array(loc); miss_ft += 1
+            loc, _n2, _i2, _d2 = skin_bvh.find_nearest(Vector(topS[i]))
+            depth_ray[i] = float(np.dot(topS[i] - np.array(loc), nvec)); miss_ft += 1
+    depth_s = np.empty(n)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); depth_s[i] = (w2 * depth_ray).sum()
+    depth_f = np.maximum(depth_s, depth_ray + 0.0005)
+    for i in range(n):
+        v = l[i]
+        lin_co[v] = topS[i] - vert_n[v] * depth_f[i]
     if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
+    P(f"loop {li}: foot depth ray p50 {np.percentile(depth_ray,50)*1000:.1f} max {depth_ray.max()*1000:.1f} mm; smoothed extra burial p90 {np.percentile(depth_f-depth_ray,90)*1000:.2f} mm")
     P(f"loop {li}: top-ring smoothing move p50 {np.percentile(tdev,50):.2f} p90 {np.percentile(tdev,90):.2f} max {tdev.max():.2f} mm")
     dev = np.linalg.norm(lin_co[l] - raw_contour[li], axis=1) * 1000
     P(f"loop {li}: (no reprojection) move p50 {np.percentile(dev,50):.2f} p90 {np.percentile(dev,90):.2f} max {dev.max():.2f} mm; gap p50 {np.percentile(hs_s,50)*1000:.2f} max {hs_s.max()*1000:.2f}")
@@ -656,7 +671,7 @@ for _pass in range(6):
         v = int(v)
         if v in contour_set: continue
         q = new_co[v] + delta[v] + vert_n[v] * T_CLOTH
-        loc, nor, idx_, dd = skin_bvh.find_nearest(Vector(q), 0.03)
+        loc, nor, idx_, dd = U_bvh.find_nearest(Vector(q), 0.03)   # 壓在光滑 U 上（U≥皮膚）——壓多面體皮膚＝面片瘤實錘（08-21）
         if loc is None: continue
         nor = np.array(nor); sd_ = float(np.dot(q - np.array(loc), nor))
         if sd_ < PRESS_EPS - 1e-5:
@@ -679,7 +694,7 @@ for _pass in range(6):
         v = int(v)
         if v in contour_set: continue
         q = new_co[v] + delta[v] + vert_n[v] * T_CLOTH
-        loc, nor, idx_, dd = skin_bvh.find_nearest(Vector(q), 0.03)
+        loc, nor, idx_, dd = U_bvh.find_nearest(Vector(q), 0.03)
         if loc is None: continue
         nor = np.array(nor); sd_ = float(np.dot(q - np.array(loc), nor))
         if sd_ < PRESS_EPS - 1e-5:
@@ -809,6 +824,35 @@ uvlayer.data.foreach_set("uv", lo_uv.ravel())
 ca = me2.color_attributes.new("FaceMask", 'BYTE_COLOR', 'CORNER')
 ca.data.foreach_set("color", np.tile(np.array([0, 0, 0, 1.0], np.float32), len(me2.loops)))
 for p in me2.polygons: p.use_smooth = True
+# ---- 分區自訂法線（08-21 牆面肋紋定罪）：牆/頂板共用頂點＋切割邊碎三角形
+# ＝頂點法線把兩區混平均＝牆上 ~5mm 間距著色肋。頂板/牆/底板各自區內平滑、
+# 區界=銳邊（真布摺邊本來就銳）。面序契約：top_faces → 牆 → 底板。
+n_top_f = len(top_faces); n_wall_f = sum(len(l) for l in loops)
+def face_region(fi):
+    if fi < n_top_f: return 0
+    if fi < n_top_f + n_wall_f: return 1
+    return 2
+me2.calc_loop_triangles()
+fnorm_all = np.empty(len(me2.polygons) * 3); me2.polygons.foreach_get("normal", fnorm_all)
+fnorm_all = fnorm_all.reshape(-1, 3)
+farea_all = np.empty(len(me2.polygons)); me2.polygons.foreach_get("area", farea_all)
+acc = defaultdict(lambda: np.zeros(3))
+for poly in me2.polygons:
+    r = face_region(poly.index)
+    w_ = max(farea_all[poly.index], 1e-12)
+    for v in poly.vertices:
+        acc[(v, r)] += fnorm_all[poly.index] * w_
+loop_normals = np.empty((len(me2.loops), 3))
+lvi3 = np.empty(len(me2.loops), np.int64); me2.loops.foreach_get("vertex_index", lvi3)
+for poly in me2.polygons:
+    r = face_region(poly.index)
+    for lo in range(poly.loop_start, poly.loop_start + poly.loop_total):
+        v = int(lvi3[lo])
+        nv = acc[(v, r)]
+        ln = np.linalg.norm(nv)
+        loop_normals[lo] = nv / ln if ln > 1e-12 else fnorm_all[poly.index]
+me2.normals_split_custom_set([tuple(x) for x in loop_normals])
+P("split normals per region set (top/wall/under)")
 # 頂板/底板法線＝U 解析法線；牆＝讓 Blender 算（頂緣共享頂點→自然圓肩著色）
 me2.materials.append(bpy.data.materials["M_Fundoshi"])
 
