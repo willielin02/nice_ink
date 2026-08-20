@@ -289,6 +289,8 @@ for it in range(20):
         P(f"iter {it}: converged"); ev.to_mesh_clear(); break
     for vi, d in raise_v.items():
         o[vi] += min(d * 1.1 + 0.0001, 0.003)
+    # （08-21 曾試雙向 Laplacian 鬆弛 o 場＝不收斂：平滑砍掉的峰是約束需要的、
+    # 振盪殘留 2mm 穿刺——臀縫皺＝籠解析度下的真實約束需求，恢復只增不減版）
     if it % 3 == 2:
         o2 = o.copy()
         for v in mov_idx:
@@ -495,6 +497,19 @@ assert len(loops) == 3, f"expected 3 loops (waist + 2 legs), got {len(loops)}"
 
 raw_contour = {i: lin_co[l].copy() for i, l in enumerate(loops)}
 attach_co_all = {}; roll_co_all = {}
+# 跨環近接查詢表（對邊錐縮用）：以平滑前輪廓位置建（差 ~mm、判「塞不塞得下」足夠）
+ct_pts = []; ct_meta = []
+for _li, _l in enumerate(loops):
+    _c = lin_co[_l]
+    _seg = np.linalg.norm(np.roll(_c, -1, 0) - _c, axis=1)
+    _s = np.concatenate([[0], np.cumsum(_seg)])[:-1]
+    for _j, _v in enumerate(_l):
+        ct_pts.append(lin_co[_v]); ct_meta.append((_li, _s[_j]))
+kd_ct = KDTree(len(ct_pts))
+for _i, _p in enumerate(ct_pts): kd_ct.insert(Vector(_p), _i)
+kd_ct.balance()
+def abs_arc(a_, b_, L_):
+    d_ = abs(a_ - b_); return min(d_, L_ - d_)
 
 # ---- 6a) 公分級走向去噪（08-21 user 授權「公分級的走向也去噪、後腰窩 V 凹除外」）----
 # 沿弧長 σ=SIGMA_ARC 高斯平滑輪廓位置；保護區（後腰窩 縦褌 T 交接、user 刻意設計）
@@ -686,14 +701,50 @@ for li, l in enumerate(loops):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)
     o_sm /= np.maximum(np.linalg.norm(o_sm, axis=1), 1e-12)[:, None]
+    # 捲徑隨曲率自適應（08-21 毛刺定罪：急彎處〔襠帶入臀縫端/V 底〕邊界曲率半徑 < 捲徑
+    # ⇒ 相鄰截面互越＝自交摺片＝垂直於布面的毛刺）。R_i = min(R, 0.45×局部曲率半徑)、
+    # 沿環 σ10mm 平滑、下限 0.8mm（退化成普通邊）＝截面不再互越。
+    K_C = 4
+    kappa = np.empty(n)
+    for i in range(n):
+        a_ = topS[(i - K_C) % n]; b_ = topS[i]; c_ = topS[(i + K_C) % n]
+        v1 = b_ - a_; v2 = c_ - b_
+        l1 = np.linalg.norm(v1); l2 = np.linalg.norm(v2)
+        if l1 < 1e-9 or l2 < 1e-9:
+            kappa[i] = 0.0; continue
+        ang = np.arccos(np.clip(np.dot(v1, v2) / (l1 * l2), -1, 1))
+        kappa[i] = ang / max(0.5 * (l1 + l2), 1e-9)
+    R_raw = np.minimum(ROLL_R, np.maximum(0.0008, 0.45 / np.maximum(kappa, 1e-6)))
+    # 對邊近接錐縮（08-21 真兇二：臀縫裡兩條布邊相距數 mm、塞不下兩個 4mm 捲邊＝互越摺片）
+    # deff = 與「非本段」輪廓點的最小距離（他環、或同環弧距 >40mm 的折返段）
+    # 只錐「面對面」的邊：同帶兩緣背對背外捲不互撞；對邊要落在我的外捲方向前方才算
+    for i in range(n):
+        hits = kd_ct.find_n(Vector(topS[i]), 10)
+        deff = None
+        for loc_, gi, dd in hits:
+            gl, gs = ct_meta[gi]
+            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and dd > 1e-6:
+                rel = np.array(loc_) - topS[i]
+                if np.dot(o_sm[i], rel) > 0.3 * dd:   # 對邊在外捲方向前方＝會撞
+                    deff = dd; break
+        if deff is not None:
+            R_raw[i] = min(R_raw[i], max(0.0008, 0.35 * deff))
+    R_sm = np.empty(n)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.010) ** 2); w2 /= w2.sum()
+        R_sm[i] = (w2 * R_raw).sum()
+    R_sm = np.minimum(R_sm, R_raw + 0.0015)   # 平滑不可把急彎處的縮徑放大回去
+    P(f"loop {li}: roll radius p5 {np.percentile(R_sm,5)*1000:.2f} p50 {np.percentile(R_sm,50)*1000:.2f} mm; tapered(<3mm) {int((R_sm<0.003).sum())}/{n}")
     for i in range(n):
         v = l[i]; nvec = vert_n[v]
         attach = topS[i] - nvec * max(depth_s[i] - 0.003, 0.0)   # 光滑深度＝光滑起捲線（皮上名目 3mm）
         attach_co_all[v] = attach
+        Ri = R_sm[i]
         rings = []
         for th_deg in ROLL_ANGLES:
             th = np.radians(th_deg)
-            rings.append(attach + ROLL_R * np.sin(th) * o_sm[i] - ROLL_R * (1.0 - np.cos(th)) * nvec)
+            rings.append(attach + Ri * np.sin(th) * o_sm[i] - Ri * (1.0 - np.cos(th)) * nvec)
         roll_co_all[v] = rings
     if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
     P(f"loop {li}: foot depth ray p50 {np.percentile(depth_ray,50)*1000:.1f} max {depth_ray.max()*1000:.1f} mm; smoothed extra burial p90 {np.percentile(depth_f-depth_ray,90)*1000:.2f} mm")
@@ -751,15 +802,29 @@ for _pass in range(6):
             delta[v] = delta[v] + (PRESS_EPS - sd_) * nor; moved += 1
     press_n = max(press_n, moved)
     if moved == 0: break
-# delta 場平滑（含零值＝自然衰減到未動區）
-for _sm in range(2):
-    d2 = dict(delta)
-    for v in plate_v_idx:
-        v = int(v)
-        if v in contour_set: continue
-        nb = [delta[u] for u in plate_adj[v] if u in delta]
-        if nb: d2[v] = 0.5 * delta[v] + 0.5 * np.mean(nb, axis=0)
-    delta = d2
+# 平滑↔補壓交替鬆弛（08-21 毛刺修：單輪平滑+補壓＝入臀縫段大推量區殘留摺片；
+# 6 輪交替＝收斂到「既平滑又滿足不穿刺」的面）
+for _cycle in range(6):
+    for _sm in range(3):
+        d2 = dict(delta)
+        for v in plate_v_idx:
+            v = int(v)
+            if v in contour_set: continue
+            nb = [delta[u] for u in plate_adj[v] if u in delta]
+            if nb: d2[v] = 0.5 * delta[v] + 0.5 * np.mean(nb, axis=0)
+        delta = d2
+    for _pr in range(4):
+        moved = 0
+        for v in plate_v_idx:
+            v = int(v)
+            if v in contour_set: continue
+            q = new_co[v] + delta[v] + vert_n[v] * T_CLOTH
+            loc, nor, idx_, dd = U_bvh.find_nearest(Vector(q), 0.03)
+            if loc is None: continue
+            nor = np.array(nor); sd_ = float(np.dot(q - np.array(loc), nor))
+            if sd_ < PRESS_EPS - 1e-5:
+                delta[v] = delta[v] + (PRESS_EPS - sd_) * nor; moved += 1
+        if moved == 0: break
 # 平滑會把矯正拉回皮下——平滑後再補壓到收斂（終態必須滿足約束）
 for _pass in range(6):
     moved = 0
