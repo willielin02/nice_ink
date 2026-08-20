@@ -483,7 +483,7 @@ P("loop lengths m:", [round(loop_len(l), 3) for l in loops])
 assert len(loops) == 3, f"expected 3 loops (waist + 2 legs), got {len(loops)}"
 
 raw_contour = {i: lin_co[l].copy() for i, l in enumerate(loops)}
-attach_co_all = {}; hem_co_all = {}; hem_ns_all = {}
+attach_co_all = {}; roll_co_all = {}
 
 # ---- 6a) 公分級走向去噪（08-21 user 授權「公分級的走向也去噪、後腰窩 V 凹除外」）----
 # 沿弧長 σ=SIGMA_ARC 高斯平滑輪廓位置；保護區（後腰窩 縦褌 T 交接、user 刻意設計）
@@ -651,47 +651,39 @@ for li, l in enumerate(loops):
     # ---- 裾邊唇（08-21 終兇＝牆×多面體皮膚的交線鋸齒（皮膚 3cm 面片、±1~2mm/3cm 週期）：
     # 布側平滑已打完、交線是皮膚解析度的鏡子。構造解＝布唇：牆在皮上 1mm 處接一圈 5mm 寬
     # 布唇壓在皮膚上、外緣埋皮下 1.5mm ⇒ 可見邊界＝布唇的光滑邊、鋸齒交線藏唇下。----
-    HEM_W = 0.005; HEM_LIFT = 0.0010; HEM_BURY = 0.0015
-    o_arr = np.empty((n, 3)); ns_arr = np.empty((n, 3)); attach_arr = np.empty((n, 3))
+    # ---- 捲邊圓筒（08-21 終構造）：任何「逐點貼皮」的邊特徵都繼承皮膚 3cm 面片噪聲
+    # （平唇被面片吞吐＝破布條實錘）。捲邊＝截面圓弧掃過光滑頂緣框架、**完全不投影皮膚**
+    # ＝可見輪廓構造性光滑；最低點埋皮下（名目 ~5mm、面片 ±2mm 也埋住）；
+    # 面片交線發生在筒腹下側＝被筒身自己遮住。真實廻し布邊＝捲的。
+    ROLL_R = 0.004
+    ROLL_ANGLES = [25.0, 60.0, 95.0, 130.0, 165.0]
+    o_arr = np.empty((n, 3))
     for i in range(n):
-        v = l[i]; nvec = vert_n[v]; ns = ns_ray[i] / max(np.linalg.norm(ns_ray[i]), 1e-12)
-        ns_arr[i] = ns
-        attach_arr[i] = topS[i] - nvec * max(depth_ray[i] - HEM_LIFT, 0.0)
+        v = l[i]; nvec = vert_n[v]
         nb_in = [u for u in plate_adj[v] if u not in contour_set]
         if nb_in:
             din = np.mean([new_co[u] for u in nb_in], axis=0) - topS[i]
         else:
-            tvec = topS[(i + 1) % n] - topS[(i - 1) % n]
-            din = np.cross(tvec, nvec)
-        o = -(din - ns * np.dot(din, ns))
+            din = np.cross(topS[(i + 1) % n] - topS[(i - 1) % n], nvec)
+        o = -(din - nvec * np.dot(din, nvec))
         ol = np.linalg.norm(o)
-        o = o / ol if ol > 1e-9 else np.cross(topS[(i + 1) % n] - topS[(i - 1) % n], ns)
-        o_arr[i] = o / max(np.linalg.norm(o), 1e-12)
-    # 外推方向沿環 σ6 平滑（逐點內鄰平均在切割頂點抖動＝唇緣鋸齒流蘇實錘）
+        if ol < 1e-9:
+            o = np.cross(topS[(i + 1) % n] - topS[(i - 1) % n], nvec); ol = np.linalg.norm(o)
+        o_arr[i] = o / max(ol, 1e-12)
     o_sm = np.empty_like(o_arr)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w2 = np.exp(-0.5 * (d / 0.006) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)
+        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)
     o_sm /= np.maximum(np.linalg.norm(o_sm, axis=1), 1e-12)[:, None]
-    hem_raw = np.empty((n, 3))
     for i in range(n):
-        q = attach_arr[i] + o_sm[i] * HEM_W
-        loc, nor, _i3, _d3 = skin_bvh.find_nearest(Vector(q), 0.05)
-        hem_raw[i] = (np.array(loc) - np.array(nor) * HEM_BURY) if loc is not None else q - ns_arr[i] * (HEM_LIFT + HEM_BURY)
-    # 唇外緣沿環 σ6 平滑 → 「至少埋 0.8mm」回夾（平滑會浮出面片凸點）
-    hem_sm = np.empty_like(hem_raw)
-    for i in range(n):
-        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w2 = np.exp(-0.5 * (d / 0.006) ** 2); w2 /= w2.sum(); hem_sm[i] = (w2[:, None] * hem_raw).sum(0)
-    for i in range(n):
-        ns = ns_arr[i]
-        hit = skin_bvh.ray_cast(Vector(hem_sm[i] + ns * 0.02), Vector(-ns), 0.06)
-        if hit[0] is not None:
-            depth_h = float(np.dot(np.array(hit[0]) - hem_sm[i], ns))   # >0 ＝皮膚在唇緣上方（有埋）
-            if depth_h < 0.0008:
-                hem_sm[i] = hem_sm[i] - ns * (0.0008 - depth_h)
-        v = l[i]
-        attach_co_all[v] = attach_arr[i]; hem_co_all[v] = hem_sm[i]; hem_ns_all[v] = ns_arr[i]
+        v = l[i]; nvec = vert_n[v]
+        attach = topS[i] - nvec * max(depth_s[i] - 0.003, 0.0)   # 光滑深度＝光滑起捲線（皮上名目 3mm）
+        attach_co_all[v] = attach
+        rings = []
+        for th_deg in ROLL_ANGLES:
+            th = np.radians(th_deg)
+            rings.append(attach + ROLL_R * np.sin(th) * o_sm[i] - ROLL_R * (1.0 - np.cos(th)) * nvec)
+        roll_co_all[v] = rings
     if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
     P(f"loop {li}: foot depth ray p50 {np.percentile(depth_ray,50)*1000:.1f} max {depth_ray.max()*1000:.1f} mm; smoothed extra burial p90 {np.percentile(depth_f-depth_ray,90)*1000:.2f} mm")
     P(f"loop {li}: top-ring smoothing move p50 {np.percentile(tdev,50):.2f} p90 {np.percentile(tdev,90):.2f} max {tdev.max():.2f} mm")
@@ -809,14 +801,15 @@ for f in top_faces:
         a, b, c = f[i], f[(i + 1) % 3], f[(i + 2) % 3]
         third[(a, b) if a < b else (b, a)] = c
 # 牆（兩段：頂緣→attach、attach→腳）＋裾邊唇（attach→hem 上下兩面楔＝水密）
-foot_idx = {}; attach_idx = {}; hem_idx = {}; attach_b_idx = {}
+foot_idx = {}; attach_idx = {}; roll_idx = {}
 F_wall = []; F_hem = []
 for li, l in enumerate(loops):
     for vi in l:
         foot_idx[vi] = len(V); V.append(tuple(foot_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
         attach_idx[vi] = len(V); V.append(tuple(attach_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
-        hem_idx[vi] = len(V); V.append(tuple(hem_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
-        attach_b_idx[vi] = len(V); V.append(tuple(attach_co_all[vi] - hem_ns_all[vi] * 0.0005)); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
+        roll_idx[vi] = []
+        for ring_pt in roll_co_all[vi]:
+            roll_idx[vi].append(len(V)); V.append(tuple(ring_pt)); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
     n = len(l)
     votes = 0
     for i in range(n):
@@ -833,18 +826,18 @@ for li, l in enumerate(loops):
     for i in range(n):
         a, b = l[i], l[(i + 1) % n]
         ra, rb = remap[a], remap[b]
+        chain_a = [attach_idx[a]] + roll_idx[a] + [foot_idx[a]]
+        chain_b = [attach_idx[b]] + roll_idx[b] + [foot_idx[b]]
         if flip_loop:
             F_wall.append((ra, rb, attach_idx[b], attach_idx[a]))
             F_wall.append((attach_idx[a], attach_idx[b], foot_idx[b], foot_idx[a]))
-            F_hem.append((attach_idx[a], attach_idx[b], hem_idx[b], hem_idx[a]))          # 唇上面
-            F_hem.append((hem_idx[a], hem_idx[b], attach_b_idx[b], attach_b_idx[a]))      # 唇下面（-0.5mm 層）
-            F_hem.append((attach_b_idx[a], attach_b_idx[b], attach_idx[b], attach_idx[a]))  # 內封條
+            for k in range(len(chain_a) - 1):
+                F_hem.append((chain_a[k], chain_b[k], chain_b[k + 1], chain_a[k + 1]))
         else:
             F_wall.append((ra, attach_idx[a], attach_idx[b], rb))
             F_wall.append((attach_idx[a], foot_idx[a], foot_idx[b], attach_idx[b]))
-            F_hem.append((attach_idx[a], hem_idx[a], hem_idx[b], attach_idx[b]))
-            F_hem.append((hem_idx[a], attach_b_idx[a], attach_b_idx[b], hem_idx[b]))
-            F_hem.append((attach_b_idx[a], attach_idx[a], attach_idx[b], attach_b_idx[b]))
+            for k in range(len(chain_a) - 1):
+                F_hem.append((chain_a[k], chain_a[k + 1], chain_b[k + 1], chain_b[k]))
 # 唇上面朝外檢查（與皮膚法線同向）：每迴圈多數決一次翻
 F.extend(tuple(int(x) for x in q) for q in F_wall)
 F.extend(tuple(int(x) for x in q) for q in F_hem)
@@ -914,11 +907,10 @@ for p in me2.polygons: p.use_smooth = True
 # ---- 分區自訂法線（08-21 牆面肋紋定罪）：牆/頂板共用頂點＋切割邊碎三角形
 # ＝頂點法線把兩區混平均＝牆上 ~5mm 間距著色肋。頂板/牆/底板各自區內平滑、
 # 區界=銳邊（真布摺邊本來就銳）。面序契約：top_faces → 牆 → 底板。
-n_top_f = len(top_faces); n_wall_f = 2 * sum(len(l) for l in loops); n_hem_f = 3 * sum(len(l) for l in loops)
+n_top_f = len(top_faces); n_wall_f = (2 + 6) * sum(len(l) for l in loops)   # 兩段牆＋捲邊 6 條帶＝同一平滑組（布連續捲過）
 def face_region(fi):
     if fi < n_top_f: return 0
     if fi < n_top_f + n_wall_f: return 1
-    if fi < n_top_f + n_wall_f + n_hem_f: return 3   # 裾邊唇＝自己的平滑組（attach=銳邊）
     return 2
 me2.calc_loop_triangles()
 fnorm_all = np.empty(len(me2.polygons) * 3); me2.polygons.foreach_get("normal", fnorm_all)
@@ -1035,7 +1027,7 @@ P(f"foot on skin: dist to skin p50 {np.percentile(fd,50):.2f} max {fd.max():.2f}
 
 # ---------------- 12) 衍生遮罩＝布實際覆蓋（單一來源：布＝禁畫）----------------
 # 褌區 cage 面（face_in + 1 圈）的 UV 像素：雙線性反推 → 多面體上的點 → 沿法線射線打到布（頂板/牆）＝覆蓋
-cloth_bvh = BVHTree.FromPolygons([tuple(v) for v in V], [tuple(int(i) for i in f) for f in F[:len(top_faces) + 5 * sum(len(l) for l in loops)]])
+cloth_bvh = BVHTree.FromPolygons([tuple(v) for v in V], [tuple(int(i) for i in f) for f in F[:len(top_faces) + 8 * sum(len(l) for l in loops)]])
 face_ring = face_in.copy()
 vert_in_face = np.zeros(len(cage_co), bool)
 for fi in np.where(face_in)[0]: vert_in_face[cage_polys[fi]] = True
