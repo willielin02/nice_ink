@@ -483,6 +483,7 @@ P("loop lengths m:", [round(loop_len(l), 3) for l in loops])
 assert len(loops) == 3, f"expected 3 loops (waist + 2 legs), got {len(loops)}"
 
 raw_contour = {i: lin_co[l].copy() for i, l in enumerate(loops)}
+attach_co_all = {}; hem_co_all = {}; hem_ns_all = {}
 
 # ---- 6a) 公分級走向去噪（08-21 user 授權「公分級的走向也去噪、後腰窩 V 凹除外」）----
 # 沿弧長 σ=SIGMA_ARC 高斯平滑輪廓位置；保護區（後腰窩 縦褌 T 交接、user 刻意設計）
@@ -585,10 +586,22 @@ for li, l in enumerate(loops):
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); topS[i] = (w[:, None] * topc).sum(0)
+    def kinkstat(pts):
+        K = 5; n_ = len(pts); out_ = np.empty(n_)
+        for i_ in range(n_):
+            a_ = pts[(i_ - K) % n_]; b_ = pts[(i_ + K) % n_]; q_ = pts[i_]
+            ab_ = b_ - a_; t_ = np.dot(q_ - a_, ab_) / max(np.dot(ab_, ab_), 1e-12)
+            out_[i_] = np.linalg.norm(q_ - a_ - np.clip(t_, 0, 1) * ab_)
+        return np.percentile(out_, 99) * 1000, out_.max() * 1000
+    k_lin = kinkstat(lin_co[l]); k_topc = kinkstat(topc); k_topS = kinkstat(topS)
+    P(f"loop {li}: kink p99/max  lin {k_lin[0]:.2f}/{k_lin[1]:.2f}  topc {k_topc[0]:.2f}/{k_topc[1]:.2f}  topS {k_topS[0]:.2f}/{k_topS[1]:.2f} mm")
     tdev = np.linalg.norm(topS - topc, axis=1) * 1000
     # 皮膚淨空回夾（只准抬不准沉）：高度剖面平滑會在皮膚凸點處把邊緣壓到皮下——
     # 凸點處局部讓步（抬到淨空 1.5mm），其餘維持平滑剖面
-    clamp_n = 0
+    # 皮膚淨空回夾＝**錐形攤開**（08-21 定罪：逐點抬升＝邊上 2mm 尖峰缺口（p99 kink 1.5mm、
+    # 熱點=髖側=user 截圖）。需求抬量沿環以 1:12 坡度 morphological cone-max 攤開＝平滑脊、
+    # 約束照樣點點滿足）
+    need = np.zeros(n)
     for i in range(n):
         nvec = vert_n[l[i]]
         hit = skin_bvh.ray_cast(Vector(topS[i] + nvec * 0.0002), Vector(-nvec), 0.02)
@@ -596,24 +609,37 @@ for li, l in enumerate(loops):
         if dcl is None:
             hit2 = skin_bvh.ray_cast(Vector(topS[i] - nvec * 0.0002), Vector(nvec), 0.01)
             if hit2[0] is not None and hit2[1].dot(Vector(nvec)) > 0:
-                topS[i] = topS[i] + np.array(nvec) * (hit2[3] + 0.0015); clamp_n += 1
+                need[i] = hit2[3] + 0.0015
         elif dcl < 0.0015:
-            topS[i] = topS[i] + np.array(nvec) * (0.0015 - dcl); clamp_n += 1
-    if clamp_n: P(f"loop {li}: skin-clearance clamp raised {clamp_n} verts")
+            need[i] = 0.0015 - dcl
+    SLOPE = 1.0 / 12.0
+    seg2 = np.linalg.norm(np.roll(topS, -1, 0) - topS, axis=1)
+    for _cyc in range(2):
+        for i in range(1, 2 * n):
+            a_, b_ = i % n, (i - 1) % n
+            need[a_] = max(need[a_], need[b_] - SLOPE * seg2[b_])
+        for i in range(2 * n - 1, 0, -1):
+            a_, b_ = (i - 1) % n, i % n
+            need[a_] = max(need[a_], need[b_] - SLOPE * seg2[a_])
+    clamp_n = int((need > 1e-6).sum())
+    for i in range(n):
+        if need[i] > 1e-6:
+            topS[i] = topS[i] + np.array(vert_n[l[i]]) * need[i]
+    if clamp_n: P(f"loop {li}: clearance cone-clamp touched {clamp_n} verts (max raise {need.max()*1000:.2f}mm)")
     for i in range(n):
         new_co[l[i]] = topS[i]
     # 牆腳＝從頂緣沿 -n 射線落到皮膚；**深度沿環 σ8 平滑**（08-21：腳深逐點抄皮膚面片
     # ＝牆面一條條豎紋扭）＋「至少埋 0.5mm」回夾（平滑不可把腳抬出皮膚）
     miss_ft = 0
-    depth_ray = np.empty(n)
+    depth_ray = np.empty(n); ns_ray = np.empty((n, 3))
     for i in range(n):
         v = l[i]; nvec = vert_n[v]
         hit = skin_bvh.ray_cast(Vector(topS[i] + nvec * 0.001), Vector(-nvec), 0.08)
         if hit[0] is not None:
-            depth_ray[i] = float(np.dot(topS[i] - np.array(hit[0]), nvec))
+            depth_ray[i] = float(np.dot(topS[i] - np.array(hit[0]), nvec)); ns_ray[i] = np.array(hit[1])
         else:
             loc, _n2, _i2, _d2 = skin_bvh.find_nearest(Vector(topS[i]))
-            depth_ray[i] = float(np.dot(topS[i] - np.array(loc), nvec)); miss_ft += 1
+            depth_ray[i] = float(np.dot(topS[i] - np.array(loc), nvec)); ns_ray[i] = np.array(_n2); miss_ft += 1
     depth_s = np.empty(n)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
@@ -622,6 +648,50 @@ for li, l in enumerate(loops):
     for i in range(n):
         v = l[i]
         lin_co[v] = topS[i] - vert_n[v] * depth_f[i]
+    # ---- 裾邊唇（08-21 終兇＝牆×多面體皮膚的交線鋸齒（皮膚 3cm 面片、±1~2mm/3cm 週期）：
+    # 布側平滑已打完、交線是皮膚解析度的鏡子。構造解＝布唇：牆在皮上 1mm 處接一圈 5mm 寬
+    # 布唇壓在皮膚上、外緣埋皮下 1.5mm ⇒ 可見邊界＝布唇的光滑邊、鋸齒交線藏唇下。----
+    HEM_W = 0.005; HEM_LIFT = 0.0010; HEM_BURY = 0.0015
+    o_arr = np.empty((n, 3)); ns_arr = np.empty((n, 3)); attach_arr = np.empty((n, 3))
+    for i in range(n):
+        v = l[i]; nvec = vert_n[v]; ns = ns_ray[i] / max(np.linalg.norm(ns_ray[i]), 1e-12)
+        ns_arr[i] = ns
+        attach_arr[i] = topS[i] - nvec * max(depth_ray[i] - HEM_LIFT, 0.0)
+        nb_in = [u for u in plate_adj[v] if u not in contour_set]
+        if nb_in:
+            din = np.mean([new_co[u] for u in nb_in], axis=0) - topS[i]
+        else:
+            tvec = topS[(i + 1) % n] - topS[(i - 1) % n]
+            din = np.cross(tvec, nvec)
+        o = -(din - ns * np.dot(din, ns))
+        ol = np.linalg.norm(o)
+        o = o / ol if ol > 1e-9 else np.cross(topS[(i + 1) % n] - topS[(i - 1) % n], ns)
+        o_arr[i] = o / max(np.linalg.norm(o), 1e-12)
+    # 外推方向沿環 σ6 平滑（逐點內鄰平均在切割頂點抖動＝唇緣鋸齒流蘇實錘）
+    o_sm = np.empty_like(o_arr)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.006) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)
+    o_sm /= np.maximum(np.linalg.norm(o_sm, axis=1), 1e-12)[:, None]
+    hem_raw = np.empty((n, 3))
+    for i in range(n):
+        q = attach_arr[i] + o_sm[i] * HEM_W
+        loc, nor, _i3, _d3 = skin_bvh.find_nearest(Vector(q), 0.05)
+        hem_raw[i] = (np.array(loc) - np.array(nor) * HEM_BURY) if loc is not None else q - ns_arr[i] * (HEM_LIFT + HEM_BURY)
+    # 唇外緣沿環 σ6 平滑 → 「至少埋 0.8mm」回夾（平滑會浮出面片凸點）
+    hem_sm = np.empty_like(hem_raw)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.006) ** 2); w2 /= w2.sum(); hem_sm[i] = (w2[:, None] * hem_raw).sum(0)
+    for i in range(n):
+        ns = ns_arr[i]
+        hit = skin_bvh.ray_cast(Vector(hem_sm[i] + ns * 0.02), Vector(-ns), 0.06)
+        if hit[0] is not None:
+            depth_h = float(np.dot(np.array(hit[0]) - hem_sm[i], ns))   # >0 ＝皮膚在唇緣上方（有埋）
+            if depth_h < 0.0008:
+                hem_sm[i] = hem_sm[i] - ns * (0.0008 - depth_h)
+        v = l[i]
+        attach_co_all[v] = attach_arr[i]; hem_co_all[v] = hem_sm[i]; hem_ns_all[v] = ns_arr[i]
     if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
     P(f"loop {li}: foot depth ray p50 {np.percentile(depth_ray,50)*1000:.1f} max {depth_ray.max()*1000:.1f} mm; smoothed extra burial p90 {np.percentile(depth_f-depth_ray,90)*1000:.2f} mm")
     P(f"loop {li}: top-ring smoothing move p50 {np.percentile(tdev,50):.2f} p90 {np.percentile(tdev,90):.2f} max {tdev.max():.2f} mm")
@@ -738,11 +808,15 @@ for f in top_faces:
     for i in range(3):
         a, b, c = f[i], f[(i + 1) % 3], f[(i + 2) % 3]
         third[(a, b) if a < b else (b, a)] = c
-# 牆
-foot_idx = {}
+# 牆（兩段：頂緣→attach、attach→腳）＋裾邊唇（attach→hem 上下兩面楔＝水密）
+foot_idx = {}; attach_idx = {}; hem_idx = {}; attach_b_idx = {}
+F_wall = []; F_hem = []
 for li, l in enumerate(loops):
     for vi in l:
         foot_idx[vi] = len(V); V.append(tuple(foot_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
+        attach_idx[vi] = len(V); V.append(tuple(attach_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
+        hem_idx[vi] = len(V); V.append(tuple(hem_co_all[vi])); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
+        attach_b_idx[vi] = len(V); V.append(tuple(attach_co_all[vi] - hem_ns_all[vi] * 0.0005)); VN_src.append(vert_n[vi]); DV.append(vert_dv[vi])
     n = len(l)
     votes = 0
     for i in range(n):
@@ -759,8 +833,21 @@ for li, l in enumerate(loops):
     for i in range(n):
         a, b = l[i], l[(i + 1) % n]
         ra, rb = remap[a], remap[b]
-        quad = (ra, rb, foot_idx[b], foot_idx[a]) if flip_loop else (ra, foot_idx[a], foot_idx[b], rb)
-        F.append(tuple(int(x) for x in quad))
+        if flip_loop:
+            F_wall.append((ra, rb, attach_idx[b], attach_idx[a]))
+            F_wall.append((attach_idx[a], attach_idx[b], foot_idx[b], foot_idx[a]))
+            F_hem.append((attach_idx[a], attach_idx[b], hem_idx[b], hem_idx[a]))          # 唇上面
+            F_hem.append((hem_idx[a], hem_idx[b], attach_b_idx[b], attach_b_idx[a]))      # 唇下面（-0.5mm 層）
+            F_hem.append((attach_b_idx[a], attach_b_idx[b], attach_idx[b], attach_idx[a]))  # 內封條
+        else:
+            F_wall.append((ra, attach_idx[a], attach_idx[b], rb))
+            F_wall.append((attach_idx[a], foot_idx[a], foot_idx[b], attach_idx[b]))
+            F_hem.append((attach_idx[a], hem_idx[a], hem_idx[b], attach_idx[b]))
+            F_hem.append((hem_idx[a], attach_b_idx[a], attach_b_idx[b], hem_idx[b]))
+            F_hem.append((attach_b_idx[a], attach_idx[a], attach_idx[b], attach_b_idx[b]))
+# 唇上面朝外檢查（與皮膚法線同向）：每迴圈多數決一次翻
+F.extend(tuple(int(x) for x in q) for q in F_wall)
+F.extend(tuple(int(x) for x in q) for q in F_hem)
 # 底板（U 本身，反向＝朝皮膚）。**輪廓頂點共用牆腳頂點**（08-21 破洞 bug：底板整圈停在
 # 布面高度、牆腳沉在皮膚下＝2~9mm 開縫看得到布內側；焊到牆腳＝水密構造保證）
 under_idx = []
@@ -827,10 +914,11 @@ for p in me2.polygons: p.use_smooth = True
 # ---- 分區自訂法線（08-21 牆面肋紋定罪）：牆/頂板共用頂點＋切割邊碎三角形
 # ＝頂點法線把兩區混平均＝牆上 ~5mm 間距著色肋。頂板/牆/底板各自區內平滑、
 # 區界=銳邊（真布摺邊本來就銳）。面序契約：top_faces → 牆 → 底板。
-n_top_f = len(top_faces); n_wall_f = sum(len(l) for l in loops)
+n_top_f = len(top_faces); n_wall_f = 2 * sum(len(l) for l in loops); n_hem_f = 3 * sum(len(l) for l in loops)
 def face_region(fi):
     if fi < n_top_f: return 0
     if fi < n_top_f + n_wall_f: return 1
+    if fi < n_top_f + n_wall_f + n_hem_f: return 3   # 裾邊唇＝自己的平滑組（attach=銳邊）
     return 2
 me2.calc_loop_triangles()
 fnorm_all = np.empty(len(me2.polygons) * 3); me2.polygons.foreach_get("normal", fnorm_all)
@@ -947,7 +1035,7 @@ P(f"foot on skin: dist to skin p50 {np.percentile(fd,50):.2f} max {fd.max():.2f}
 
 # ---------------- 12) 衍生遮罩＝布實際覆蓋（單一來源：布＝禁畫）----------------
 # 褌區 cage 面（face_in + 1 圈）的 UV 像素：雙線性反推 → 多面體上的點 → 沿法線射線打到布（頂板/牆）＝覆蓋
-cloth_bvh = BVHTree.FromPolygons([tuple(v) for v in V], [tuple(int(i) for i in f) for f in F[:len(top_faces) + sum(len(l) for l in loops)]])
+cloth_bvh = BVHTree.FromPolygons([tuple(v) for v in V], [tuple(int(i) for i in f) for f in F[:len(top_faces) + 5 * sum(len(l) for l in loops)]])
 face_ring = face_in.copy()
 vert_in_face = np.zeros(len(cage_co), bool)
 for fi in np.where(face_in)[0]: vert_in_face[cage_polys[fi]] = True
