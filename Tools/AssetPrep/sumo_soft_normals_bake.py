@@ -115,7 +115,8 @@ def bake_soft_normals(name, weld_seam):
 
 
 bake_soft_normals("SumoRetopo", weld_seam=True)
-bake_soft_normals("Fundoshi", weld_seam=False)
+# Fundoshi 不烘（2026-08-21 起）：法線由 fundoshi_plate.py 分區制管理
+# （top/wall/under 各自平滑、區界銳邊）——這裡蓋掉會把牆面肋紋病帶回來。
 
 # 防呆：armature 綁定/頂點數不得變
 body = bpy.data.objects["SumoRetopo"]
