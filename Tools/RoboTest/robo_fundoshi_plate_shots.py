@@ -130,15 +130,10 @@ class Probe:
             self.shots.append((name, p, add(p, mul(d, dist))))
             log(f"plan {name}: surf={p} n={n}")
         shot("fp_00_overview", 0, 0, 130)
-        shot("fp_01_front_band", -6, 0, 16)
-        shot("fp_01b_front_band_wide", 0, 0, 45)
-        shot("fp_02_left_hip", 0, 22, 16)
-        shot("fp_03_right_hip", 0, -22, 16)
-        shot("fp_04_crotch", 22, 0, 16)
-        shot("fp_05_leghole_L", 16, 15, 16)
-        shot("fp_06_band_macro", -4, 12, 12)
-        shot("fp_07_band_graze", -6, 0, 18, unreal.Vector(0, -0.9, 0))
-        shot("fp_08_hip_graze", 0, 22, 18, unreal.Vector(0, -0.8, 0.3))
+        # 扇形掃描：機位精確落點不可知（lie transform 難反推）＝沿身體軸每 10cm、三條側線全拍
+        for off_a in (-50, -40, -30, -20, -10, 0, 10, 20, 30, 40, 50):
+            for off_l, tag in ((0, "c"), (24, "l"), (-24, "r")):
+                shot(f"fp_scan_{tag}_{off_a:+03d}", off_a, off_l, 22)
 
     def step(self):
         s = self.stage

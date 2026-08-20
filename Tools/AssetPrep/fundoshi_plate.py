@@ -557,6 +557,52 @@ contour_set = set(int(v) for l in loops for v in l)
 # 股溝（兩臀相貼的深 V）：布不可能以 5mm 厚度存在於 <10mm 的縫裡；實物＝被夾住。
 # 這裡容許頂板在 V 底與側壁皮膚相交（藏在兩臀之間、無人可見），不做局部抬升
 # （08-21 實測：抬升在倒懸的側壁下只會越抬越深＝尖刺）。
+# ---- 7b) 股溝隧道擠壓（08-21 破洞修）：布側邊陷在大腿皮膚下＝黑帶中間露膚「破洞」
+# （站立時夾在兩腿間看不見、睡姿張腿全露）。真布行為＝被大腿夾住貼著推——
+# 陷入的頂點沿「最近皮膚的法線」推到皮膚外 0.8mm（頂/底同 delta＝厚度不變），
+# delta 場 2 輪 1-ring 平滑＝無新皺。輪廓頂點不動（牆腳＝手繪線鐵約束）。
+PRESS_EPS = 0.0008
+delta = {int(v): np.zeros(3) for v in plate_v_idx}
+press_n = 0
+for _pass in range(6):
+    moved = 0
+    for v in plate_v_idx:
+        v = int(v)
+        if v in contour_set: continue
+        q = new_co[v] + delta[v] + vert_n[v] * T_CLOTH
+        loc, nor, idx_, dd = skin_bvh.find_nearest(Vector(q), 0.03)
+        if loc is None: continue
+        nor = np.array(nor); sd_ = float(np.dot(q - np.array(loc), nor))
+        if sd_ < PRESS_EPS - 1e-5:
+            delta[v] = delta[v] + (PRESS_EPS - sd_) * nor; moved += 1
+    press_n = max(press_n, moved)
+    if moved == 0: break
+# delta 場平滑（含零值＝自然衰減到未動區）
+for _sm in range(2):
+    d2 = dict(delta)
+    for v in plate_v_idx:
+        v = int(v)
+        if v in contour_set: continue
+        nb = [delta[u] for u in plate_adj[v] if u in delta]
+        if nb: d2[v] = 0.5 * delta[v] + 0.5 * np.mean(nb, axis=0)
+    delta = d2
+# 平滑會把矯正拉回皮下——平滑後再補壓到收斂（終態必須滿足約束）
+for _pass in range(6):
+    moved = 0
+    for v in plate_v_idx:
+        v = int(v)
+        if v in contour_set: continue
+        q = new_co[v] + delta[v] + vert_n[v] * T_CLOTH
+        loc, nor, idx_, dd = skin_bvh.find_nearest(Vector(q), 0.03)
+        if loc is None: continue
+        nor = np.array(nor); sd_ = float(np.dot(q - np.array(loc), nor))
+        if sd_ < PRESS_EPS - 1e-5:
+            delta[v] = delta[v] + (PRESS_EPS - sd_) * nor; moved += 1
+    if moved == 0: break
+dmag = np.array([np.linalg.norm(delta[int(v)]) for v in plate_v_idx]) * 1000
+P(f"crotch press-out: verts moved {int((dmag>0.05).sum())} |d| p95 {np.percentile(dmag,95):.2f} max {dmag.max():.2f} mm (final pass moved={moved})")
+for v in plate_v_idx:
+    new_co[int(v)] = new_co[int(v)] + delta[int(v)]
 top_co = new_co[plate_v_idx] + T_CLOTH * vert_n[plate_v_idx]
 top_faces = np.vectorize(remap.get)(plate_faces)
 top_n_idx = plate_v_idx
@@ -614,12 +660,18 @@ for li, l in enumerate(loops):
         ra, rb = remap[a], remap[b]
         quad = (ra, rb, foot_idx[b], foot_idx[a]) if flip_loop else (ra, foot_idx[a], foot_idx[b], rb)
         F.append(tuple(int(x) for x in quad))
-# 底板（U 本身，反向＝朝皮膚）
-under_base = len(V)
+# 底板（U 本身，反向＝朝皮膚）。**輪廓頂點共用牆腳頂點**（08-21 破洞 bug：底板整圈停在
+# 布面高度、牆腳沉在皮膚下＝2~9mm 開縫看得到布內側；焊到牆腳＝水密構造保證）
+under_idx = []
 for v in plate_v_idx:
-    V.append(tuple(new_co[v])); VN_src.append(vert_n[v]); DV.append(vert_dv[int(v)])
+    v = int(v)
+    if v in foot_idx:
+        under_idx.append(foot_idx[v])
+    else:
+        under_idx.append(len(V))
+        V.append(tuple(new_co[v])); VN_src.append(vert_n[v]); DV.append(vert_dv[v])
 for f in top_faces:
-    F.append((int(under_base + f[2]), int(under_base + f[1]), int(under_base + f[0])))
+    F.append((int(under_idx[f[2]]), int(under_idx[f[1]]), int(under_idx[f[0]])))
 V = np.array(V)
 def tri_area(f):
     if len(f) == 3:
@@ -687,6 +739,13 @@ bpy.data.objects.remove(work, do_unlink=True)
 bpy.data.objects.remove(lin, do_unlink=True)
 
 # ---------------- 11) 驗收數字 ----------------
+# 水密驗證：全網格零開放邊（開縫 bug 的構造性排除）
+ecnt_all = defaultdict(int)
+for p_ in me2.polygons:
+    for ek in p_.edge_keys: ecnt_all[tuple(sorted(ek))] += 1
+open_edges = sum(1 for c in ecnt_all.values() if c == 1)
+P(f"open edges (must be 0) = {open_edges}")
+assert open_edges == 0, f"mesh not watertight: {open_edges} open edges"
 me2.calc_loop_triangles()
 tt = np.empty(len(me2.loop_triangles) * 3, np.int64); me2.loop_triangles.foreach_get("vertices", tt); tt = tt.reshape(-1, 3)
 cc = arr(me2) * 1000
