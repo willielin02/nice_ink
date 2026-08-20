@@ -1,3 +1,6 @@
+# 皮膚邊帶細分 v2（2026-08-21）——v1 的 CC 極限面投影在凸面天生縮 1~2mm＝沿布邊
+# 挖出淺溝（大腿內側凹槽實錘 p50 -0.4/min -2.0mm）。v2＝投影退役、改 **Taubin 零收縮**
+# （不縮形＝不挖溝；user 指示低通再調強＝120 對清殘噪）。範圍不變＝只動布邊窄帶。
 # 皮膚邊帶細分（2026-08-21）——褌邊全戰役的基底修：
 # 「布接觸皮膚處的可見線（牆交線/肉縫皺摺線）繼承皮膚 3cm 面片噪聲」＝布側五刀
 # 都治不到的病根（user 點破：凹凸是皮膚本身、布又不可能不貼皮）。
@@ -32,6 +35,17 @@ if not os.path.exists(BK):
 
 body = bpy.data.objects["SumoRetopo"]
 fund = bpy.data.objects["Fundoshi"]
+# v2：先把身體退回 v23 乾淨基底（退掉 v1 的帶狀細分＋溝）
+if len(body.data.vertices) != 11931:
+    with bpy.data.libraries.load(BK, link=False) as (_df, _dt):
+        _dt.objects = ["SumoRetopo"]
+    _donor = _dt.objects[0]
+    _old = body.data
+    body.data = _donor.data.copy()
+    bpy.data.objects.remove(_donor, do_unlink=True)
+    bpy.data.meshes.remove(_old)
+    print(f"reset to v23 base: verts={len(body.data.vertices)}", flush=True)
+    assert len(body.data.vertices) == 11931
 me = body.data
 n_tris0 = sum(len(p.vertices) - 2 for p in me.polygons)
 P(f"body faces={len(me.polygons)} tris={n_tris0}")
@@ -76,19 +90,42 @@ bmesh.ops.subdivide_edges(bm, edges=list(band_edges), cuts=CUTS, use_grid_fill=T
 bm.verts.ensure_lookup_table()
 P(f"after subdivide: verts={len(bm.verts)} faces={len(bm.faces)}")
 
-# ---- 投影到 CC 極限面（帶內 w=1、帶緣 10mm 過渡）----
-moved = 0; mv_max = 0.0
-for v in bm.verts:
+# ---- Taubin 零收縮平滑（v2；投影退役——CC 極限面在凸面縮形＝挖溝實錘）----
+# 帶內 w=1、帶緣 10mm smoothstep 過渡；120 對＝user 指示的更強低通；
+# 零收縮＝面片稜線削掉、公分級形狀與體積保留＝大腿內側不再有溝。
+TAUBIN_PAIRS = 120; LAM = 0.5; MU = -0.53
+import numpy as _np
+bm.verts.ensure_lookup_table()
+nv = len(bm.verts)
+co = _np.array([v.co[:] for v in bm.verts])
+wgt = _np.zeros(nv)
+for i, v in enumerate(bm.verts):
     d = dist_to_guide(v.co)
     if d >= PROJ_ZERO: continue
     t = 1.0 if d <= PROJ_FULL else 1.0 - (d - PROJ_FULL) / (PROJ_ZERO - PROJ_FULL)
-    w = t * t * (3 - 2 * t)
-    loc, nor, idx, dd = cc_bvh.find_nearest(v.co)
-    if loc is None: continue
-    delta = (Vector(loc) - v.co) * w
-    if delta.length > 1e-6:
-        v.co += delta; moved += 1; mv_max = max(mv_max, delta.length)
-P(f"projected verts={moved} max move {mv_max*1000:.2f}mm")
+    wgt[i] = t * t * (3 - 2 * t)
+from collections import defaultdict as _dd
+adj2 = _dd(set)
+for e in bm.edges:
+    a, b = e.verts[0].index, e.verts[1].index
+    adj2[a].add(b); adj2[b].add(a)
+mov = _np.where(wgt > 0)[0]
+nbrs = {int(i): _np.array(sorted(adj2[int(i)]), dtype=_np.int64) for i in mov}
+x = co.copy()
+def _lap(xx):
+    out = _np.zeros_like(xx)
+    for i in mov:
+        nb = nbrs[int(i)]
+        if len(nb): out[i] = xx[nb].mean(0) - xx[i]
+    return out
+for _it in range(TAUBIN_PAIRS):
+    x = x + LAM * wgt[:, None] * _lap(x)
+    x = x + MU * wgt[:, None] * _lap(x)
+mv_ = _np.linalg.norm(x - co, axis=1) * 1000
+P(f"taubin x{TAUBIN_PAIRS}: movable={len(mov)} move p50 {_np.percentile(mv_[mov],50):.2f} p95 {_np.percentile(mv_[mov],95):.2f} max {mv_.max():.2f} mm")
+assert (mv_[wgt == 0] < 1e-9).all(), "pinned verts moved"
+for i in mov:
+    bm.verts[int(i)].co = x[int(i)]
 
 bm.to_mesh(me); bm.free()
 me.update()
