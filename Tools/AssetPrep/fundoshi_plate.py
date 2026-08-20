@@ -514,6 +514,42 @@ for li, l in enumerate(loops):
     dev = np.linalg.norm(lin_co[l] - raw_contour[li], axis=1) * 1000
     P(f"loop {li}: arc-smooth σ{SIGMA_ARC*1000:.0f} dev p50 {np.percentile(dev,50):.2f} p90 {np.percentile(dev,90):.2f} max {dev.max():.2f} mm; protected frac {(pw>0.5).mean()*100:.1f}%")
 
+# ---- 6a2) 邊界位移＝形變場傳入內部（08-21 血價：只搬邊界頂點＝12.8mm 位移壓過
+# 2~4mm 的第一圈三角形＝邊緣帶手風琴摺片（渲染=頂緣平台/階梯）。位移用 σ12mm
+# 高斯內插、離邊 25mm smoothstep 衰減＝三角形跟著整帶平滑變形；內部頂點再重新抬回 U。----
+contour_set = set(int(v) for l in loops for v in l)
+disp_pts = []; disp_vec = []
+for li, l in enumerate(loops):
+    for j, v in enumerate(l):
+        disp_pts.append(raw_contour[li][j]); disp_vec.append(lin_co[v] - raw_contour[li][j])
+disp_pts = np.array(disp_pts); disp_vec = np.array(disp_vec)
+kd_disp = KDTree(len(disp_pts))
+for i_, p_ in enumerate(disp_pts): kd_disp.insert(Vector(p_), i_)
+kd_disp.balance()
+WARP_R = 0.025
+warp_n = 0; relift_miss = 0
+for v in used:
+    v = int(v)
+    if v in contour_set: continue
+    hits = kd_disp.find_n(Vector(lin_co[v]), 8)
+    d0 = hits[0][2]
+    if d0 > WARP_R: continue
+    wsum = 0.0; acc = np.zeros(3)
+    for loc_, i_, dd in hits:
+        w_ = np.exp(-0.5 * (dd / 0.012) ** 2)
+        acc += w_ * disp_vec[i_]; wsum += w_
+    t_ = 1.0 - d0 / WARP_R
+    fall = t_ * t_ * (3 - 2 * t_)
+    lin_co[v] = lin_co[v] + (acc / max(wsum, 1e-12)) * fall
+    h_, ok_ = lift_h(lin_co[v], vert_n[v])
+    if ok_ and -0.006 < h_ < GAP_MAX:
+        hmap[v] = h_
+    else:
+        relift_miss += 1          # 沿用舊 h（U 平滑、誤差 ≤ 弦差）
+    new_co[v] = lin_co[v] + hmap[v] * vert_n[v]
+    warp_n += 1
+P(f"edge-band warp: {warp_n} interior verts followed the boundary (relift miss {relift_miss})")
+
 for li, l in enumerate(loops):
     c = lin_co[l]; n = len(l)
     seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
@@ -525,14 +561,18 @@ for li, l in enumerate(loops):
         # 與遊戲三角化的差距由 SINK 吃掉（牆垂直＝可見線不動）
         h, ok = lift_h(lin_co[l[i]], vert_n[l[i]])
         hs[i] = h if (ok and -0.006 < h < GAP_MAX) else np.nan
-    # 補 nan（鄰近內插）→ 中值 5 → 高斯 σ6mm
+    # 補 nan（鄰近內插）→ 中值 5 → 高斯 **σ25mm**（08-21 user 抓「只平滑單一方向？」：
+    # σ40 平的是輪廓位置（面內走向），**離皮高度剖面**先前只 σ6＝邊緣沿線上下起伏殘留；
+    # 高度也上公分級。V 保護區照 protect_w 豁免（凹處高度變化是設計的一部分）。
     idxs = np.arange(n); good = ~np.isnan(hs)
     if (~good).any(): hs[~good] = np.interp(idxs[~good], idxs[good], hs[good], period=n)
     hs_m = np.array([np.median(hs[[(i + k) % n for k in (-2, -1, 0, 1, 2)]]) for i in range(n)])
     hs_s = np.empty(n)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); hs_s[i] = (w * hs_m).sum()
+        w = np.exp(-0.5 * (d / 0.025) ** 2); w /= w.sum(); hs_s[i] = (w * hs_m).sum()
+    pw_h = protect_w(lin_co[l])
+    hs_s = pw_h * hs_m + (1 - pw_h) * hs_s
     hs_s = np.maximum(hs_s, -0.004)   # 平滑線可高於 U 一點（頂緣=U 上點＝仍在皮外）
     topc = np.array([lin_co[l[i]] + hs_s[i] * vert_n[l[i]] for i in range(n)])
     # 頂緣本人沿迴圈 σ6mm 平滑：牆腳躺在多面體的稜線上（每 3cm 一個 7° 摺角）；
@@ -543,6 +583,20 @@ for li, l in enumerate(loops):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); topS[i] = (w[:, None] * topc).sum(0)
     tdev = np.linalg.norm(topS - topc, axis=1) * 1000
+    # 皮膚淨空回夾（只准抬不准沉）：高度剖面平滑會在皮膚凸點處把邊緣壓到皮下——
+    # 凸點處局部讓步（抬到淨空 1.5mm），其餘維持平滑剖面
+    clamp_n = 0
+    for i in range(n):
+        nvec = vert_n[l[i]]
+        hit = skin_bvh.ray_cast(Vector(topS[i] + nvec * 0.0002), Vector(-nvec), 0.02)
+        dcl = hit[3] + 0.0002 if hit[0] is not None else None
+        if dcl is None:
+            hit2 = skin_bvh.ray_cast(Vector(topS[i] - nvec * 0.0002), Vector(nvec), 0.01)
+            if hit2[0] is not None and hit2[1].dot(Vector(nvec)) > 0:
+                topS[i] = topS[i] + np.array(nvec) * (hit2[3] + 0.0015); clamp_n += 1
+        elif dcl < 0.0015:
+            topS[i] = topS[i] + np.array(nvec) * (0.0015 - dcl); clamp_n += 1
+    if clamp_n: P(f"loop {li}: skin-clearance clamp raised {clamp_n} verts")
     for i in range(n):
         new_co[l[i]] = topS[i]
     # 牆腳＝從頂緣沿 -n 射線落到皮膚（方向一致射線＝無 nearest 側跳；腳藏皮下、面片量化不可見）
