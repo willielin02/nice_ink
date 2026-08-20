@@ -49,11 +49,22 @@ if bpy.context.object and bpy.context.object.mode != 'OBJECT':
 if not os.path.exists(BK):
     shutil.copy2(MASTER, BK); P("backup ->", BK)
 
-body = bpy.data.objects["SumoRetopo"]
+# 2026-08-21 皮膚帶細分後：布的 cage＝**原始（細分前）身體**（否則布密度跟著爆 16×＝1.29M tris 實錘）；
+# 細分後的身體只當「skin_bvh 目標」（腳/埋深/淨空踩在光滑皮膚上）。
+body_render = bpy.data.objects["SumoRetopo"]          # 細分後（渲染真身）
+CAGE_BK = os.path.join(ROOT, "SourceAssets", "masters", "sumo_character_master_v23_prebandrefine.blend")
+with bpy.data.libraries.load(CAGE_BK, link=False) as (_df, _dt):
+    _dt.objects = ["SumoRetopo"]
+cage_obj = _dt.objects[0]
+cage_obj.name = "CageOrig"
+bpy.context.collection.objects.link(cage_obj)
+for m in list(cage_obj.modifiers): cage_obj.modifiers.remove(m)
+cage_obj.parent = None
+body = cage_obj                                        # cage＝原始網格（UV 同一版面）
 fund = bpy.data.objects["Fundoshi"]
 arm = bpy.data.objects["Skeleton_Plus-size"]
 bme = body.data
-assert max(abs(a-b) for ra,rb in zip(body.matrix_world,fund.matrix_world) for a,b in zip(ra,rb)) < 1e-5, "body/fundoshi transform mismatch"
+assert max(abs(a-b) for ra,rb in zip(body_render.matrix_world,fund.matrix_world) for a,b in zip(ra,rb)) < 1e-5, "body/fundoshi transform mismatch"
 
 def arr(me):
     co = np.empty(len(me.vertices) * 3); me.vertices.foreach_get("co", co); return co.reshape(-1, 3)
@@ -94,7 +105,7 @@ cage_co = arr(bme)
 cage_polys = [list(p.vertices) for p in bme.polygons]
 cage_vn = face_normals_and_vn(cage_co, cage_polys)
 dg = bpy.context.evaluated_depsgraph_get()
-skin_bvh = BVHTree.FromObject(body, dg)   # 多面體＝遊戲裡真正渲染的皮膚
+skin_bvh = BVHTree.FromObject(body_render, dg)   # 細分後＝遊戲裡真正渲染的皮膚（帶內光滑）
 P(f"cage verts={len(cage_co)} faces={len(cage_polys)}")
 
 # ---------------- 1) 遮罩（UV0 手繪正源）----------------
@@ -954,6 +965,7 @@ assert any(m.type == 'ARMATURE' for m in fund.modifiers)
 # 清 work
 bpy.data.objects.remove(work, do_unlink=True)
 bpy.data.objects.remove(lin, do_unlink=True)
+bpy.data.objects.remove(cage_obj, do_unlink=True)   # appended cage 不留在 master
 
 # ---------------- 11) 驗收數字 ----------------
 # 水密驗證：全網格零開放邊（開縫 bug 的構造性排除）
