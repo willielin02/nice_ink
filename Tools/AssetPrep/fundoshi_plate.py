@@ -32,7 +32,7 @@ REPORT = os.path.join(ROOT, "Saved", "fundoshi_plate_report.txt")
 
 T_CLOTH = 0.005      # 布厚 5mm（08-18 定值）
 EPS = 0.0005         # 底面離皮最小間隙
-SINK = 0.003         # 牆腳沉入皮膚（牆垂直於皮膚＝沉深不移動可見線；吃掉 quad 非平面/三角化歧義 ≤ 數 mm）
+SINK = 0.0008        # 08-22 全域淺沉：深埋(3mm)是 3cm 粗皮時代設計；皮膚現 0.1mm 級光滑+壓溝=0.8mm 即密封。裙高=齒高⇒淺=齒滅
 SUBD = 2             # 籠已是 1.5cm（全身 hires）：2 級＝~4mm 布網格（3 級會爆 16×）
 CONTOUR_SIGMA = 0.015    # 手繪線的 cm 級抖動（3~5px 幅度/3~6cm 週期）要 σ≈15mm 才平；布與禁畫層共用同一條線
 GAP_MAX = 0.012     # 抬升量上限：U 離線性孿生最多 o_max(8.6mm)+矢高；超過＝射線打到對面（大腿/臀）的 U
@@ -535,6 +535,7 @@ def protect_w(pts):
     d = np.sqrt(dx ** 2 + dy ** 2)
     t = np.clip(d / 0.04, 0.0, 1.0)
     return 1.0 - t * t * (3 - 2 * t)
+tun_all = {}
 for li, l in enumerate(loops):
     c = lin_co[l]; n = len(l)
     seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
@@ -733,6 +734,28 @@ for li, l in enumerate(loops):
         depth_f[i] = (w2 * dcone).sum()
     n_fuse = int((depth_f < depth_ray + 0.0003).sum())
     depth_f = np.maximum(depth_f, depth_ray + 0.0003)
+    # 08-22 隧道淺腳（裙擺齒高手術）：裙高=底板−腳=2.5+depth_f+SINK≈8.8mm＝縫隙內側
+    # 鋸齒的振幅來源。隧道區（對邊 <10mm）外側無人可見=深埋無意義 ⇒ 腳深壓到 ≤1.5mm、
+    # 沉降 3mm→0.5mm ⇒ 裙 8.8→4.2mm。tun 場 σ10 平滑=過渡無階。
+    tun = np.zeros(n)
+    for i in range(n):
+        for loc_, gi, dd in kd_ct.find_n(Vector(topS[i]), 12):
+            gl, gs = ct_meta[gi]
+            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.010:
+                tun[i] = np.clip((0.010 - dd) / 0.004, 0.0, 1.0)
+                break
+    tun_s = np.empty(n)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.010) ** 2); w2 /= w2.sum()
+        tun_s[i] = (w2 * tun).sum()
+    depth_f = depth_f * (1 - tun_s) + np.minimum(depth_f, 0.0015) * tun_s
+    # 08-22 全域淺腳：裙高=2.5+depth+SINK=齒的振幅 ⇒ 帽 1.8mm；凹穴 ray+0.3 保底=不浮空
+    depth_f = np.minimum(depth_f, np.maximum(0.0018, depth_ray + 0.0003))
+    depth_f = np.maximum(depth_f, depth_ray * (1 - tun_s) + 0.0003)   # 非隧道不破埋深保證
+    for i in range(n):
+        tun_all[int(l[i])] = float(tun_s[i])
+    P(f"loop {li}: tunnel shallow-foot verts(tun>0.5) {int((tun_s > 0.5).sum())}/{n}")
     P(f"loop {li}: foot-line cone-smooth depth p50 {np.percentile(depth_f,50)*1000:.1f} max {depth_f.max()*1000:.1f} mm; fuse hits {n_fuse}")
     for i in range(n):
         v = l[i]
@@ -975,13 +998,15 @@ P(f"top polish: {len(pol)} verts |d| p50 {np.percentile(pmag,50):.2f} p90 {np.pe
 top_co = new_co[plate_v_idx] + T_CLOTH * vert_n[plate_v_idx]
 top_faces = np.vectorize(remap.get)(plate_faces)
 top_n_idx = plate_v_idx
+tun_all_used = tun_all  # （占位確保已定義）
 foot_co_all = {}
 gap_stats = []
 for li, l in enumerate(loops):
     for vi in l:
         p = new_co[vi]; n = vert_n[vi]; f = lin_co[vi]
         gap_stats.append(np.dot(p - f, n))
-        foot_co_all[vi] = f - n * SINK
+        _t = tun_all.get(int(vi), 0.0)
+        foot_co_all[vi] = f - n * (SINK * (1 - _t) + 0.0005 * _t)
 gap_stats = np.array(gap_stats) * 1000
 P(f"underside gap at contour: p50 {np.percentile(gap_stats,50):.2f} p90 {np.percentile(gap_stats,90):.2f} max {gap_stats.max():.2f} min {gap_stats.min():.2f} mm  (wall height = gap + {T_CLOTH*1000:.0f}mm + sink)")
 
