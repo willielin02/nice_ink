@@ -624,6 +624,21 @@ for li, l in enumerate(loops):
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w = np.exp(-0.5 * (d / 0.006) ** 2); w /= w.sum(); topS[i] = (w[:, None] * topc).sum(0)
+    # 08-22 面污染根治：頂緣貼回 U 本人（最近點投影；光滑線投影到光滑面=仍光滑）。
+    # 內部布面=U（lift_to_U），頂緣也貼在 U ⇒ 邊界高度零差值 ⇒ 6b 調和帶沒有東西可塗
+    # ⇒ 可見面從邊到內=純 U。（此前：頂緣高度另走 σ8 剖面+淨空回夾=與 U 差 0.4~3.5mm，
+    # 6b 把差值塗進面內 4 圈＝quadric 普查抓到的 0.4~3.2mm 全正號鼓包帶。）
+    # 投影 >8mm 不貼（V 摺/隧道處 U 摺返的跳面保險）；淨空回夾保留當保險絲
+    # （U≥皮+2.5mm ⇒ 正常應觸 0 顆＝成功斷言）。
+    proj_d = np.zeros(n)
+    for i in range(n):
+        loc = U_bvh.find_nearest(Vector(topS[i]), 0.05)[0]
+        if loc is not None:
+            dd_ = np.linalg.norm(np.array(loc) - topS[i])
+            if dd_ < 0.008:
+                proj_d[i] = dd_
+                topS[i] = np.array(loc)
+    P(f"loop {li}: top-ring snap-to-U p50 {np.percentile(proj_d,50)*1000:.2f} p90 {np.percentile(proj_d,90)*1000:.2f} max {proj_d.max()*1000:.2f} mm")
     def kinkstat(pts):
         K = 5; n_ = len(pts); out_ = np.empty(n_)
         for i_ in range(n_):
@@ -857,6 +872,49 @@ dmag = np.array([np.linalg.norm(delta[int(v)]) for v in plate_v_idx]) * 1000
 P(f"crotch press-out: verts moved {int((dmag>0.05).sum())} |d| p95 {np.percentile(dmag,95):.2f} max {dmag.max():.2f} mm (final pass moved={moved})")
 for v in plate_v_idx:
     new_co[int(v)] = new_co[int(v)] + delta[int(v)]
+# ---- 7c) 頂板終拋光（08-22 user「面要完全平滑」裁決）：構造無關零收縮 Taubin。
+# quadric 普查（銳邊排除版）抓到後髖 0.6~1.5mm 正負混合波紋＝終刀直接抹平，
+# 不追哪層生的。只動頂板內部（輪廓+2 圈不碰）、同面判準 dot>0.9（>25° 摺=設計皺
+# 不跨＝V 谷/襠帶交接保留）、cap 1.2mm；拋完補壓回 U 淨空（穿刺約束不破）。
+POLISH_CAP = 0.0012
+pol = {int(v) for v in plate_v_idx} - contour_set - {v for v, d_ in ring.items() if d_ <= 2}
+padj = {v: [u for u in plate_adj[v] if np.dot(vert_n[v], vert_n[u]) > 0.9] for v in pol}
+p0 = {v: new_co[v].copy() for v in pol}
+xp = {v: new_co[v].copy() for v in pol}
+for _it in range(40):
+    for lam_ in (0.5, -0.53):
+        d2 = {}
+        for v in pol:
+            nb = padj[v]
+            if len(nb) < 3:
+                continue
+            m_ = np.mean([xp[u] if u in xp else new_co[u] for u in nb], axis=0)
+            d2[v] = lam_ * (m_ - xp[v])
+        for v, dv in d2.items():
+            xp[v] = xp[v] + dv
+for v in pol:
+    dv = xp[v] - p0[v]
+    m_ = np.linalg.norm(dv)
+    if m_ > POLISH_CAP:
+        dv = dv * (POLISH_CAP / m_)
+    new_co[v] = p0[v] + dv
+moved = 0
+for _pass in range(6):
+    moved = 0
+    for v in pol:
+        q = new_co[v] + vert_n[v] * T_CLOTH
+        loc, nor, idx_, dd = U_bvh.find_nearest(Vector(q), 0.03)
+        if loc is None:
+            continue
+        nor = np.array(nor)
+        sd_ = float(np.dot(q - np.array(loc), nor))
+        if sd_ < PRESS_EPS - 1e-5:
+            new_co[v] = new_co[v] + (PRESS_EPS - sd_) * nor
+            moved += 1
+    if moved == 0:
+        break
+pmag = np.array([np.linalg.norm(new_co[v] - p0[v]) for v in pol]) * 1000
+P(f"top polish: {len(pol)} verts |d| p50 {np.percentile(pmag,50):.2f} p90 {np.percentile(pmag,90):.2f} max {pmag.max():.2f} mm (repress moved={moved})")
 top_co = new_co[plate_v_idx] + T_CLOTH * vert_n[plate_v_idx]
 top_faces = np.vectorize(remap.get)(plate_faces)
 top_n_idx = plate_v_idx
