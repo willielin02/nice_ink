@@ -21,8 +21,8 @@ $usrIni = "c:\games\Unreal Engine\nice_ink\Saved\Config\WindowsEditor\EditorPerP
 $u = [System.IO.File]::ReadAllText($usrIni, $utf8)
 $u = $u -replace "PlayNetMode=PIE_\w+", "PlayNetMode=PIE_ListenServer"
 $u = $u -replace "RunUnderOneProcess=\w+", "RunUnderOneProcess=True"
-$u = $u -replace "PlayNumberOfClients=\d+", "PlayNumberOfClients=3"
+$u = $u -replace "PlayNumberOfClients=\d+", "PlayNumberOfClients=2"
 [System.IO.File]::WriteAllText($usrIni, $u, $utf8)
 
-Write-Host "ROBO MODE: editor opens L_Dojo, Play = 3-client listen PIE in one process."
+Write-Host "ROBO MODE: editor opens L_Dojo, Play = 2-client listen PIE in one process."
 Write-Host "Remember the StartupScripts ini line workflow from README.md."

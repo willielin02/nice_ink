@@ -3,13 +3,14 @@
 # → 重心插值掃描 UV → body_scanuv.npy + body_cover.npy 給 venv 端 cv2.remap
 # 不存 master——只出 npy。
 import bpy
+import os
 import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 MASTER = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_character_master.blend"
 BASE = r"C:\games\Unreal Engine\nice_ink\SourceAssets\sumo_retopo_base.blend"
-S = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\7547d374-31a2-4b50-990d-8ed4a3a02350\scratchpad"
+S = os.environ.get("CHROMA_S", "")
 SIZE = 512
 
 bpy.ops.wm.open_mainfile(filepath=MASTER)

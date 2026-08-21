@@ -2,10 +2,11 @@
 # 原理：蠟感病根=albedo 無血色分布；掃描的顏色變化是真的，但亮度裡住著烘死的陰影
 #（違反 v52 皮膚零陰影鐵律）→ 只留 rgb/L 的色度、亮度整張丟掉，均值歸一成 delta 場。
 # 輸出=body_chroma.png（16-bit，值=factor/2，材質端 ×2 解碼）
+import os
 import numpy as np
 import cv2
 
-S = r"C:\Users\willi\AppData\Local\Temp\claude\c--games-Unreal-Engine-nice-ink\7547d374-31a2-4b50-990d-8ed4a3a02350\scratchpad"
+S = os.environ.get("CHROMA_S", "")
 OUT_SRC = r"C:\games\Unreal Engine\nice_ink\SourceAssets\body_chroma.png"
 SIGMA = 6.0        # 512 空間 ≈ 27mm 平滑——殺高頻，留血色斑駁
 SIGMA_TAN = 40.0   # ≈ 18cm——掃描模特曬痕（整肢色差）住在這個頻段以上，除掉

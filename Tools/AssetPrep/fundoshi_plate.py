@@ -731,14 +731,16 @@ for li, l in enumerate(loops):
     # deff = 與「非本段」輪廓點的最小距離（他環、或同環弧距 >40mm 的折返段）
     # 08-21 毛邊修：舊判準把半條腰帶誤錐（0.8~4mm 逐點抖＝細毛邊實錘）。
     # 收緊＝只有「真隧道」才錐：對邊 <12mm 且落在外捲方向正前方（dot>0.5d）；其餘滿徑。
+    # 08-22 再收緊（貼臉倍率下帶頂邊仍有 mm 級波浪＝髖側被斜上方襠帶邊誤觸發）：
+    # 只認「正面對撞」＝對邊 <9mm、夾角 ≤45°（dot>0.7d）、且同高（法向差 <8mm=捲的掃掠域）。
     for i in range(n):
         hits = kd_ct.find_n(Vector(topS[i]), 10)
         deff = None
         for loc_, gi, dd in hits:
             gl, gs = ct_meta[gi]
-            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.012:
+            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.009:
                 rel = np.array(loc_) - topS[i]
-                if np.dot(o_sm[i], rel) > 0.5 * dd:
+                if np.dot(o_sm[i], rel) > 0.7 * dd and abs(np.dot(rel, vert_n[l[i]])) < 0.008:
                     deff = dd; break
         if deff is not None:
             R_raw[i] = min(R_raw[i], max(0.0008, 0.35 * deff))
