@@ -186,10 +186,12 @@ movable = np.zeros(len(cage_co), bool)
 for fi in np.where(face_in)[0]:
     movable[cage_polys[fi]] = True
 core = movable.copy()
-for _ in range(RINGS):
+ring_no = np.where(core, 0, 99)
+for _r in range(RINGS):
     nxt = movable.copy()
     for v in np.where(movable)[0]:
         nxt[list(cage_adj[v])] = True
+    ring_no[np.where(nxt & ~movable)[0]] = _r + 1
     movable = nxt
 P(f"cage faces in region {face_in.sum()}  movable verts {movable.sum()} (core {core.sum()})")
 
@@ -218,7 +220,14 @@ def evaluate(o):
     dv = [[(g.group, g.weight) for g in v.groups] for v in me.vertices]
     return me, ev, co, polys, luv, lvi, dv
 
-o = np.zeros(len(cage_co))
+# 統一基礎淨空（08-21 側面鼓包修：墊高場逐點峰 max 2.4mm＝布面孤立痘。
+# 統一墊 2.5mm ⇒ 逐點修正歸零＝墊高場變常數＝痘構造性消失；帶緣按 ring 羽化）
+BASE_CLEAR = 0.0025
+w_base = np.zeros(len(cage_co))
+w_base[ring_no == 0] = 1.0
+w_base[ring_no == 1] = 0.62
+w_base[ring_no == 2] = 0.28
+o = BASE_CLEAR * w_base
 kd_cage = KDTree(int(movable.sum()))
 mov_idx = np.where(movable)[0]
 for j, i in enumerate(mov_idx):
@@ -285,7 +294,9 @@ for it in range(20):
         if deficit[k] > 0:
             raise_v[vi] = max(raise_v[vi], deficit[k])
     if it == 0:
-        P(f"U0 (CC limit, o=0): violators {(deficit>0).sum()} deficit p50 {np.percentile(deficit[deficit>0],50)*1000:.2f} max {deficit.max()*1000:.2f} mm")
+        nv0 = int((deficit > 0).sum())
+        p50v = np.percentile(deficit[deficit > 0], 50) * 1000 if nv0 else 0.0
+        P(f"U0 (base clear): violators {nv0} deficit p50 {p50v:.2f} max {deficit.max()*1000:.2f} mm")
     if not raise_v:
         P(f"iter {it}: converged"); ev.to_mesh_clear(); break
     for vi, d in raise_v.items():
@@ -718,22 +729,23 @@ for li, l in enumerate(loops):
     R_raw = np.minimum(ROLL_R, np.maximum(0.0008, 0.45 / np.maximum(kappa, 1e-6)))
     # 對邊近接錐縮（08-21 真兇二：臀縫裡兩條布邊相距數 mm、塞不下兩個 4mm 捲邊＝互越摺片）
     # deff = 與「非本段」輪廓點的最小距離（他環、或同環弧距 >40mm 的折返段）
-    # 只錐「面對面」的邊：同帶兩緣背對背外捲不互撞；對邊要落在我的外捲方向前方才算
+    # 08-21 毛邊修：舊判準把半條腰帶誤錐（0.8~4mm 逐點抖＝細毛邊實錘）。
+    # 收緊＝只有「真隧道」才錐：對邊 <12mm 且落在外捲方向正前方（dot>0.5d）；其餘滿徑。
     for i in range(n):
         hits = kd_ct.find_n(Vector(topS[i]), 10)
         deff = None
         for loc_, gi, dd in hits:
             gl, gs = ct_meta[gi]
-            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and dd > 1e-6:
+            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.012:
                 rel = np.array(loc_) - topS[i]
-                if np.dot(o_sm[i], rel) > 0.3 * dd:   # 對邊在外捲方向前方＝會撞
+                if np.dot(o_sm[i], rel) > 0.5 * dd:
                     deff = dd; break
         if deff is not None:
             R_raw[i] = min(R_raw[i], max(0.0008, 0.35 * deff))
     R_sm = np.empty(n)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w2 = np.exp(-0.5 * (d / 0.010) ** 2); w2 /= w2.sum()
+        w2 = np.exp(-0.5 * (d / 0.015) ** 2); w2 /= w2.sum()   # σ15＝半徑場不許逐點抖（毛邊）
         R_sm[i] = (w2 * R_raw).sum()
     R_sm = np.minimum(R_sm, R_raw + 0.0015)   # 平滑不可把急彎處的縮徑放大回去
     P(f"loop {li}: roll radius p5 {np.percentile(R_sm,5)*1000:.2f} p50 {np.percentile(R_sm,50)*1000:.2f} mm; tapered(<3mm) {int((R_sm<0.003).sum())}/{n}")
