@@ -89,6 +89,10 @@ bpy.ops.export_scene.fbx(
     apply_scale_options='FBX_SCALE_NONE',
     path_mode='STRIP',
     use_mesh_modifiers=False,
+    # 08-22 三角化釘死：四邊形原樣進 FBX=引擎自切對角線（扭曲 quad 另一條對角=毫米摺痕）
+    # ＝「Blender 儀器全綠、引擎 viewport 依舊」系統性斷裂的candidates之首。use_triangles=
+    # 匯出器用 calc_loop_triangles（=所有離線探針同一套三角形）⇒ 引擎零自由度。
+    use_triangles=True,
     add_leaf_bones=False,
     colors_type='SRGB',
     armature_nodetype='NULL',
