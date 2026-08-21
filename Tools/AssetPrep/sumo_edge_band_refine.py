@@ -67,6 +67,71 @@ kd = KDTree(len(guide))
 for i, p in enumerate(guide): kd.insert(Vector(p), i)
 kd.balance()
 
+# ---- v3 帶阻濾波（2026-08-21 user 定罪「布邊波浪=貼邊皮膚波浪」實錘：頂緣 2~8cm 帶振幅
+# p50 4.18mm ≒ 貼邊皮膚 4.10mm）：對「布蓋住＋邊緣 2.2cm」的粗籠頂點削 2~8cm 波長帶
+# （σ10mm 場 − σ40mm 場、原樣扣除）；>8cm 設計形與 <2cm（後續 Taubin 殺）不動。
+# 同一顆平滑籠另存 cage_smooth（布的 U 從它長）＝布皮同源同平。----
+CAGE_SMOOTH = os.path.join(ROOT, "SourceAssets", "masters", "cage_smooth_v3.blend")
+fkd = KDTree(len(fund.data.vertices))
+for _v in fund.data.vertices:
+    fkd.insert(_v.co, _v.index)
+fkd.balance()
+cage_co0 = np.array([v.co[:] for v in me.vertices])
+cloth_d = np.array([fkd.find(Vector(c))[2] for c in cage_co0])
+region = cloth_d < 0.028
+w_bs = np.clip((0.028 - cloth_d) / 0.008, 0.0, 1.0)
+w_bs = w_bs * w_bs * (3 - 2 * w_bs)
+# v3.1：σ10−σ40 帶通在曲面上帶曲率偏置（~2-4mm 假信號＝把表面整體內推）——退役。
+# 正解＝粗籠直接強 Taubin（零收縮＝無偏；2~8cm 波在 3cm 籠上近 Nyquist＝天生強衰減、
+# >12cm 設計形保留）。同面判準保留（臀縫兩面不互抹）。
+def cage_vnormals(mesh):
+    vn = np.zeros((len(mesh.vertices), 3))
+    for poly in mesh.polygons:
+        n_ = np.array(poly.normal)
+        for vi_ in poly.vertices:
+            vn[vi_] += n_
+    l_ = np.linalg.norm(vn, axis=1); l_[l_ == 0] = 1
+    return vn / l_[:, None]
+cage_n0 = cage_vnormals(me)
+adj0 = defaultdict(set)
+for e in me.edges:
+    a0, b0 = e.vertices
+    if np.dot(cage_n0[a0], cage_n0[b0]) > 0.3:   # 同面才相鄰（臀縫兩壁不互抹）
+        adj0[a0].add(b0); adj0[b0].add(a0)
+reg_idx = np.where(region)[0]
+nbr0 = {int(i): np.array(sorted(adj0[int(i)]), dtype=np.int64) for i in reg_idx}
+x0 = cage_co0.copy()
+for _it in range(60):
+    for lam_ in (0.5, -0.53):
+        dx = np.zeros_like(x0)
+        for i in reg_idx:
+            nb = nbr0[int(i)]
+            if len(nb): dx[i] = x0[nb].mean(0) - x0[i]
+        x0 = x0 + lam_ * (w_bs[:, None] * dx)
+# 韁繩：窄條（襠帶籠 2~3 顆寬）上 Taubin 會沿條滑移＝33mm 外溢實錘
+# → 同面鄰居 <4 顆的頂點不動；位移上限 5mm（超出等比縮回）
+for i in reg_idx:
+    if len(nbr0[int(i)]) < 4:
+        x0[i] = cage_co0[i]
+    else:
+        dv = x0[i] - cage_co0[i]
+        m_ = np.linalg.norm(dv)
+        if m_ > 0.005:
+            x0[i] = cage_co0[i] + dv * (0.005 / m_)
+d_band = cage_co0[reg_idx] - x0[reg_idx]   # 報告用
+for _i in reg_idx:
+    me.vertices[int(_i)].co = Vector(x0[int(_i)])
+me.update()
+me.update()
+amp = np.linalg.norm(d_band, axis=1) * 1000
+P(f"bandstop 2~8cm: region verts={len(reg_idx)} 削除振幅 p50 {np.percentile(amp,50):.2f} p90 {np.percentile(amp,90):.2f} max {amp.max():.2f} mm")
+# 平滑籠另存（粗、未細分＝布的 cage）
+import bpy as _bpy
+cage_copy = body.copy(); cage_copy.data = me.copy(); cage_copy.name = "CageSmooth"   # 唯一名（同場景撞名會被改成 .001＝下游載入 None 實錘）
+_bpy.data.libraries.write(CAGE_SMOOTH, {cage_copy}, fake_user=True)
+_bpy.data.objects.remove(cage_copy, do_unlink=True)
+P(f"cage_smooth saved -> {CAGE_SMOOTH}")
+
 # ---- 原網格 CC 極限面（光滑目標）----
 proxy = body.copy(); proxy.data = body.data.copy(); proxy.name = "CCProxy"
 bpy.context.collection.objects.link(proxy)

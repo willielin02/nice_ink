@@ -52,10 +52,11 @@ if not os.path.exists(BK):
 # 2026-08-21 皮膚帶細分後：布的 cage＝**原始（細分前）身體**（否則布密度跟著爆 16×＝1.29M tris 實錘）；
 # 細分後的身體只當「skin_bvh 目標」（腳/埋深/淨空踩在光滑皮膚上）。
 body_render = bpy.data.objects["SumoRetopo"]          # 細分後（渲染真身）
-CAGE_BK = os.path.join(ROOT, "SourceAssets", "masters", "sumo_character_master_v23_prebandrefine.blend")
+CAGE_BK = os.path.join(ROOT, "SourceAssets", "masters", "cage_smooth_v3.blend")   # v3：帶阻濾波後的粗籠（布皮同源同平）
 with bpy.data.libraries.load(CAGE_BK, link=False) as (_df, _dt):
-    _dt.objects = ["SumoRetopo"]
+    _dt.objects = ["CageSmooth"]
 cage_obj = _dt.objects[0]
+assert cage_obj is not None, "CageSmooth not found in cage blend"
 cage_obj.name = "CageOrig"
 bpy.context.collection.objects.link(cage_obj)
 for m in list(cage_obj.modifiers): cage_obj.modifiers.remove(m)
