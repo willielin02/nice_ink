@@ -1603,3 +1603,25 @@ v25 壞版可辨、無帶界線）＋user viewport。
 **鐵則：曲面上的頻帶操作一律用 Taubin（零收縮=無偏），不用高斯差。**
 **外觀待 user viewport**；殘留＝臀縫窄條區（韁繩排除）與 5mm 上限外的大振幅段。
 
+## 2026-08-21 追記63：地基終解＝全身高解析度化（user 定案「細分＋弄平＋重做褲子」；BUILT-自驗待 viewport）
+
+**補丁循環的了結**：褌邊 20 餘輪的根源＝「3cm 粗籠地基上做毫米級的布」。user 拍板
+全身解法：`sumo_body_hires.py`＝v23 乾淨籠 → 布區中頻 Taubin（60 對、同面判準、
+上限 5mm＝user 定罪的 2~8cm 皮膚波浪）→ **全身 Catmull-Clark 細分一級**
+（同一個雕塑的光滑版；uv_smooth=NONE＝UV0 手繪版面逐島線性凍結；權重/FaceMask 內插；
+頸縫兩殼細分後 156 對仍逐位配對）。23,674→**94,556 tris**。
+窄帶細分路線（sumo_edge_band_refine 系列）全退役。
+
+**布重建於光滑地基**（plate SUBD 3→2 配 1.5cm 籠＝布密度不變 154k）：
+**墊高場 o max 9.8→2.4mm、股溝 lateral 穿刺首次自然歸零**＝光滑地基幾乎不需要墊
+＝之前所有「凸點頂布」病一次消失。法線 v1 配方重烘（uniform 密度＝無帶界摺、
+seam 156 對 gap 0.02°）。行軍 130 機位＝歷來最乾淨（殘=臀縫入口 2~3 格小皺）。
+
+**directdraw 效能閘門**：2 客戶端版 57 PASS / 8 FAIL——FAIL 歸屬：4×far 遠點＋cruise
+tipSpd＝08-18 既有（舞台搬家寫死座標待辦）；flow d_dotN=418（有出墨、低門檻 16%）
+＋palette shader 掃空＋ghosts＝固定掃描參數對新網格失準同族（**探針常數重校＝另立
+待辦**，非出墨回歸——smoke 於 hires 版全 PASS：tri-cache 94,556、UV 雙向、跨端複寫、
+出墨、RT 匯出）。**3 客戶端完整版在 user 桌面現況 VRAM 不足＝D3D12 fatal**（crash
+reporter 實錘）——本機 3-client 迴歸從此停用、跨端驗證恆走 2 人 UEDPIE_1。
+**外觀與畫畫手感待 user viewport**（效能主觀卡頓請回報：預算 4.7×、冒煙數字未見異常）。
+
