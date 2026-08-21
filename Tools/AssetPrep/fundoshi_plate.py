@@ -712,7 +712,28 @@ for li, l in enumerate(loops):
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
         w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); depth_s[i] = (w2 * depth_ray).sum()
-    depth_f = np.maximum(depth_s, depth_ray + 0.0005)
+    # 08-22 鋸齒排真兇＝舊行「depth_f=max(depth_s, ray+0.5mm)」逐點回夾＝在每個皮膚凸
+    # 面片處撤銷 σ8 平滑 ⇒ 腳線重新繼承面片鋸齒（帶內細分後 0.375cm 週期=細鋸齒排；
+    # 胯下由下往上看=牆腳裸露=user 七輪指認的「一排凸起」）。改=需求場 cone-max
+    # （1:8 坡攤開）→ σ8 平滑 → 0.3mm 保險絲 ＝腳線光滑且處處 ≥ ray+0.5mm（構造保證）。
+    need_d = depth_ray + 0.0008
+    seg3 = np.linalg.norm(np.roll(topS, -1, 0) - topS, axis=1)
+    dcone = need_d.copy()
+    for _cyc in range(2):
+        for k2 in range(1, 2 * n):
+            a_, b_ = k2 % n, (k2 - 1) % n
+            dcone[a_] = max(dcone[a_], dcone[b_] - seg3[b_] / 8.0)
+        for k2 in range(2 * n - 1, 0, -1):
+            a_, b_ = (k2 - 1) % n, k2 % n
+            dcone[a_] = max(dcone[a_], dcone[b_] - seg3[a_] / 8.0)
+    depth_f = np.empty(n)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum()
+        depth_f[i] = (w2 * dcone).sum()
+    n_fuse = int((depth_f < depth_ray + 0.0003).sum())
+    depth_f = np.maximum(depth_f, depth_ray + 0.0003)
+    P(f"loop {li}: foot-line cone-smooth depth p50 {np.percentile(depth_f,50)*1000:.1f} max {depth_f.max()*1000:.1f} mm; fuse hits {n_fuse}")
     for i in range(n):
         v = l[i]
         lin_co[v] = topS[i] - vert_n[v] * depth_f[i]
@@ -759,27 +780,36 @@ for li, l in enumerate(loops):
     R_raw = np.minimum(ROLL_R, np.maximum(0.0008, 0.45 / np.maximum(kappa, 1e-6)))
     # 對邊近接錐縮（08-21 真兇二：臀縫裡兩條布邊相距數 mm、塞不下兩個 4mm 捲邊＝互越摺片）
     # deff = 與「非本段」輪廓點的最小距離（他環、或同環弧距 >40mm 的折返段）
-    # 08-21 毛邊修：舊判準把半條腰帶誤錐（0.8~4mm 逐點抖＝細毛邊實錘）。
-    # 收緊＝只有「真隧道」才錐：對邊 <12mm 且落在外捲方向正前方（dot>0.5d）；其餘滿徑。
-    # 08-22 再收緊（貼臉倍率下帶頂邊仍有 mm 級波浪＝髖側被斜上方襠帶邊誤觸發）：
-    # 只認「正面對撞」＝對邊 <9mm、夾角 ≤45°（dot>0.7d）、且同高（法向差 <8mm=捲的掃掠域）。
+    # 08-22 終判準＝構造性防撞（v2 方向閘誤傷腰帶、v3 收緊後腿洞真隧道漏網＝鰭排復發
+    # ——啟發式每收一次漏一個案例）。規則：任兩「非同段」輪廓點，各自捲徑 ≤ 間距/2 − 餘裕
+    # ⇒ 兩管半徑和 ≤ 間距 ⇒ 掃掠管數學上不可能相交＝無鰭，無方向/同高閘=無漏網；
+    # 腰帶 8mm 近接只縮 ~6%（0.5·(d−0.5) vs 0.35d）＝邊觀不傷。V 尖=對枝距小 ⇒ 尖端自動收細。
+    r_cap = np.full(n, 1e9)
     for i in range(n):
-        hits = kd_ct.find_n(Vector(topS[i]), 10)
-        deff = None
-        for loc_, gi, dd in hits:
+        for loc_, gi, dd in kd_ct.find_n(Vector(topS[i]), 12):
             gl, gs = ct_meta[gi]
-            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.009:
-                rel = np.array(loc_) - topS[i]
-                if np.dot(o_sm[i], rel) > 0.7 * dd and abs(np.dot(rel, vert_n[l[i]])) < 0.008:
-                    deff = dd; break
-        if deff is not None:
-            R_raw[i] = min(R_raw[i], max(0.0008, 0.35 * deff))
+            if (gl != li or abs_arc(gs, s[i], L) > 0.040) and 1e-6 < dd < 0.010:
+                r_cap[i] = min(r_cap[i], max(0.0005, 0.5 * (dd - 0.0005)))
+                break
+    # 08-22 鋸齒排真兇＝「平滑後逐點重夾」（v3 的 min(R_sm,R_raw+1.5)、v4 的 min(R_sm,r_cap)
+    # ——cap 場本身逐點抖（KD 首中距離+κ 噪聲）⇒ 重夾=平滑撤銷=捲邊環上下跳=鋸齒排本人；
+    # 與腳線 depth_f 同族第三犯）。正解＝cap 場先 cone-min（1:4 坡度侵蝕=坡度受限光滑
+    # 下包絡、逐點 ≤ 原 cap=約束照樣點點滿足）→ σ8 輕平滑 → 與光滑 cap 再 min=零鋸齒。
+    caps = np.minimum(R_raw, r_cap)
+    SLOPE_R = 1.0 / 4.0
+    for _cyc in range(2):
+        for k2 in range(1, 2 * n):
+            a_, b_ = k2 % n, (k2 - 1) % n
+            caps[a_] = min(caps[a_], caps[b_] + seg[b_] * SLOPE_R)
+        for k2 in range(2 * n - 1, 0, -1):
+            a_, b_ = (k2 - 1) % n, k2 % n
+            caps[a_] = min(caps[a_], caps[b_] + seg[a_] * SLOPE_R)
     R_sm = np.empty(n)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w2 = np.exp(-0.5 * (d / 0.015) ** 2); w2 /= w2.sum()   # σ15＝半徑場不許逐點抖（毛邊）
-        R_sm[i] = (w2 * R_raw).sum()
-    R_sm = np.minimum(R_sm, R_raw + 0.0015)   # 平滑不可把急彎處的縮徑放大回去
+        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum()
+        R_sm[i] = (w2 * caps).sum()
+    R_sm = np.minimum(R_sm, caps)
     P(f"loop {li}: roll radius p5 {np.percentile(R_sm,5)*1000:.2f} p50 {np.percentile(R_sm,50)*1000:.2f} mm; tapered(<3mm) {int((R_sm<0.003).sum())}/{n}")
     for i in range(n):
         v = l[i]; nvec = vert_n[v]
@@ -790,6 +820,18 @@ for li, l in enumerate(loops):
         for th_deg in ROLL_ANGLES:
             th = np.radians(th_deg)
             rings.append(attach + Ri * np.sin(th) * o_sm[i] - Ri * (1.0 - np.cos(th)) * nvec)
+        # 08-22 鋸齒排終修＝隧道退化制：R<2mm 的捲邊（急彎/近接防撞縮到 ~1mm）環距與
+        # 輪廓取樣同尺度 ⇒ 相鄰截面扭曲四邊形對角摺=每頂點一齒（0.13mm/px 實測齒距=取樣距
+        # 定罪；錐縮/腳線/半徑平滑三刀零像素變化=齒不在那些場）。修=R<2mm 平滑退化成
+        # 「attach→foot 平牆插值點」（鏈長不變=水密不破；扭曲源構造性移除）。
+        u_ = min(max((0.002 - Ri) / 0.0012, 0.0), 1.0)
+        u_ = u_ * u_ * (3 - 2 * u_)
+        if u_ > 0:
+            fw = lin_co[v] - nvec * SINK
+            for k in range(len(rings)):
+                t_ = (k + 1.0) / (len(rings) + 1.0)
+                wallpt = attach + t_ * (fw - attach)
+                rings[k] = rings[k] * (1.0 - u_) + wallpt * u_
         roll_co_all[v] = rings
     if miss_ft: P(f"loop {li}: foot ray misses {miss_ft} (fell back to nearest)")
     P(f"loop {li}: foot depth ray p50 {np.percentile(depth_ray,50)*1000:.1f} max {depth_ray.max()*1000:.1f} mm; smoothed extra burial p90 {np.percentile(depth_f-depth_ray,90)*1000:.2f} mm")
@@ -958,6 +1000,7 @@ for f in top_faces:
     F.append(tuple(int(x) for x in f))
 top_faces = np.array(F)
 P(f"top faces flipped to outward: {flipped}/{len(F)}")
+P(f"IDX top_end {len(V)}")
 # 邊界邊 → 對面內部頂點（牆外向判定）
 third = {}
 for f in top_faces:
@@ -1002,6 +1045,7 @@ for li, l in enumerate(loops):
             F_wall.append((attach_idx[a], foot_idx[a], foot_idx[b], attach_idx[b]))
             for k in range(len(chain_a) - 1):
                 F_hem.append((chain_a[k], chain_a[k + 1], chain_b[k + 1], chain_b[k]))
+P(f"IDX walls_end {len(V)}")
 # 唇上面朝外檢查（與皮膚法線同向）：每迴圈多數決一次翻
 F.extend(tuple(int(x) for x in q) for q in F_wall)
 F.extend(tuple(int(x) for x in q) for q in F_hem)
