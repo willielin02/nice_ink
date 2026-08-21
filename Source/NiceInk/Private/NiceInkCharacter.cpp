@@ -15,6 +15,8 @@
 #include "SceneView.h"
 #include "UnrealClient.h"
 #include "EngineUtils.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/ProjectileMovementComponent.h"
@@ -7925,6 +7927,50 @@ void ANiceInkCharacter::NiMazeStats(int32 NumSeeds, int32 Cup)
 	if (GEngine)
 	{
 		GEngine->AddOnScreenDebugMessage(9137, 12.0f, FColor::Cyan, Report);
+	}
+}
+
+void ANiceInkCharacter::NiMark()
+{
+	FString Out;
+	int32 NumPts = 0;
+	UWorld* World = GetWorld();
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		ANiceInkCharacter* C = *It;
+		if (!C->InkCanvas || !C->Body || C->InkCanvas->GetWorks().Num() == 0)
+		{
+			continue;
+		}
+		const APlayerState* PS = C->GetPlayerState();
+		Out += FString::Printf(TEXT("=== body=%s asleep=%d actor=(%s)\n"),
+			PS ? *PS->GetPlayerName() : TEXT("?"), C->bAsleep ? 1 : 0,
+			*C->GetActorLocation().ToCompactString());
+		for (const FInkWork& W : C->InkCanvas->GetWorks())
+		{
+			for (int32 Si = 0; Si < W.Strokes.Num(); ++Si)
+			{
+				const FInkStroke& S = W.Strokes[Si];
+				Out += FString::Printf(TEXT("work=%d stroke=%d needle=%d npts=%d\n"),
+					W.WorkId, Si, static_cast<int32>(S.NeedleType), S.Points.Num());
+				for (const FVector2D& UV : S.Points)
+				{
+					FVector WP(ForceInit);
+					const bool bOk = C->Body->ResolveUVToWorld(UV, WP);
+					Out += FString::Printf(TEXT("  %.5f %.5f  %s\n"), UV.X, UV.Y,
+						bOk ? *FString::Printf(TEXT("%.2f %.2f %.2f"), WP.X, WP.Y, WP.Z) : TEXT("- - -"));
+					++NumPts;
+				}
+			}
+		}
+	}
+	const FString Path = FPaths::ProjectSavedDir() / TEXT("ni_marks.txt");
+	FFileHelper::SaveStringToFile(Out, *Path);
+	const FString Msg = FString::Printf(TEXT("NiMark: %d points -> %s"), NumPts, *Path);
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Msg);
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(9138, 10.0f, FColor::Cyan, Msg);
 	}
 }
 

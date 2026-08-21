@@ -1023,6 +1023,12 @@ public:
 	UFUNCTION(Exec)
 	void NiAccuse(int32 WorkNumber, int32 SeatIndex);
 
+	// 缺陷圈選定位（2026-08-22）：把全場每個身體上的筆劃（UV＋世界座標）傾印到
+	// Saved/ni_marks.txt。用法：用紫筆把缺陷圈起來→主控台跑 NiMark→座標進檔
+	// ＝量測與修理釘死在圈上（「修的」與「看到的」不再靠截圖猜對齊）。
+	UFUNCTION(Exec)
+	void NiMark();
+
 	// 迷宮生成器離線統計：NumSeeds 個種子的通關時間/繞路成本分布＋移動 fuzz 自測。
 	// 調參前先開表（SPEC 待定 #2 的校準儀器）；結果進 log。
 	UFUNCTION(Exec)
