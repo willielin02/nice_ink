@@ -639,6 +639,21 @@ for li, l in enumerate(loops):
                 proj_d[i] = dd_
                 topS[i] = np.array(loc)
     P(f"loop {li}: top-ring snap-to-U p50 {np.percentile(proj_d,50)*1000:.2f} p90 {np.percentile(proj_d,90)*1000:.2f} max {proj_d.max()*1000:.2f} mm")
+    # 08-22 「一排凸起」根治（user：整條邊都是、側看成齒）：7c 拋光跳過邊緣帶
+    # ＋snap-to-U 把頂緣釘回未拋光的波紋 U ⇒ 邊緣線殘留 1.5~4cm 週期 0.3~0.7mm 波
+    # ⇒ 掠射遮擋放大成一排齒。修＝頂緣線最後一道 σ12 沿線平滑（殺 1.5~4cm 頻段；
+    # 後腰 V 區 protect 豁免走 σ6=設計形狀保留）；與 U 的 ≤1mm 分歧由 6b 調和帶收拾，
+    # 皮膚淨空錐夾照跑=不穿刺保證不變。
+    pw_t = protect_w(topS)
+    topT = np.empty_like(topS)
+    for i in range(n):
+        d = np.abs(s - s[i]); d = np.minimum(d, L - d)
+        wA = np.exp(-0.5 * (d / 0.012) ** 2); wA /= wA.sum()
+        wB = np.exp(-0.5 * (d / 0.006) ** 2); wB /= wB.sum()
+        topT[i] = pw_t[i] * (wB[:, None] * topS).sum(0) + (1 - pw_t[i]) * (wA[:, None] * topS).sum(0)
+    tline = np.linalg.norm(topT - topS, axis=1) * 1000
+    P(f"loop {li}: edge-line final σ12 move p50 {np.percentile(tline,50):.2f} p90 {np.percentile(tline,90):.2f} max {tline.max():.2f} mm")
+    topS = topT
     def kinkstat(pts):
         K = 5; n_ = len(pts); out_ = np.empty(n_)
         for i_ in range(n_):
@@ -726,7 +741,7 @@ for li, l in enumerate(loops):
     o_sm = np.empty_like(o_arr)
     for i in range(n):
         d = np.abs(s - s[i]); d = np.minimum(d, L - d)
-        w2 = np.exp(-0.5 * (d / 0.008) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)
+        w2 = np.exp(-0.5 * (d / 0.012) ** 2); w2 /= w2.sum(); o_sm[i] = (w2[:, None] * o_arr).sum(0)   # σ12（08-22 一排凸起修：捲向場與頂緣線同頻段去波）
     o_sm /= np.maximum(np.linalg.norm(o_sm, axis=1), 1e-12)[:, None]
     # 捲徑隨曲率自適應（08-21 毛刺定罪：急彎處〔襠帶入臀縫端/V 底〕邊界曲率半徑 < 捲徑
     # ⇒ 相鄰截面互越＝自交摺片＝垂直於布面的毛刺）。R_i = min(R, 0.45×局部曲率半徑)、
