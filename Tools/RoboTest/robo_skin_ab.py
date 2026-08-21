@@ -190,11 +190,11 @@ class Probe:
         def cam(name, cpos, foc, fov=70):
             self.shots.append((name, foc, cpos, fov))
         # 大腿頂面特寫（左右）＋褲帶側面沿掃（左右、他截圖的視角）
-        # 貼臉同規格（user 視角重現：FOV36）＋每機位三連拍開關手術
+        # 08-22 user 位置對齊：前中央帶（前袋）壓大腿內側段＝他每張截圖的那條帶
+        cam("ab_crotch_c", add(H, mul(A, 18.0), mul(Lf, 14.0), unreal.Vector(0, 0, 40)), add(H, mul(A, 34.0), mul(Lf, -2.0), unreal.Vector(0, 0, 18)), 36)
+        cam("ab_crotch_l", add(H, mul(A, 24.0), mul(Lf, 26.0), unreal.Vector(0, 0, 30)), add(H, mul(A, 38.0), mul(Lf, 2.0), unreal.Vector(0, 0, 14)), 36)
+        cam("ab_crotch_g", add(H, mul(A, 8.0), mul(Lf, 8.0), unreal.Vector(0, 0, 26)), add(H, mul(A, 40.0), mul(Lf, -4.0), unreal.Vector(0, 0, 12)), 36)
         cam("ab_close_thigh_l", add(H, mul(A, 30.0), mul(Lf, 21.0), unreal.Vector(0, 0, 44)), add(H, mul(A, 28.0), mul(Lf, 18.0), unreal.Vector(0, 0, 26)), 36)
-        cam("ab_close_thigh_r", add(H, mul(A, 30.0), mul(Lf, -21.0), unreal.Vector(0, 0, 44)), add(H, mul(A, 28.0), mul(Lf, -18.0), unreal.Vector(0, 0, 26)), 36)
-        cam("ab_close_band_l", add(H, mul(A, 30.0), mul(Lf, 46.0), unreal.Vector(0, 0, 26)), add(H, mul(A, 2.0), mul(Lf, 29.0), unreal.Vector(0, 0, 16)), 36)
-        cam("ab_close_band_r", add(H, mul(A, 30.0), mul(Lf, -46.0), unreal.Vector(0, 0, 26)), add(H, mul(A, 2.0), mul(Lf, -29.0), unreal.Vector(0, 0, 16)), 36)
 
     def step(self):
         s = self.stage
