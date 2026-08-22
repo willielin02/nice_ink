@@ -1,4 +1,7 @@
-"""褌＝光滑板（2026-08-21）——「布貼著皮膚做」前提退役。
+"""【已退役 2026-08-23】被 fundoshi_arc.py（弓形實體：以兩條接觸線為邊界、側看圓弧、無上緣無牆）取代。
+本檔保留為構造史與參考；出貨鏈不再呼叫。
+
+褌＝光滑板（2026-08-21）——「布貼著皮膚做」前提退役。
 
 **病根（量測）**：身體在褌區是 3cm 邊長的多面體（edge p50 30.8mm、dihedral p90 17.7°、
 面片矢高 1~2.3mm、最糟 7mm）。舊構造「貼身面抬回體表→細分 3mm→沿法線位移」把每條
@@ -956,8 +959,15 @@ for v in plate_v_idx:
 # quadric 普查（銳邊排除版）抓到後髖 0.6~1.5mm 正負混合波紋＝終刀直接抹平，
 # 不追哪層生的。只動頂板內部（輪廓+2 圈不碰）、同面判準 dot>0.9（>25° 摺=設計皺
 # 不跨＝V 谷/襠帶交接保留）、cap 1.2mm；拋完補壓回 U 淨空（穿刺約束不破）。
+# 08-23 user 裁決「無腦把褲帶整個表面弄平滑」：拋光範圍改成**整個頂板含輪廓與邊緣圈**。
+# 實測定罪（08-22 出貨）：內部 dihedral p90 4° 玻璃級，唯獨輪廓+2 圈 p90 40~63°、邊線頂點
+# 相對板面 ±2mm 逐點亂跳（相鄰 >1mm 佔 33%）、1107 個翻摺面——正是 7c 跳過的那兩圈＋
+# §6 在 3D 搬線不搬鄰圈的後果；掠射下＝「整條邊一排凸起」。
+# 輪廓頂點只准沿法線動（高度對齊鄰圈、不切向漂移＝裁切線位置不變）；邊緣圈 cap 放寬到 5mm。
 POLISH_CAP = 0.0012
-pol = {int(v) for v in plate_v_idx} - contour_set - {v for v, d_ in ring.items() if d_ <= 2}
+POLISH_CAP_EDGE = 0.005
+edge_pol = contour_set | {v for v, d_ in ring.items() if d_ <= 2}
+pol = {int(v) for v in plate_v_idx}
 padj = {v: [u for u in plate_adj[v] if np.dot(vert_n[v], vert_n[u]) > 0.9] for v in pol}
 p0 = {v: new_co[v].copy() for v in pol}
 xp = {v: new_co[v].copy() for v in pol}
@@ -969,15 +979,49 @@ for _it in range(40):
             if len(nb) < 3:
                 continue
             m_ = np.mean([xp[u] if u in xp else new_co[u] for u in nb], axis=0)
-            d2[v] = lam_ * (m_ - xp[v])
+            dv = lam_ * (m_ - xp[v])
+            if v in contour_set:
+                dv = np.dot(dv, vert_n[v]) * vert_n[v]
+            d2[v] = dv
         for v, dv in d2.items():
             xp[v] = xp[v] + dv
 for v in pol:
     dv = xp[v] - p0[v]
     m_ = np.linalg.norm(dv)
-    if m_ > POLISH_CAP:
-        dv = dv * (POLISH_CAP / m_)
+    cap_ = POLISH_CAP_EDGE if v in edge_pol else POLISH_CAP
+    if m_ > cap_:
+        dv = dv * (cap_ / m_)
     new_co[v] = p0[v] + dv
+emag = np.array([np.linalg.norm(new_co[v] - p0[v]) for v in edge_pol]) * 1000
+P(f"edge-ring polish: {len(edge_pol)} verts |d| p50 {np.percentile(emag,50):.2f} p90 {np.percentile(emag,90):.2f} max {emag.max():.2f} mm")
+# 08-23 邊線釘回板面延伸（Taubin 對 2mm 間距鋸齒收斂不足：釘後仍 31% 相鄰 >1mm）：
+# 輪廓/第 1 圈的高度 := 鄰圈（2~5 圈、12mm 內）局部二次曲面擬合在該點的預測值
+# ＝邊線躺在板面自己的光滑延伸上（構造歸零，不再是平滑「接近」）；切向不動。
+_inner = [v for v, d_ in ring.items() if 2 <= d_ <= 5]
+_kd = KDTree(len(_inner))
+for _i, _v in enumerate(_inner): _kd.insert(Vector(new_co[_v]), _i)
+_kd.balance()
+_pin = np.zeros(0); _pinned = 0; _pin_list = []
+for _v in sorted(edge_pol):
+    _r = ring.get(_v, 0) if _v not in contour_set else 0
+    if _r > 1: continue
+    _nb = [_inner[_i] for (_, _i, _d) in _kd.find_range(Vector(new_co[_v]), 0.012)]
+    if len(_nb) < 10: continue
+    _Pn = new_co[_nb]; _c = _Pn.mean(0); _u, _s, _vt = np.linalg.svd(_Pn - _c); _nz = _vt[2]
+    if np.dot(_nz, vert_n[_v]) < 0: _nz = -_nz
+    _ex = _vt[0]; _ey = np.cross(_nz, _ex)
+    _X = (_Pn - _c) @ _ex; _Y = (_Pn - _c) @ _ey; _Z = (_Pn - _c) @ _nz
+    _A = np.stack([_X * _X, _X * _Y, _Y * _Y, _X, _Y, np.ones_like(_X)], 1)
+    _coef = np.linalg.lstsq(_A, _Z, rcond=None)[0]
+    _q = new_co[_v] - _c; _x = np.dot(_q, _ex); _y = np.dot(_q, _ey); _z = np.dot(_q, _nz)
+    _zp = _coef @ np.array([_x * _x, _x * _y, _y * _y, _x, _y, 1.0])
+    _w = 1.0 if _v in contour_set else 0.6
+    _dz = (_zp - _z) * _w
+    if abs(_dz) > 0.006: continue   # 擬合跳面保險（V 摺/隧道）
+    new_co[_v] = new_co[_v] + _dz * _nz
+    _pin_list.append(abs(_dz) * 1000); _pinned += 1
+_pin = np.array(_pin_list) if _pin_list else np.zeros(1)
+P(f"edge pin-to-quadric: {_pinned} verts |dz| p50 {np.percentile(_pin,50):.2f} p90 {np.percentile(_pin,90):.2f} max {_pin.max():.2f} mm")
 moved = 0
 for _pass in range(6):
     moved = 0
@@ -1210,6 +1254,18 @@ for p in me2.polygons:
     for ek in p.edge_keys: ef[tuple(sorted(ek))].append(p.index)
 dih = np.array([np.degrees(np.arccos(np.clip(np.dot(fnorm[a], fnorm[b]), -1, 1))) for fs in ef.values() if len(fs) == 2 for a, b in [fs]])
 P(f"top plate dihedral p50 {np.percentile(dih,50):.2f} p90 {np.percentile(dih,90):.2f} p99 {np.percentile(dih,99):.2f} max {dih.max():.1f} (old shell p50 5.07 p90 29.84)")
+# 08-23 出貨閘（一排凸起病灶的尺）：dihedral 按「離輪廓幾圈」分層——全板中位數看不到邊緣兩圈
+_ring_f = {}
+for fi_, f_ in enumerate(top_faces):
+    _ring_f[fi_] = min(ring.get(int(top_n_idx[k]), 99) for k in f_)
+_by = defaultdict(list)
+for fs in ef.values():
+    if len(fs) != 2: continue
+    a, b = fs
+    _by[min(_ring_f[a], _ring_f[b], 3)].append(np.degrees(np.arccos(np.clip(np.dot(fnorm[a], fnorm[b]), -1, 1))))
+for r_ in sorted(_by):
+    d_ = np.array(_by[r_])
+    P(f"GATE ring{r_}{'+' if r_ == 3 else ''} dihedral p50 {np.percentile(d_,50):.2f} p90 {np.percentile(d_,90):.2f} p99 {np.percentile(d_,99):.2f} n>15deg {int((d_>15).sum())} (08-22 ship: ring0 p90 40 / ring1 p90 63)")
 # 穿刺：頂板/底板頂點 signed distance to skin
 def signed_to_skin_facing(pts, nrm):
     """回 (signed, facing)：facing=最近皮膚法線與布法線同向（真穿出）；否則＝側壁（股溝夾縫）"""

@@ -471,10 +471,17 @@ canvas 做不到毛玻璃半透明）**。
   ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000584`＝3.8mm 全身一致；線的跨縫
   ＝點刺制逐點解算天然安全；**排針（面積章）的跨縫＝InkBody 縫資料層＋表面攤平補丁
   逐點落墨（縫 2.5cm 內自動切換）**。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
-  **褌現制（08-21）＝光滑板**：`Tools/AssetPrep/fundoshi_plate.py`（CC 極限面＋手繪遮罩
-  σ15mm 等值線裁切＋牆腳＝手繪線沉 3mm；104k tris 單密度、FD_TIER 退役）；
-  **布/禁畫/手繪單一來源**＝衍生遮罩 `fundoshi_mask_final.png`（禁畫三消費者全讀它；
-  `fundoshi_mask_sharp.png` 仍是手繪 authoring 正源永不覆蓋）。
+  **褌現制（08-23）＝弓形實體**（user 定案「以兩邊的接觸線為邊界，形成一個有厚度、側面看來
+  是圓弧狀的褲子實體」）：`Tools/AssetPrep/fundoshi_arc.py`（**光滑板 fundoshi_plate.py 退役**）——
+  裁切域＝**整形後的皮膚本身**（同一套 UV0，等值線直接切在皮膚三角形上＝零籠零投影，
+  舊版經粗籠最近點投影＝線位置偏）；剖面＝測地距 d 與局部帶寬 w 的圓弧（矢高 min(8mm, 0.2w)、
+  寬區＝圓弧邊+平頂）、接觸線沉 0.8mm、底面沉 1.5mm、封邊單網格水密；**無上緣、無牆**。
+  **皮膚整形＝布的前置**（`Tools/AssetPrep/sumo_skin_band_fair.py`）：掃描本人的內褲勒痕＋髖摺
+  是 3~8cm 尺度的**形狀**（σ6/σ15 整平碰不到），接觸線壓在上面就把它描出來 ⇒ cotan 雙調和補洞
+  ＋**軟衰減**（腳印外 3cm 全量、3→10cm smoothstep 到 0＝無硬邊界；硬圓周會在肚下留可見壓痕）。
+  **鐵則**：改 `ARC_WIDEN_MM`（帶寬）必須用同一值重跑整形——腳印與布不同源＝接觸線落在只填了
+  一半的衰減帶＝「凹凸又回來了」。**布/禁畫/手繪單一來源**＝衍生遮罩 `fundoshi_mask_final.png`
+  （禁畫三消費者全讀它；`fundoshi_mask_sharp.png` 仍是手繪 authoring 正源永不覆蓋）。
 - 臉部管線：`Tools/FacePipeline`（自拍→臉貼圖 v7、閉眼變體、眼球禁畫遮罩烘焙）；
   臉照片走 FaceUV（通道1），墨水走 UV0（通道0），互不影響。
   python 環境：`C:\games\Unreal Engine\nice_ink_face_pipeline\venv\Scripts\python.exe`。
