@@ -198,78 +198,16 @@ class Probe:
             self.advance("shots")
         elif s == "shots":
             server = get_world("UEDPIE_0")
-            vic, mid = self.victim_mid(server)
             k = self.step_i
             if self.elapsed() < 1.2:
                 return
-            if k == -1:
-                unreal.SystemLibrary.execute_console_command(server, "HighResShot 1600x900 filename=tx_base")
-                log("shot base")
-                self.step_i = 0
+            if k == 0:
+                unreal.SystemLibrary.execute_console_command(server, "HighResShot 1600x900 filename=sw_bowbody")
+                log("shot bowbody(變形版)")
+                self.step_i = 1
                 self.stage_t = time.monotonic()
-                return
-            if k // 2 >= 1:
-                log("RESULT DONE-PASS")
-                self.finish()
-                return
-            mids = self.skin_mids_all_worlds()
-            if not mids:
-                log("FAIL no skin mids")
-                self.finish()
-                return
-            if self.params is None or self.params == [] or not isinstance(self.params[0], tuple):
-                texnames = []
-                try:
-                    for pv in mids[0].get_editor_property("texture_parameter_values"):
-                        texnames.append(str(pv.get_editor_property("parameter_info").get_editor_property("name")))
-                except Exception:
-                    pass
-                self.params = [("scalar", "ChromaStrength", 0.0), ("flat", "", 0.0)] + [("tex", n, 0) for n in texnames]
-                log(f"variants: {self.params}")
-            if k // 2 >= len(self.params):
-                log("RESULT DONE-PASS")
-                self.finish()
-                return
-            kind, name, val = self.params[k // 2]
-            if k % 2 == 0:
-                for m in mids:
-                    if kind == "scalar":
-                        self.orig.setdefault(name, m.get_scalar_parameter_value(name))
-                        m.set_scalar_parameter_value(name, val)
-                    elif kind == "flat":
-                        self.orig.setdefault("hp", m.get_scalar_parameter_value("HeadlightPower"))
-                        self.orig.setdefault("hf", m.get_scalar_parameter_value("HeadlightFloor"))
-                        m.set_scalar_parameter_value("HeadlightPower", 0.0)
-                        m.set_scalar_parameter_value("HeadlightFloor", 1.0)
-                    else:
-                        m.set_texture_parameter_value(name, self.white)
-                log(f"variant ON: {kind} {name}")
-                self.step_i += 1
-                self.stage_t = time.monotonic()
-                return
-            safe = (name or kind).replace(" ", "_")
-            unreal.SystemLibrary.execute_console_command(server, f"HighResShot 1600x900 filename=tx2_{safe}")
-            log(f"shot {safe}")
-            for m in mids:
-                if kind == "scalar":
-                    m.set_scalar_parameter_value(name, self.orig[name])
-                elif kind == "flat":
-                    m.set_scalar_parameter_value("HeadlightPower", self.orig["hp"])
-                    m.set_scalar_parameter_value("HeadlightFloor", self.orig["hf"])
-                else:
-                    ov = self.orig.get("tex_" + name)
-                    if ov is None:
-                        try:
-                            ov = m.get_texture_parameter_value(name)
-                        except Exception:
-                            ov = None
-                    # 白圖還原：texture params 原值各 MID 不同——略過還原（診斷一次性、下一輪重啟）
-            self.step_i += 1
-            self.stage_t = time.monotonic()
-            return
-            n_set = 0
-            if False:
-                n_set = 0
+            elif k == 1:
+                n_ = 0
                 for tag in ("UEDPIE_0", "UEDPIE_1", "UEDPIE_2"):
                     w2 = get_world(tag)
                     if not w2:
@@ -278,28 +216,23 @@ class Probe:
                     vic2 = find_char(w2, gs2.get_editor_property("VictimPlayerId")) if gs2 else None
                     if not vic2:
                         continue
-                    for comp in vic2.get_components_by_class(unreal.MeshComponent):
-                        vis = comp.is_visible()
-                        nm = comp.get_name()
-                        for mi in range(comp.get_num_materials()):
-                            m = comp.get_material(mi)
-                            if isinstance(m, unreal.MaterialInstanceDynamic):
-                                try:
-                                    m.set_scalar_parameter_value("SkinBrightness", 0.0)
-                                    n_set += 1
-                                    log(f"  {tag} {nm}[{mi}] vis={vis} MID blacked")
-                                except Exception:
-                                    pass
-                            else:
-                                log(f"  {tag} {nm}[{mi}] vis={vis} mat={m.get_name() if m else None} (非MID)")
-                log(f"CONTROL: blacked {n_set} MIDs across all victim components")
-                self.step_i += 1
+                    body2 = vic2.get_editor_property("Body")
+                    bow2 = vic2.get_editor_property("BowBody")
+                    body2.set_visibility(True)
+                    body2.set_owner_no_see(False)
+                    bow2.set_visibility(False)
+                    n_ += 1
+                log(f"swapped display in {n_} worlds: Body(剛體靜態) ON / BowBody OFF")
+                self.step_i = 2
                 self.stage_t = time.monotonic()
-            else:
-                unreal.SystemLibrary.execute_console_command(server, "HighResShot 1600x900 filename=tx_black")
-                log("shot black-control (不還原=一次性診斷)")
-                self.step_i += 1
+            elif k == 2:
+                unreal.SystemLibrary.execute_console_command(server, "HighResShot 1600x900 filename=sw_staticbody")
+                log("shot staticbody(剛體版)")
+                self.step_i = 3
                 self.stage_t = time.monotonic()
+            elif self.elapsed() >= 1.5:
+                log("RESULT DONE-PASS")
+                self.finish()
 
     def finish(self):
         try:
