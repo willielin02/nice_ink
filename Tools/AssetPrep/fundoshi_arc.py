@@ -14,11 +14,19 @@
                 sumo_skin_band_fair.py，否則接觸線會跑進未整平的衰減帶＝凹凸復發**）
   ARC_SYM=1 遮罩鏡射平均（布左右嚴格對稱；預設 0＝照手繪原樣）
   FUNDOSHI_MASK 遮罩路徑（預設手繪正源；fundoshi_mask_sharp_v2.png＝凹槽位移版，見 fundoshi_mask_warp.py）
+  ARC_XFIT 可見交線整形輪數（預設 3＝出貨組態；0＝復原 08-24 前）／ARC_XFIT_SIGMA 弧長平滑 σ
+  ARC_XFIT_FALL 鄰圈跟隨衰減長度／ARC_XFIT_CAP 單輪位移上限／ARC_XFIT_RELAX 搬完鬆弛輪數
+  ARC_VIS_P90_MAX 可見線契約門檻 mm（預設 0.60）
 
-**出貨資產與本腳本的落差（2026-08-23 記帳）**：引擎裡的 SK_Sumo/SM_Sumo ＝
-`masters/sumo_character_master_v38_arc_skin.blend`，是在下列改良**之前**產生的——
-①接觸線搬動上限 3mm ②內圈鬆弛 8→20 輪 ③抬升法線場平滑（A4）④頂面輕拋光 ⑤MIN_ISLAND 160→800。
-重跑本腳本會得到略有差異（更乾淨）的布；要逐位重現出貨版＝直接用 v38 備份。
+**2026-08-24 起本腳本的預設組態＝出貨組態**（`ARC_XFIT=3`），直接跑就重現引擎裡那顆布；
+08-23 記過的「出貨版 v38 與腳本有五條落差」已作廢——那五條改良實測對**可見線**毫無作用
+（純重跑 1.5~5cm 側向 p90 0.684→0.674），此後以 XFIT 版出貨。
+
+**看得見的邊不是接觸線（08-24 定罪，本檔最重要的一句）**：`SINK_EDGE` 把接觸線壓在皮膚下
+0.8mm——實測 3706/3706 個布緣頂點 sd 全等 −0.800mm、露出皮膚的 0 個，整片牆一起埋著。
+玩家看到的黑／膚交界是 **h=0 的等值線**，位在布緣內側 d\*=1.18~2.44mm，且 d\* 由局部帶寬
+決定（corr 0.916）。**改任何「讓邊更直」的東西之前，先確認你動的是 h=0 那條線**，
+不是接觸線；量測用 `fundoshi_visible_edge.py`，姿勢穩健性用 `fundoshi_pose_check.py`。
 Run: blender --background --python fundoshi_arc.py
 """
 import bpy, os, shutil
@@ -286,61 +294,21 @@ P(f"relaxed {len(relax)} ring1-3 verts")
 # ---- A4) 抬升法線場平滑（08-23）：凹槽（腰窩/屁溝）兩側法線對沖，沿原法線抬 7mm 會交叉成折痕；
 #         布的抬升方向用鄰域平均 ×15 的平滑法線＝布面跨橋不折（接觸線仍用原法線沉入）
 skin_n_raw = {v: n_.copy() for v, n_ in skin_n.items()}
-lift_n = dict(skin_n)
-for _it in range(15):
-    nn = {}
-    for v in lift_n:
-        nb = plate_adj[v]
-        acc_ = lift_n[v] * 0.5 + sum((lift_n[u] for u in nb), np.zeros(3)) / max(len(nb), 1) * 0.5
-        nn[v] = acc_ / max(np.linalg.norm(acc_), 1e-9)
-    lift_n = nn
+def build_lift_normals():
+    ln = dict(skin_n)
+    for _it in range(15):
+        nn = {}
+        for v in ln:
+            nb = plate_adj[v]
+            acc_ = ln[v] * 0.5 + sum((ln[u] for u in nb), np.zeros(3)) / max(len(nb), 1) * 0.5
+            nn[v] = acc_ / max(np.linalg.norm(acc_), 1e-9)
+        ln = nn
+    return ln
+lift_n = build_lift_normals()
 P("lift normals smoothed x15")
 
-# ---- B) 測地距到邊界（Dijkstra，邊長＝投影後）＋最近邊界頂點 ----
+# ---- B/C/D) 場：測地距 → 帶寬 → 弓形高度（抽成函式；X 段的迭代要重算）----
 contour_set = set(int(v) for l in loops for v in l)
-dist_b = {int(v): np.inf for v in used}; nearest_c = {}
-pq = []
-for c in contour_set:
-    dist_b[c] = 0.0; nearest_c[c] = c; heapq.heappush(pq, (0.0, c))
-while pq:
-    d0, u = heapq.heappop(pq)
-    if d0 > dist_b[u]: continue
-    for w_ in plate_adj[u]:
-        nd = d0 + float(np.linalg.norm(skin_co[w_] - skin_co[u]))
-        if nd < dist_b[w_]:
-            dist_b[w_] = nd; nearest_c[w_] = nearest_c[u]; heapq.heappush(pq, (nd, w_))
-
-# ---- C) 帶寬：每個邊界頂點→對面邊界（他環、或同環弧距 >15cm 的最近點），沿環 σ20mm 平滑 ----
-ct_pts = []; ct_meta = []
-for li, l in enumerate(loops):
-    c = np.array([skin_co[int(v)] for v in l])
-    seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1); s_ = np.concatenate([[0], np.cumsum(seg)])[:-1]
-    for j, v in enumerate(l): ct_pts.append(skin_co[int(v)]); ct_meta.append((li, s_[j], float(seg.sum())))
-kd_c = KDTree(len(ct_pts))
-for i, p in enumerate(ct_pts): kd_c.insert(Vector(p), i)
-kd_c.balance()
-width_c = {}
-k = 0
-for li, l in enumerate(loops):
-    for j, v in enumerate(l):
-        li0, s0, L0 = ct_meta[k]; wv = None
-        for (loc, idx2, dd) in kd_c.find_n(Vector(ct_pts[k]), 400):
-            lj, sj, Lj = ct_meta[idx2]
-            if lj != li0: wv = dd; break
-            da = abs(sj - s0); da = min(da, L0 - da)
-            if da > 0.15: wv = dd; break
-        width_c[int(v)] = wv if wv is not None else 2 * W0
-        k += 1
-for li, l in enumerate(loops):
-    n_ = len(l); c = np.array([skin_co[int(v)] for v in l])
-    seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1); s_ = np.concatenate([[0], np.cumsum(seg)])[:-1]; L_ = seg.sum()
-    wraw = np.array([width_c[int(v)] for v in l]); wsm = np.empty(n_)
-    for i in range(n_):
-        d = np.abs(s_ - s_[i]); d = np.minimum(d, L_ - d); wgt = np.exp(-0.5 * (d / 0.02) ** 2); wsm[i] = (wgt * wraw).sum() / wgt.sum()
-    for i, v in enumerate(l): width_c[int(v)] = float(wsm[i])
-    P(f"loop {li}: width p5 {np.percentile(wsm,5)*1000:.1f} p50 {np.percentile(wsm,50)*1000:.1f} p95 {np.percentile(wsm,95)*1000:.1f} mm")
-
-# ---- D) 弓形高度 ----
 def arc_h(d, w):
     we = min(w, 2 * W0); s = min(S_MAX, K_SAG * we)
     if s < 1e-5: return 0.0
@@ -348,12 +316,197 @@ def arc_h(d, w):
     x = we / 2 - d
     if x <= 0: return s
     return float(np.sqrt(max(R * R - x * x, 0.0)) - (R - s))
-hmap = {}
-for v in used:
-    v = int(v)
-    hmap[v] = arc_h(dist_b[v], width_c[nearest_c[v]]) - SINK_EDGE
-hs = np.array([hmap[int(v)] for v in used]) * 1000
-P(f"arc height: p5 {np.percentile(hs,5):.2f} p50 {np.percentile(hs,50):.2f} p95 {np.percentile(hs,95):.2f} max {hs.max():.2f} mm (edge = -{SINK_EDGE*1000:.1f})")
+
+def compute_fields(verbose=True):
+    # B) 測地距到邊界（Dijkstra，邊長＝現行皮膚位置）＋最近邊界頂點
+    dist_b = {int(v): np.inf for v in used}; nearest_c = {}
+    pq = []
+    for c in contour_set:
+        dist_b[c] = 0.0; nearest_c[c] = c; heapq.heappush(pq, (0.0, c))
+    while pq:
+        d0, u = heapq.heappop(pq)
+        if d0 > dist_b[u]: continue
+        for w_ in plate_adj[u]:
+            nd = d0 + float(np.linalg.norm(skin_co[w_] - skin_co[u]))
+            if nd < dist_b[w_]:
+                dist_b[w_] = nd; nearest_c[w_] = nearest_c[u]; heapq.heappush(pq, (nd, w_))
+    # C) 帶寬：每個邊界頂點→對面邊界（他環、或同環弧距 >15cm 的最近點），沿環 σ20mm 平滑
+    ct_pts = []; ct_meta = []
+    for li, l in enumerate(loops):
+        c = np.array([skin_co[int(v)] for v in l])
+        seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1); s_ = np.concatenate([[0], np.cumsum(seg)])[:-1]
+        for j, v in enumerate(l): ct_pts.append(skin_co[int(v)]); ct_meta.append((li, s_[j], float(seg.sum())))
+    kd_c = KDTree(len(ct_pts))
+    for i, p in enumerate(ct_pts): kd_c.insert(Vector(p), i)
+    kd_c.balance()
+    width_c = {}
+    k = 0
+    for li, l in enumerate(loops):
+        for j, v in enumerate(l):
+            li0, s0, L0 = ct_meta[k]; wv = None
+            for (loc, idx2, dd) in kd_c.find_n(Vector(ct_pts[k]), 400):
+                lj, sj, Lj = ct_meta[idx2]
+                if lj != li0: wv = dd; break
+                da = abs(sj - s0); da = min(da, L0 - da)
+                if da > 0.15: wv = dd; break
+            width_c[int(v)] = wv if wv is not None else 2 * W0
+            k += 1
+    for li, l in enumerate(loops):
+        n_ = len(l); c = np.array([skin_co[int(v)] for v in l])
+        seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1); s_ = np.concatenate([[0], np.cumsum(seg)])[:-1]; L_ = seg.sum()
+        wraw = np.array([width_c[int(v)] for v in l]); wsm = np.empty(n_)
+        for i in range(n_):
+            d = np.abs(s_ - s_[i]); d = np.minimum(d, L_ - d); wgt = np.exp(-0.5 * (d / 0.02) ** 2); wsm[i] = (wgt * wraw).sum() / wgt.sum()
+        for i, v in enumerate(l): width_c[int(v)] = float(wsm[i])
+        if verbose:
+            P(f"loop {li}: width p5 {np.percentile(wsm,5)*1000:.1f} p50 {np.percentile(wsm,50)*1000:.1f} p95 {np.percentile(wsm,95)*1000:.1f} mm")
+    # D) 弓形高度
+    hmap = {}
+    for v in used:
+        v = int(v)
+        hmap[v] = arc_h(dist_b[v], width_c[nearest_c[v]]) - SINK_EDGE
+    if verbose:
+        hs = np.array([hmap[int(v)] for v in used]) * 1000
+        P(f"arc height: p5 {np.percentile(hs,5):.2f} p50 {np.percentile(hs,50):.2f} p95 {np.percentile(hs,95):.2f} max {hs.max():.2f} mm (edge = -{SINK_EDGE*1000:.1f})")
+    return dist_b, nearest_c, width_c, hmap
+
+dist_b, nearest_c, width_c, hmap = compute_fields()
+
+# ======================= X) 可見交線整形（2026-08-24）=======================
+# 定罪：布緣（接觸線）被 SINK_EDGE 壓在皮膚下 0.8mm——實測 3706/3706 個布緣頂點
+# sd 全等於 −0.800mm、露出皮膚的 0 個。**玩家看到的黑／膚交界不是它**，而是
+# 「布頂面穿出皮膚」的等值線 h=0，位在布緣內側 d*=1.18~2.44mm，且 d* 由局部帶寬
+# 決定（corr 0.916：帶寬 35mm→d* 1.26mm，帶寬 >90mm→d* 2.41mm）。
+# 此前管線對可見線零處理：沒被切出來、沒平滑、沒閘門；所有 σ15mm 平滑與 3mm 上限
+# 都作用在看不見的布緣上（而 log 顯示 p90 搬動需求＝3.00mm＝整條頂在上限，
+# 也就是布緣連自己那道平滑都沒真的吃到）。
+# 本段＝把專案對布緣的那套配方（弧長 σ 平滑 → 位移上限 → 重投影皮膚 → 鄰圈跟隨）
+# 原封不動施加在**可見線**上，布緣降級為致動器（它看不見，只需保持被埋住）。
+# 迭代：移布緣 → 場重算 → 可見線重抽，2~3 輪收斂。
+XFIT_ITERS = int(os.environ.get("ARC_XFIT", "3"))   # 預設＝出貨組態；設 0 復原 08-24 前行為
+XFIT_SIGMA = float(os.environ.get("ARC_XFIT_SIGMA", "0.015"))   # 與布緣同一個 σ15mm
+XFIT_FALL = float(os.environ.get("ARC_XFIT_FALL", "0.008"))     # 鄰圈跟隨衰減長度
+XFIT_CAP = float(os.environ.get("ARC_XFIT_CAP", "0.008"))       # 單輪位移上限
+XFIT_RELAX = int(os.environ.get("ARC_XFIT_RELAX", "6"))          # 搬完的鄰圈鬆弛輪數
+
+def extract_visible_loops(hmap_, min_len=50):
+    """h=0 等值線＝布頂面穿出皮膚處。h=0 時頂點恰在皮膚上，故直接用 skin_co 內插。"""
+    nodes = []; node_of = {}; links = []
+    def nd(a, b):
+        key = (a, b) if a < b else (b, a)
+        if key in node_of: return node_of[key]
+        ha, hb = hmap_[a], hmap_[b]
+        t = ha / (ha - hb)
+        node_of[key] = len(nodes); nodes.append(skin_co[a] * (1 - t) + skin_co[b] * t)
+        return node_of[key]
+    for f in plate_faces:
+        a, b, c = int(f[0]), int(f[1]), int(f[2])
+        fl = [hmap_[a] >= 0, hmap_[b] >= 0, hmap_[c] >= 0]; k = sum(fl)
+        if k == 0 or k == 3: continue
+        vs = [a, b, c]; i = fl.index(True) if k == 1 else fl.index(False)
+        p_, q_, r_ = vs[i], vs[(i + 1) % 3], vs[(i + 2) % 3]
+        links.append((nd(p_, q_), nd(p_, r_)))
+    adjx = defaultdict(list)
+    for a, b in links: adjx[a].append(b); adjx[b].append(a)
+    seen = set(); out = []
+    for s0 in list(adjx):
+        if s0 in seen or len(adjx[s0]) != 2: continue
+        loop = [s0]; seen.add(s0); prev, cur = None, s0
+        while True:
+            nb = [x for x in adjx[cur] if x != prev and x not in seen]
+            if not nb: break
+            nxt = nb[0]; loop.append(nxt); seen.add(nxt); prev, cur = cur, nxt
+        if len(loop) >= min_len: out.append(np.array([nodes[i] for i in loop]))
+    return out
+
+def _resample_1mm(c0):
+    cc = np.vstack([c0, c0[:1]])
+    seg = np.linalg.norm(np.diff(cc, axis=0), axis=1); s_ = np.concatenate([[0], np.cumsum(seg)])
+    L = float(s_[-1]); n = max(int(round(L / 0.001)), 32)
+    q = np.linspace(0, L, n, endpoint=False)
+    return np.stack([np.interp(q, s_, cc[:, k]) for k in range(3)], 1), L
+
+def _lp_closed(c, L, sig):
+    n = len(c); kf = np.fft.rfftfreq(n, d=L / n)
+    G = np.exp(-2 * (np.pi ** 2) * (sig ** 2) * (kf ** 2))
+    return np.fft.irfft(np.fft.rfft(c, axis=0) * G[:, None], n=n, axis=0)
+
+def visible_gate(hmap_, tag):
+    """可見線的驗收量：1.5~5cm 帶通的側向偏差（＝user 肉眼抱怨的那個尺度與方向）。"""
+    xl = extract_visible_loops(hmap_)
+    if not xl:
+        P(f"  [{tag}] 抽不到可見線"); return None
+    accB = []; accN = []; tot = 0.0
+    for c0 in xl:
+        c, L = _resample_1mm(c0); tot += L
+        base = _lp_closed(c, L, 0.015)
+        T = np.roll(base, -1, 0) - np.roll(base, 1, 0); T /= np.maximum(np.linalg.norm(T, axis=1), 1e-12)[:, None]
+        N = np.array([reproject(p)[1] for p in base])
+        N -= np.einsum('ij,ij->i', N, T)[:, None] * T
+        N /= np.maximum(np.linalg.norm(N, axis=1), 1e-12)[:, None]
+        B = np.cross(T, N)
+        D = _lp_closed(c, L, 0.004) - base
+        accB.append(np.abs(np.einsum('ij,ij->i', D, B)) * 1000)
+        accN.append(np.abs(np.einsum('ij,ij->i', D, N)) * 1000)
+    b = np.concatenate(accB); n_ = np.concatenate(accN)
+    P(f"  [{tag}] 可見線 {len(xl)} 環 {tot*100:.1f}cm ; 1.5~5cm 側向 p50 {np.percentile(b,50):.3f} "
+      f"p90 {np.percentile(b,90):.3f} p99 {np.percentile(b,99):.3f} | 法向 p90 {np.percentile(n_,90):.3f} mm")
+    return float(np.percentile(b, 90))
+
+if XFIT_ITERS > 0:
+    P(f"X) 可見交線整形：{XFIT_ITERS} 輪，σ{XFIT_SIGMA*1000:.0f}mm 衰減{XFIT_FALL*1000:.0f}mm 上限{XFIT_CAP*1000:.0f}mm")
+    gate0 = visible_gate(hmap, "before")
+    for _it in range(XFIT_ITERS):
+        xl = extract_visible_loops(hmap)
+        pts = []; dls = []
+        for c0 in xl:
+            c, L = _resample_1mm(c0)
+            d = _lp_closed(c, L, XFIT_SIGMA) - c
+            m_ = np.linalg.norm(d, axis=1); sc = np.minimum(1.0, XFIT_CAP / np.maximum(m_, 1e-12))
+            pts.append(c); dls.append(d * sc[:, None])
+        pts = np.vstack(pts); dls = np.vstack(dls)
+        kdx = KDTree(len(pts))
+        for i, p in enumerate(pts): kdx.insert(Vector(p), i)
+        kdx.balance()
+        # 位移先落到布緣、沿環 σ4mm 平滑，再散到內圈。
+        # 08-24 血價：讓每個頂點各自去找最近的可見線取樣點，對應關係在帶子變窄處會跳，
+        # 相鄰布緣頂點拿到不連續的位移 ⇒ 細長三角形 ⇒ ring0 二面角劣化 ⇒ **可見線上的
+        # 著色法線 p99 +41%、max ×3.8**（形狀變好但著色尾巴變糟）。位移場本身必須先平滑。
+        delta_c = {}
+        for l in loops:
+            raw = np.empty((len(l), 3))
+            for j, v in enumerate(l):
+                loc, i, dd = kdx.find(Vector(skin_co[int(v)])); raw[j] = dls[i]
+            c = np.array([skin_co[int(v)] for v in l])
+            seg = np.linalg.norm(np.roll(c, -1, 0) - c, axis=1)
+            s_ = np.concatenate([[0], np.cumsum(seg)])[:-1]; L_ = seg.sum()
+            for j, v in enumerate(l):
+                d = np.abs(s_ - s_[j]); d = np.minimum(d, L_ - d)
+                wg = np.exp(-0.5 * (d / 0.004) ** 2)
+                delta_c[int(v)] = (wg[:, None] * raw).sum(0) / wg.sum()
+        moved = []
+        for v in used:
+            v = int(v)
+            db = dist_b[v]
+            if db > XFIT_FALL: continue
+            t_ = db / XFIT_FALL; wgt = 1.0 - (t_ * t_ * (3 - 2 * t_))
+            dv = delta_c[nearest_c[v]] * wgt      # 測地對應（Dijkstra 已算），不是 KD 最近點
+            skin_co[v], skin_n[v] = reproject(skin_co[v] + dv)
+            moved.append(np.linalg.norm(dv) * 1000)
+        # 鄰圈鬆弛（同 A3 配方，輪廓固定）：搬完把三角形攤回去
+        for _r in range(XFIT_RELAX):
+            newp = {}
+            for v in relax:
+                nb = list(plate_adj[v]); m2 = np.mean([skin_co[u] for u in nb], axis=0)
+                newp[v] = skin_co[v] + 0.5 * (m2 - skin_co[v])
+            for v, p_ in newp.items(): skin_co[v], skin_n[v] = reproject(p_)
+        mvv = np.array(moved) if moved else np.zeros(1)
+        P(f"  round {_it+1}: 搬動 {len(moved)} 頂點 p50 {np.percentile(mvv,50):.3f} p90 {np.percentile(mvv,90):.3f} max {mvv.max():.3f} mm")
+        dist_b, nearest_c, width_c, hmap = compute_fields(verbose=False)
+        visible_gate(hmap, f"after r{_it+1}")
+    lift_n = build_lift_normals()          # 皮膚位置動過，抬升法線場要跟著重算
+    hs = np.array([hmap[int(v)] for v in used]) * 1000
+    P(f"X) 完成；arc height p50 {np.percentile(hs,50):.2f} max {hs.max():.2f} mm")
 
 # ---- E) 組裝：頂面 + 底面 + 邊界封牆 ----
 plate_v_idx = used
@@ -509,6 +662,15 @@ for fs in ef.values():
 for r_ in sorted(_by):
     d_ = np.array(_by[r_]); tag_ = "+" if r_ == 3 else ""
     P(f"GATE ring{r_}{tag_} dihedral p50 {np.percentile(d_,50):.2f} p90 {np.percentile(d_,90):.2f} p99 {np.percentile(d_,99):.2f} n>15deg {int((d_>15).sum())}")
+# 可見線＝玩家真正看到的那條（獨立儀器＝fundoshi_visible_edge.py）。
+# 這是**真契約不是印出來就算**：08-18~24 的血價一半來自「閘門量不到 user 看得到的量」。
+# 門檻＝回歸護欄（達成值 0.512mm ＋ 餘裕），不是設計目標；改構造導致它上升必須是自覺的決定。
+_vis_p90 = visible_gate(hmap, "GATE visible")
+VIS_P90_MAX = float(os.environ.get("ARC_VIS_P90_MAX", "0.60"))
+assert _vis_p90 is not None, "可見線抽不出來＝布沒有露出皮膚，構造壞了"
+assert _vis_p90 <= VIS_P90_MAX, (
+    f"可見線回歸：1.5~5cm 側向 p90 {_vis_p90:.3f}mm > 門檻 {VIS_P90_MAX}mm"
+    "（出貨前基準 0.674；要放寬請明示 ARC_VIS_P90_MAX）")
 P(f"FINAL verts={len(me2.vertices)} tris={len(me2.polygons)}")
 
 # ---- I) 衍生遮罩＝布覆蓋（接觸線內＝模糊場 ≥0.5）；骨盆區以外（元結帶）＝手繪原樣 ----
