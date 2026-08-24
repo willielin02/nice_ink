@@ -2667,7 +2667,11 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 
 	// 收筆裁決＝橢圓公式（07-29 單一裁判制；user 定案「嚴格最大橢圓」）：
 	// 擬合完成後「橢圓外⟺不能畫」——灰紗畫到哪、筆就在哪抬起，顯示與行為同一條
-	// 公式＝構造保證零縫；未擬合完（入鎖 ~0.5s 內）退回活解算 reach。
+	// 公式＝構造保證零縫；未擬合完退回活解算 reach。**實測（2026-08-25
+	// robo_veiltime，66fps）：入鎖→灰紗＝106~190ms／9~10 ticks**——此處原本寫
+	// 「~0.5s」是 07-29 的設計意圖從未量過，實際曾長達 21.6 秒（真因＝UV→世界
+	// 全掃 204k tris，已修為 UV 網格索引；全案＝SHIP_PLAN 追記80）。**改動採樣
+	// 格數／預算／tri-cache 規模都要重跑 robo_veiltime，別再讓這個數字自己過期。**
 	// 巡航（Liner 皮繩）沿用活 reach：機器工具自有導引/浮雕/速度契約機構。
 	{
 		bCursorDrawable = bDrawTipReachable;

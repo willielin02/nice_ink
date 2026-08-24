@@ -8,6 +8,11 @@
 #include "IOnlineSubsystemEOS.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Kismet/GameplayStatics.h"
+#include "EngineUtils.h"
+#include "InkBodyComponent.h"
+#include "InkCanvasComponent.h"
+#include "Materials/MaterialInstanceDynamic.h"
+#include "NiceInkCharacter.h"
 #include "NiceInkLocText.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSessionSubsystem.h"
@@ -187,6 +192,49 @@ void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)
 		}
 		return false; // 一次性
 	}), FMath::Max(0.1f, DelaySeconds));
+}
+
+void UNiceInkGameInstance::NiSpotMap(int32 On)
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	static UTexture2D* SpotTex = nullptr;
+	if (On != 0 && !SpotTex)
+	{
+		SpotTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/Characters/Debug/T_SpotMap.T_SpotMap"));
+		if (!SpotTex)
+		{
+			if (GEngine)
+			{
+				GEngine->AddOnScreenDebugMessage(9141, 8.0f, FColor::Red,
+					TEXT("NiSpotMap: T_SpotMap missing (跑 sumo_spot_bake_uv.py + ue_import_spotmap.py)"));
+			}
+			return;
+		}
+	}
+	int32 Applied = 0;
+	for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+	{
+		UInkBodyComponent* Ink = It->Body;
+		UMaterialInstanceDynamic* Mid = Ink ? Ink->GetDynamicMaterial() : nullptr;
+		if (!Mid)
+		{
+			continue;
+		}
+		// 麥克筆層是墨的載體：換掉它＝把普查圖當成「畫在身上的墨」，材質零改動。
+		UTexture* Restore = (It->InkCanvas && It->InkCanvas->GetMarkerRenderTarget())
+			? Cast<UTexture>(It->InkCanvas->GetMarkerRenderTarget()) : nullptr;
+		Mid->SetTextureParameterValue(TEXT("MarkerRT"), (On != 0) ? Cast<UTexture>(SpotTex) : Restore);
+		++Applied;
+	}
+	if (GEngine)
+	{
+		GEngine->AddOnScreenDebugMessage(9141, 6.0f, FColor::Cyan,
+			FString::Printf(TEXT("NiSpotMap %s -> %d characters"), (On != 0) ? TEXT("ON") : TEXT("OFF"), Applied));
+	}
 }
 
 FString UNiceInkGameInstance::GetEffectiveDisplayName() const

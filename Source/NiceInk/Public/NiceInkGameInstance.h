@@ -100,6 +100,14 @@ public:
 	UFUNCTION(Exec)
 	void NiShot(float DelaySeconds, const FString& Name);
 
+	// 斑普查疊圖（2026-08-24）：把 sumo_spot_census 烘出來的 UV0 圖當成麥克筆墨層
+	// 貼到每個人身上——**讓 user 的眼睛和儀器共用同一個座標系**。
+	// 用法：主控台 `NiSpotMap 1` 開、`NiSpotMap 0` 還原真墨層。
+	// 為什麼要這個：08-24 user 圈的兩點，離線儀器判定「乾淨」而他看得到 ⇒ 尺與眼睛不同步；
+	// 褌邊那六天的教訓＝先證明「我量的那條線＝他看的那條線」，再談修。
+	UFUNCTION(Exec)
+	void NiSpotMap(int32 On);
+
 	// 各輸入輪詢點共用的靈敏度倍率（鉗 0.2–3.0）
 	float GetMouseScale() const;
 

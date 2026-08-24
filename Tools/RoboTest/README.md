@@ -258,3 +258,30 @@
   （`bLeanLocked`→`lean_locked`、`bAsleep`→`asleep`、`bCeremonyEnabled`→`ceremony_enabled`）；
   元件沒有 `get_relative_rotation()`（走 `get_editor_property("relative_rotation")`）；
   逐 tick 輪流取樣多角色時**相鄰樣本永遠不同人**，差分類契約要先依 pid 分組。
+
+## 效能儀器（2026-08-25 新增）
+
+- `robo_veiltime.py`＝**入鎖→可畫域灰紗出現的耗時**（三段分解：UV 解算／可見性
+  trace／IK 可解性）＋每個鎖點的橢圓 A×B 與樣本分類計數。四個鎖點（肚頂／腹中／
+  低位／肚頂重鎖）。結果檔 `Saved/robo_veiltime_result.txt`。
+  **它同時是效能修的等價性驗收**：uvMiss/occl/feas/infeas/A/B 若與修前逐位相同，
+  才有資格說「只改了速度」（08-25 修 UV 全掃時就是這樣驗的）。
+  註：C++ 側的分段計時器是臨時碼、量完即拆——要再量請重新掛上（做法見 SHIP_PLAN
+  追記80），本腳本呼叫的 `DebugRoboVeilTiming` 鉤子同屬臨時碼。
+- `robo_tricount.py`＝**tri-cache 規模量測**（`DebugResolveBodyUV` 回報 `tris=`）
+  ＋世界→UV 單次牆鐘。任何「墨水解算變慢」的調查從這支開始：08-25 一跑就看到
+  **204,398 tris**（程式註解以為是 23k）。結果檔 `Saved/robo_tricount_result.txt`。
+- 低位鎖點（`LOCKS` 的 `low`）在現行舞台座標下 `DebugRoboEnterLean` 會回 False
+  ＝**探針常數還是舊舞台的**（08-18 搬到道場正中央後遺留，同 directdraw 的
+  far-reach ×4 既有失敗）。已記帳、未修。
+
+## 斑／凹洞調查儀器（2026-08-24；帳＝SHIP_PLAN 追記79）
+
+- `robo_skin_spots.py`／`robo_spotmap_check.py`／`robo_marklook.py`／`robo_maskab.py`
+  ＝引擎內定罪套件（假光 A/B、斑普查疊圖對位、標記視角、遮罩 A/B）。
+- 遊戲內疊圖＝主控台 `NiSpotMap 1`／`0`（GameInstance Exec）：把
+  `sumo_spot_census.py` 烘出的 UV0 普查圖當墨層貼上去——**讓 user 的眼睛與儀器
+  共用同一個座標系**（褌邊六天的教訓：先證明「我量的那條線＝他看的那條線」）。
+  需要 `/Game/Characters/Debug/T_SpotMap`（`sumo_spot_bake_uv.py` 產）。
+  **T_SpotMap 刻意不進 cook 白名單**（`Config/DefaultGame.ini`）＝打包版沒有它；
+  缺圖時 `NiSpotMap` 只印紅字提示、不當機——調查儀器不該進玩家的包。

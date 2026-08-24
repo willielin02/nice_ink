@@ -1,4 +1,4 @@
-#include "InkBodyComponent.h"
+﻿#include "InkBodyComponent.h"
 
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
@@ -690,6 +690,28 @@ bool UInkBodyComponent::ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWor
 		return false;
 	}
 
+	// UV→世界＝走 UV 網格索引（2026-08-25 效能修）。原本是 CachedTris 線性全掃，
+	// 而快取實測 **204,398 tris**（褌戰役細分後；程式裡「sumo 23k tris」是舊世界的
+	// 數字）＝單次 1.46ms ⇒ 可畫域 64² 採樣（3ms/tick 預算）要 **21.6 秒**才擬合得完
+	// （robo_veiltime 實測 21,833ms／1431 ticks；三段分解 resolve 5978ms＝98.8%）。
+	// 語義等價的理由（不是近似）：任何「含此 UV 點」的三角形，其 UV bbox 必定蓋到
+	// 該點所在的格 ⇒ 格內候選是全掃的超集；格內清單依 T 遞增插入 ⇒ 命中的是同一個
+	// 最小索引三角形；含點判準（±0.001 重心容差）兩邊逐字相同。
+	const int32 HitTri = FindTriAtUV(UV);
+	if (HitTri != INDEX_NONE && UVToWorldOnTri(HitTri, UV, OutWorldPosition))
+	{
+		const FCachedTri& Tri = CachedTris[HitTri];
+		const FVector LocalNormal = FVector::CrossProduct(Tri.B - Tri.A, Tri.C - Tri.A).GetSafeNormal();
+		OutNormal = GetComponentTransform().TransformVectorNoScale(LocalNormal).GetSafeNormal();
+		return true;
+	}
+	if (UvGridCells.Num() > 0)
+	{
+		return false; // 網格已建成＝「查無此點」是確定答案（別退回全掃：落在圖集
+		              // 空白的樣本正好是最貴的那一類——本例 4096 點裡有 1633 點）
+	}
+
+	// 保底：網格建不起來（BuildSeamData 失敗）才走全掃
 	for (const FCachedTri& Tri : CachedTris)
 	{
 		// UV 空間的重心座標（2D）
@@ -703,7 +725,9 @@ bool UInkBodyComponent::ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWor
 		const float D21 = FVector2D::DotProduct(V2, V1);
 		const float Denom = D00 * D11 - D01 * D01;
 		// 退化判定必須用相對尺度：高密度網格的 UV 三角形極小（Denom ~1e-9），
-		// 絕對容差 IsNearlyZero(1e-8) 會把整張圖集當退化跳過（sumo 23k tris 實測全滅）
+		// 絕對容差 IsNearlyZero(1e-8) 會把整張圖集當退化跳過（當年 sumo 23k tris 實測全滅；
+		// **2026-08-25 實測快取已達 204,398 tris**——褌戰役細分後的規模，UV 三角形更小、
+		// 相對尺度判定更是唯一正解）
 		if (Denom <= D00 * D11 * 1e-4f)
 		{
 			continue;

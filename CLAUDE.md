@@ -116,6 +116,13 @@ canvas 做不到毛玻璃半透明）**。
   ——射線/overlap 都會被場景結構騙，包圍盒不會。
 - **場地探針必須排除活體**：力士的 `Body` 擋 `ECC_Visibility` ⇒ 地板射線打到人頭（z≈140）、
   膠囊重疊撞到彼此 ⇒ 整條路徑假 blocked。量到的是玩家不是場地。
+- **註解裡的「規模常數」會過期，而且沒有東西在看著它**（2026-08-25 血價）：可畫域灰紗
+  的兩句註解——「入鎖 ~0.5s 內」（設計意圖、從未量過）與「sumo 23k tris 實測」（褌戰役
+  細分前的舊值，實際 204,398）——各自在寫下那天都是對的，之後被別的戰役悄悄推翻，
+  複利成 **43 倍**的謊（真值 21.6 秒）。**凡是把規模／耗時寫進註解，就要有活體儀器盯著**
+  （robo_veiltime／robo_tricount）。連帶兩條：**效能修的驗收＝輸出逐位相同**（分類計數與
+  擬合結果全等才叫「只改了速度」）；**先量分解再動手**（三段計時器一跑就知道 98.8% 在 UV
+  解算，省掉整輪對 trace／IK 的無效優化）。
 - **unity build 會把不同 .cpp 的匿名 namespace 併進同一個 TU**：新加的
   `SmoothStep01` 撞到 `NeckStretchComponent.cpp` 的同名匿名函式（C2084 主體已宣告）
   ——匿名 namespace 不保證隔離，取名要唯一。
@@ -238,7 +245,11 @@ canvas 做不到毛玻璃半透明）**。
   `InkCanvasComponent`（筆劃=真相、**三層 RT 快取**：線層 4096+Valve 銳化／霧層 4096
   軟半透明（銳化不咬）／刺青層；作者 ID/碳黑/雷射/洗掉；批次蓋章＋預烘 stipple 條帶＋
   縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
-  FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉）、
+  FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉；**tri-cache 實測 204,398 tris**（08-25 robo_tricount；褌戰役細分後，
+  程式舊註解「23k」已過期）⇒ **UV→世界走 UV 網格索引 `FindTriAtUV`**（08-25 修：原本線性
+  全掃＝單次 1.46ms，害可畫域灰紗要 21.6 秒才出現→現 0.11s；等價性＝候選超集＋最小索引
+  ＋同容差，驗收＝輸出逐位相同）；**世界→UV `ResolveBodyUV` 仍是全掃、傳 PreferNearUV 時
+  掃兩遍，而它在每一個筆劃點上（3.15ms/次）＝下一刀待裁**）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
   **`NiceInkBottle`＋入睡儀式（2026-08-16~18；帳本=Docs/OPENING_CEREMONY_PLAN.md）＝
   轉酒瓶→拾瓶→喝→醉倒的全程序化演出（user 兩條定案：①先抽後演——伺服器先均勻抽人、
