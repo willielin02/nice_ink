@@ -138,6 +138,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	FString DebugResolveBodyUV(const FVector& WorldPosition);
 
+	// 世界→UV 空間索引的等價性＋加速比量測（08-25 延遲戰役儀器；robo_uvgrid.py）。
+	// 樣本＝從 tri-cache 均勻抽三角形、重心外推 0.5mm＝作畫射線命中點的形狀；
+	// 兩條路走**同一個** ResolveBodyUVImpl，只差候選來源 ⇒ 比的就是候選來源本身。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	FString DebugUvGridBench(int32 NumSamples);
+
 	// 彎腰用骨骼身體要共用同一個 MID（同一組 RT／貼圖參數）
 	UMaterialInstanceDynamic* GetDynamicMaterial() const { return DynamicBodyMaterial; }
 
@@ -192,6 +198,34 @@ private:
 	TArray<FVector> WeldPos;      // 焊接頂點代表位置（本地空間）
 	TArray<int32> TriAdj;         // 三角形鄰接（tri*3+edge → 鄰 tri；INDEX_NONE=邊界）
 	bool bTriCacheBuilt = false;
+
+	// --- 世界→UV 空間索引（2026-08-25 延遲戰役；追記80 §5 的「下一刀」）---
+	// 病根：`ResolveBodyUV` 是 204,398 三角形的線性全掃，而它掛在**每一個筆劃點**上
+	//（傳 PreferNearUV 的正常作畫路徑掃兩遍）＝單針 3~6ms。成本正比於「每秒畫多長」
+	// 而非幀率 ⇒ 手一快就整條鏈拖垮（作畫延遲的乘數）。
+	// 解＝本地空間均勻網格（CSR）。等價性是**構造保證**不是近似：三角形登記在自己
+	// AABB 蓋到的每一格 ⇒ 某格盒沒登記到的三角形必整個落在該格盒外 ⇒ 距離下界成立；
+	// 平手規則沿用全掃的「最小索引勝」⇒ 輸出逐位相同（追記80 的驗收形式）。
+	bool bPosGridBuilt = false;
+	FVector PosGridMin = FVector::ZeroVector;   // 本地空間格網原點
+	FVector PosGridMax = FVector::ZeroVector;
+	float PosGridCell = 2.0f;                   // 格邊長（本地單位＝cm）
+	int32 PosGridDim[3] = { 0, 0, 0 };
+	TArray<int32> PosGridStart;                 // CSR 起點（Nx*Ny*Nz + 1）
+	TArray<int32> PosGridItems;                 // CSR 內容（tri 索引）
+	bool BuildPosGrid();
+	// 最近三角形（等價於線性全掃：同最小 DistSq、平手取最小索引）。
+	// 回傳 tri 索引；OutDistSq=最近距離平方（本地單位）；找不到=INDEX_NONE。
+	// MaxDistance 只用來提早放棄，語義與全掃版的「太遠視為無效」完全一致。
+	int32 FindClosestTriLocal(const FVector& Local, float MaxDistance,
+		FVector& OutClosest, float& OutDistSq) const;
+	// 線性全掃（舊路徑原文）：網格的等價性對照組，同時是殼展開超預算時的保底。
+	int32 ClosestTriLinear(const FVector& Local, FVector& OutClosest, float& OutDistSq) const;
+	// 兩條路共用的本體：只有「候選從哪來」不同（bUseGrid），挑選規則一字不分岔。
+	bool ResolveBodyUVImpl(const FVector& Local, float MaxDistance,
+		const FVector2D* PreferNearUV, bool bUseGrid, FVector2D& OutUV) const;
+	// 半徑內候選三角形（**升序索引**輸出＝重現全掃的走訪順序，縫區遲滯用）
+	void GatherTrisNearLocal(const FVector& Local, float Radius, TArray<int32>& OutTris) const;
 
 	// 縫資料（lazy；換網格失效）：每 tri 近縫旗標＋UV 網格索引
 	bool bSeamDataBuilt = false;

@@ -103,6 +103,9 @@ void UInkBodyComponent::SwapBodyMesh(UStaticMesh* NewMesh)
 	bSeamDataBuilt = false;
 	TriNearSeam.Reset();
 	UvGridCells.Reset();
+	bPosGridBuilt = false;
+	PosGridStart.Reset();
+	PosGridItems.Reset();
 	// SetStaticMesh 會重設材質槽為新網格預設——把 MID 綁回去
 	if (DynamicBodyMaterial)
 	{
@@ -136,6 +139,9 @@ bool UInkBodyComponent::BuildTriCache()
 	WeldPos.Reset();
 	TriAdj.Reset();
 	bTriCacheBuilt = false;
+	bPosGridBuilt = false;
+	PosGridStart.Reset();
+	PosGridItems.Reset();
 
 	UStaticMesh* SM = GetStaticMesh();
 	if (!SM || !SM->GetRenderData() || SM->GetRenderData()->LODResources.Num() == 0)
@@ -260,6 +266,285 @@ bool UInkBodyComponent::BuildTriCache()
 
 	bTriCacheBuilt = CachedTris.Num() > 0;
 	return bTriCacheBuilt;
+}
+
+// --- 世界→UV 空間索引（2026-08-25 延遲戰役；追記80 §5 兌現）---------------------
+// 舊路徑＝204,398 三角形線性全掃，掛在**每一個筆劃點**上（縫區遲滯再掃第二遍）。
+// 這裡建一張本地空間均勻網格（CSR），把「最近三角形」從 O(N) 變成 O(鄰格)。
+// **等價性是構造保證**：三角形登記進自己 AABB 蓋到的每一格 ⇒ 若某三角形沒登記在
+// 格盒 B 的任何一格，它的 AABB 就不與 B 相交 ⇒ 整個三角形落在 B 外 ⇒ 距離下界
+// ＝查詢點到 B 邊界的距離。掃完殼 R 就拿到這個下界，下界 ≥ 目前最佳 ⇒ 可以收工。
+// 平手規則沿用全掃的「嚴格 < ⇒ 最小索引勝」⇒ **輸出逐位相同**（追記80 唯一認可的
+// 效能驗收形式；活體對照＝DebugResolveBodyUV 同時跑兩條路並印 match）。
+bool UInkBodyComponent::BuildPosGrid()
+{
+	PosGridStart.Reset();
+	PosGridItems.Reset();
+	PosGridDim[0] = PosGridDim[1] = PosGridDim[2] = 0;
+	bPosGridBuilt = false;
+
+	const int32 NumTris = CachedTris.Num();
+	if (NumTris <= 0)
+	{
+		return false;
+	}
+
+	FVector Mn(TNumericLimits<double>::Max());
+	FVector Mx(-TNumericLimits<double>::Max());
+	for (const FCachedTri& Tri : CachedTris)
+	{
+		Mn = Mn.ComponentMin(Tri.A).ComponentMin(Tri.B).ComponentMin(Tri.C);
+		Mx = Mx.ComponentMax(Tri.A).ComponentMax(Tri.B).ComponentMax(Tri.C);
+	}
+	const FVector Ext = (Mx - Mn).ComponentMax(FVector(0.01));
+
+	// 格邊長 2cm 起跳（皮膚三角形邊長 ~0.16cm ⇒ 幾乎每個三角形只落一格）；
+	// 格數上限 1M＝4MB 索引（tri-cache 本身就 40MB 級，這點記憶體不是問題），
+	// 超過就把格子放大——只影響速度不影響答案。
+	constexpr int64 MaxCells = 1000000;
+	float Cell = 2.0f;
+	for (int32 Guard = 0; Guard < 24; ++Guard)
+	{
+		int64 D[3];
+		for (int32 A = 0; A < 3; ++A)
+		{
+			D[A] = FMath::Max<int64>(1, static_cast<int64>(FMath::CeilToDouble(Ext[A] / Cell)));
+		}
+		if (D[0] * D[1] * D[2] <= MaxCells)
+		{
+			PosGridDim[0] = static_cast<int32>(D[0]);
+			PosGridDim[1] = static_cast<int32>(D[1]);
+			PosGridDim[2] = static_cast<int32>(D[2]);
+			break;
+		}
+		Cell *= 1.5f;
+	}
+	if (PosGridDim[0] <= 0)
+	{
+		return false; // 保底：建不起來就走全掃（語義不變）
+	}
+	PosGridCell = Cell;
+	PosGridMin = Mn;
+	PosGridMax = Mx;
+
+	const int32 NumCells = PosGridDim[0] * PosGridDim[1] * PosGridDim[2];
+	PosGridStart.SetNumZeroed(NumCells + 1);
+
+	// 兩趟 CSR：①數每格幾個 ②前綴和 ③照 T 遞增填入（格內清單自然遞增）
+	auto CellRange = [this](const FCachedTri& Tri, int32 Lo[3], int32 Hi[3])
+	{
+		const FVector TMn = Tri.A.ComponentMin(Tri.B).ComponentMin(Tri.C);
+		const FVector TMx = Tri.A.ComponentMax(Tri.B).ComponentMax(Tri.C);
+		for (int32 A = 0; A < 3; ++A)
+		{
+			const int32 L = static_cast<int32>(FMath::FloorToDouble((TMn[A] - PosGridMin[A]) / PosGridCell));
+			const int32 H = static_cast<int32>(FMath::FloorToDouble((TMx[A] - PosGridMin[A]) / PosGridCell));
+			Lo[A] = FMath::Clamp(L, 0, PosGridDim[A] - 1);
+			Hi[A] = FMath::Clamp(H, 0, PosGridDim[A] - 1);
+		}
+	};
+
+	for (int32 T = 0; T < NumTris; ++T)
+	{
+		int32 Lo[3], Hi[3];
+		CellRange(CachedTris[T], Lo, Hi);
+		for (int32 Z = Lo[2]; Z <= Hi[2]; ++Z)
+		{
+			for (int32 Y = Lo[1]; Y <= Hi[1]; ++Y)
+			{
+				const int32 Row = (Z * PosGridDim[1] + Y) * PosGridDim[0];
+				for (int32 X = Lo[0]; X <= Hi[0]; ++X)
+				{
+					++PosGridStart[Row + X + 1];
+				}
+			}
+		}
+	}
+	for (int32 C = 0; C < NumCells; ++C)
+	{
+		PosGridStart[C + 1] += PosGridStart[C];
+	}
+	PosGridItems.SetNumUninitialized(PosGridStart[NumCells]);
+	TArray<int32> Cursor(PosGridStart);
+	for (int32 T = 0; T < NumTris; ++T)
+	{
+		int32 Lo[3], Hi[3];
+		CellRange(CachedTris[T], Lo, Hi);
+		for (int32 Z = Lo[2]; Z <= Hi[2]; ++Z)
+		{
+			for (int32 Y = Lo[1]; Y <= Hi[1]; ++Y)
+			{
+				const int32 Row = (Z * PosGridDim[1] + Y) * PosGridDim[0];
+				for (int32 X = Lo[0]; X <= Hi[0]; ++X)
+				{
+					PosGridItems[Cursor[Row + X]++] = T;
+				}
+			}
+		}
+	}
+
+	bPosGridBuilt = true;
+	return true;
+}
+
+int32 UInkBodyComponent::FindClosestTriLocal(const FVector& Local, float MaxDistance,
+	FVector& OutClosest, float& OutDistSq) const
+{
+	OutDistSq = TNumericLimits<float>::Max();
+	int32 BestTri = INDEX_NONE;
+	if (!bPosGridBuilt)
+	{
+		return INDEX_NONE;
+	}
+
+	// 查詢點離整張網格的 AABB 就已經超出容許值 ⇒ 任何三角形都不可能在範圍內
+	//（三角形全在 AABB 內＝距離下界）。全掃版在這種情況同樣回失敗＝語義一致。
+	{
+		const FVector Cl(
+			FMath::Clamp(Local.X, PosGridMin.X, PosGridMax.X),
+			FMath::Clamp(Local.Y, PosGridMin.Y, PosGridMax.Y),
+			FMath::Clamp(Local.Z, PosGridMin.Z, PosGridMax.Z));
+		if (FVector::DistSquared(Cl, Local) > static_cast<double>(MaxDistance) * MaxDistance)
+		{
+			return INDEX_NONE;
+		}
+	}
+
+	int32 C[3];
+	for (int32 A = 0; A < 3; ++A)
+	{
+		const int32 I = static_cast<int32>(FMath::FloorToDouble((Local[A] - PosGridMin[A]) / PosGridCell));
+		C[A] = FMath::Clamp(I, 0, PosGridDim[A] - 1);
+	}
+
+	// 預算保底（08-25 首次量測抓到的坑）：查詢點遠離網格、且 MaxDistance 又很寬時，
+	// 殼展開要走過大量**空格**才建立得起距離下界——實測 1e6 容差的遠距查詢會走完
+	// 45 萬格＝17.9ms，比全掃的 3.5ms 還慢 5 倍。所以給殼展開一個格數預算，超過
+	// 就退回線性全掃：**保證永不比舊路徑慢**，而答案本來就相同（同一個平手規則）。
+	// 正常作畫（容差 0.15cm）根本碰不到這條——AABB 早退或 R≤1 就收工。
+	const int32 CellBudget = FMath::Max(4096, CachedTris.Num() / 8);
+	int32 CellsVisited = 0;
+
+	auto TestCell = [&](int32 X, int32 Y, int32 Z)
+	{
+		++CellsVisited;
+		const int32 Idx = (Z * PosGridDim[1] + Y) * PosGridDim[0] + X;
+		const int32 End = PosGridStart[Idx + 1];
+		for (int32 I = PosGridStart[Idx]; I < End; ++I)
+		{
+			const int32 T = PosGridItems[I];
+			const FCachedTri& Tri = CachedTris[T];
+			const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+			const float DistSq = FVector::DistSquared(Closest, Local);
+			// 平手取最小索引＝重現線性全掃的「嚴格 < 保留先到者」
+			if (BestTri == INDEX_NONE || DistSq < OutDistSq || (DistSq == OutDistSq && T < BestTri))
+			{
+				OutDistSq = DistSq;
+				BestTri = T;
+				OutClosest = Closest;
+			}
+		}
+	};
+
+	const int32 MaxR = FMath::Max3(PosGridDim[0], PosGridDim[1], PosGridDim[2]);
+	for (int32 R = 0; R <= MaxR; ++R)
+	{
+		if (CellsVisited > CellBudget)
+		{
+			return ClosestTriLinear(Local, OutClosest, OutDistSq);
+		}
+		// Chebyshev 殼 R：只走殼面，不重掃內部（遠距失敗案例才不會退化成 O(R^4)）
+		const int32 Z0 = C[2] - R, Z1 = C[2] + R;
+		const int32 Y0 = C[1] - R, Y1 = C[1] + R;
+		const int32 X0 = C[0] - R, X1 = C[0] + R;
+		for (int32 Z = FMath::Max(Z0, 0); Z <= FMath::Min(Z1, PosGridDim[2] - 1); ++Z)
+		{
+			const bool bZCap = (Z == Z0 || Z == Z1);
+			for (int32 Y = FMath::Max(Y0, 0); Y <= FMath::Min(Y1, PosGridDim[1] - 1); ++Y)
+			{
+				const bool bYCap = (Y == Y0 || Y == Y1);
+				if (bZCap || bYCap)
+				{
+					for (int32 X = FMath::Max(X0, 0); X <= FMath::Min(X1, PosGridDim[0] - 1); ++X)
+					{
+						TestCell(X, Y, Z);
+					}
+				}
+				else
+				{
+					if (X0 >= 0) { TestCell(X0, Y, Z); }
+					if (X1 <= PosGridDim[0] - 1 && X1 != X0) { TestCell(X1, Y, Z); }
+				}
+			}
+		}
+
+		// 掃完的區域＝格盒 [C-R, C+R]。未掃到的三角形整個落在盒外 ⇒ 其距離
+		// ≥ 查詢點到盒面的最短距離＝下界 D。
+		double D = TNumericLimits<double>::Max();
+		for (int32 A = 0; A < 3; ++A)
+		{
+			const double Lo = PosGridMin[A] + static_cast<double>(C[A] - R) * PosGridCell;
+			const double Hi = PosGridMin[A] + static_cast<double>(C[A] + R + 1) * PosGridCell;
+			D = FMath::Min(D, FMath::Min(Local[A] - Lo, Hi - Local[A]));
+		}
+		D = FMath::Max(D, 0.0);
+
+		if (BestTri != INDEX_NONE && static_cast<double>(OutDistSq) <= D * D)
+		{
+			break; // 下界已超過目前最佳＝目前最佳就是全域最佳
+		}
+		if (D > static_cast<double>(MaxDistance) &&
+			(BestTri == INDEX_NONE || static_cast<double>(OutDistSq) > static_cast<double>(MaxDistance) * MaxDistance))
+		{
+			return INDEX_NONE; // 容許範圍內確定沒有（呼叫端本來也會判失敗）
+		}
+		if (X0 <= 0 && Y0 <= 0 && Z0 <= 0 &&
+			X1 >= PosGridDim[0] - 1 && Y1 >= PosGridDim[1] - 1 && Z1 >= PosGridDim[2] - 1)
+		{
+			break; // 盒已涵蓋整張網格＝等同全掃
+		}
+	}
+	return BestTri;
+}
+
+void UInkBodyComponent::GatherTrisNearLocal(const FVector& Local, float Radius, TArray<int32>& OutTris) const
+{
+	OutTris.Reset();
+	if (!bPosGridBuilt || Radius < 0.0f)
+	{
+		return;
+	}
+	int32 Lo[3], Hi[3];
+	for (int32 A = 0; A < 3; ++A)
+	{
+		const int32 L = static_cast<int32>(FMath::FloorToDouble((Local[A] - Radius - PosGridMin[A]) / PosGridCell));
+		const int32 H = static_cast<int32>(FMath::FloorToDouble((Local[A] + Radius - PosGridMin[A]) / PosGridCell));
+		if (H < 0 || L > PosGridDim[A] - 1)
+		{
+			return; // 整個查詢盒在網格外
+		}
+		Lo[A] = FMath::Clamp(L, 0, PosGridDim[A] - 1);
+		Hi[A] = FMath::Clamp(H, 0, PosGridDim[A] - 1);
+	}
+	for (int32 Z = Lo[2]; Z <= Hi[2]; ++Z)
+	{
+		for (int32 Y = Lo[1]; Y <= Hi[1]; ++Y)
+		{
+			const int32 Row = (Z * PosGridDim[1] + Y) * PosGridDim[0];
+			for (int32 X = Lo[0]; X <= Hi[0]; ++X)
+			{
+				const int32 Idx = Row + X;
+				const int32 End = PosGridStart[Idx + 1];
+				for (int32 I = PosGridStart[Idx]; I < End; ++I)
+				{
+					OutTris.Add(PosGridItems[I]);
+				}
+			}
+		}
+	}
+	// 升序＝重現全掃的走訪順序（遲滯挑選用嚴格 <，順序決定平手歸屬）；
+	// 同一 tri 跨格重複由呼叫端跳過（排序後必相鄰）
+	OutTris.Sort();
 }
 
 bool UInkBodyComponent::BuildSeamData()
@@ -436,20 +721,33 @@ bool UInkBodyComponent::BuildSurfacePatch(const FVector& WorldCenter, float Radi
 	}
 
 	// --- 種子三角形＝離世界點最近的皮膚三角形 ---
+	// 08-25：同樣走空間索引（追記80 §5 點名的第二個 204k 全掃；縫區排針逐排都在付）。
+	// 平手規則與全掃相同（最小索引勝）⇒ 種子逐位相同 ⇒ 補丁展開結果不變。
 	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldCenter);
+	if (!bPosGridBuilt)
+	{
+		BuildPosGrid();
+	}
 	int32 Seed = INDEX_NONE;
 	FVector SeedPoint = FVector::ZeroVector;
 	float BestDistSq = TNumericLimits<float>::Max();
-	for (int32 T = 0; T < CachedTris.Num(); ++T)
+	if (bPosGridBuilt)
 	{
-		const FCachedTri& Tri = CachedTris[T];
-		const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
-		const float DistSq = FVector::DistSquared(Closest, Local);
-		if (DistSq < BestDistSq)
+		Seed = FindClosestTriLocal(Local, MaxSeedDistance, SeedPoint, BestDistSq);
+	}
+	else
+	{
+		for (int32 T = 0; T < CachedTris.Num(); ++T)
 		{
-			BestDistSq = DistSq;
-			Seed = T;
-			SeedPoint = Closest;
+			const FCachedTri& Tri = CachedTris[T];
+			const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+			const float DistSq = FVector::DistSquared(Closest, Local);
+			if (DistSq < BestDistSq)
+			{
+				BestDistSq = DistSq;
+				Seed = T;
+				SeedPoint = Closest;
+			}
 		}
 	}
 	if (Seed == INDEX_NONE || BestDistSq > FMath::Square(MaxSeedDistance))
@@ -750,8 +1048,14 @@ bool UInkBodyComponent::ResolveUVToWorldWithNormal(FVector2D UV, FVector& OutWor
 
 FString UInkBodyComponent::DebugResolveBodyUV(const FVector& WorldPosition)
 {
+	// 08-25 起這支同時是**等價性儀器**：一次呼叫跑兩條路（全掃參考 vs 空間索引），
+	// 印出兩邊的 UV／最近距離與 match 旗標＋各自牆鐘。效能修的唯一驗收形式是
+	// 「輸出逐位相同」（追記80 鐵則），所以對照組永遠留在程式裡、不准拆。
 	const bool bCache = bTriCacheBuilt || BuildTriCache();
 	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldPosition);
+
+	// ① 全掃參考（舊路徑原文）
+	const double T0 = FPlatformTime::Seconds();
 	float BestDistSq = TNumericLimits<float>::Max();
 	FVector2D BestUV = FVector2D::ZeroVector;
 	for (const FCachedTri& Tri : CachedTris)
@@ -765,11 +1069,40 @@ FString UInkBodyComponent::DebugResolveBodyUV(const FVector& WorldPosition)
 			BestUV = Tri.UVA * Bary.X + Tri.UVB * Bary.Y + Tri.UVC * Bary.Z;
 		}
 	}
+	const double T1 = FPlatformTime::Seconds();
+
+	// ② 空間索引路徑（建置成本另計，不算進查詢牆鐘）
+	if (!bPosGridBuilt)
+	{
+		BuildPosGrid();
+	}
+	const double T2 = FPlatformTime::Seconds();
+	FVector GClosest = FVector::ZeroVector;
+	float GDistSq = TNumericLimits<float>::Max();
+	const int32 GTri = FindClosestTriLocal(Local, 1.0e6f, GClosest, GDistSq);
+	FVector2D GUV = FVector2D::ZeroVector;
+	if (GTri != INDEX_NONE)
+	{
+		const FCachedTri& Tri = CachedTris[GTri];
+		const FVector Bary = FMath::ComputeBaryCentric2D(GClosest, Tri.A, Tri.B, Tri.C);
+		GUV = Tri.UVA * Bary.X + Tri.UVB * Bary.Y + Tri.UVC * Bary.Z;
+	}
+	const double T3 = FPlatformTime::Seconds();
+
+	const bool bMatch = (GTri != INDEX_NONE) && (GDistSq == BestDistSq) &&
+		(GUV.X == BestUV.X) && (GUV.Y == BestUV.Y);
+
 	UStaticMesh* SM = GetStaticMesh();
 	const int32 NumLods = (SM && SM->GetRenderData()) ? SM->GetRenderData()->LODResources.Num() : -1;
-	return FString::Printf(TEXT("cache=%d tris=%d lods=%d local=(%.1f,%.1f,%.1f) bestDist=%.2f uv=(%.4f,%.4f)"),
+	return FString::Printf(
+		TEXT("cache=%d tris=%d lods=%d local=(%.1f,%.1f,%.1f) bestDist=%.2f uv=(%.4f,%.4f) ")
+		TEXT("gridUv=(%.4f,%.4f) gridDist=%.2f match=%d scanMs=%.3f gridMs=%.3f buildMs=%.1f ")
+		TEXT("cells=%dx%dx%d cell=%.2f items=%d"),
 		bCache ? 1 : 0, CachedTris.Num(), NumLods, Local.X, Local.Y, Local.Z,
-		CachedTris.Num() > 0 ? FMath::Sqrt(BestDistSq) : -1.0f, BestUV.X, BestUV.Y);
+		CachedTris.Num() > 0 ? FMath::Sqrt(BestDistSq) : -1.0f, BestUV.X, BestUV.Y,
+		GUV.X, GUV.Y, GTri != INDEX_NONE ? FMath::Sqrt(GDistSq) : -1.0f, bMatch ? 1 : 0,
+		(T1 - T0) * 1000.0, (T3 - T2) * 1000.0, (T2 - T1) * 1000.0,
+		PosGridDim[0], PosGridDim[1], PosGridDim[2], PosGridCell, PosGridItems.Num());
 }
 
 bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance)
@@ -777,29 +1110,42 @@ bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& O
 	return ResolveBodyUV(WorldPosition, OutUV, MaxDistance, nullptr);
 }
 
-bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance,
-	const FVector2D* PreferNearUV)
+int32 UInkBodyComponent::ClosestTriLinear(const FVector& Local, FVector& OutClosest, float& OutDistSq) const
 {
-	if (!bTriCacheBuilt && !BuildTriCache())
+	// 舊路徑原文（含平手規則「嚴格 < ⇒ 最小索引勝」）——等價性對照組＋保底。
+	OutDistSq = TNumericLimits<float>::Max();
+	int32 BestTri = INDEX_NONE;
+	for (int32 T = 0; T < CachedTris.Num(); ++T)
 	{
-		return false;
-	}
-
-	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldPosition);
-
-	float BestDistSq = TNumericLimits<float>::Max();
-	FVector2D BestUV = FVector2D::ZeroVector;
-	for (const FCachedTri& Tri : CachedTris)
-	{
+		const FCachedTri& Tri = CachedTris[T];
 		const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
 		const float DistSq = FVector::DistSquared(Closest, Local);
-		if (DistSq < BestDistSq)
+		if (DistSq < OutDistSq)
 		{
-			BestDistSq = DistSq;
-			const FVector Bary = FMath::ComputeBaryCentric2D(Closest, Tri.A, Tri.B, Tri.C);
-			BestUV = Tri.UVA * Bary.X + Tri.UVB * Bary.Y + Tri.UVC * Bary.Z;
+			OutDistSq = DistSq;
+			BestTri = T;
+			OutClosest = Closest;
 		}
 	}
+	return BestTri;
+}
+
+bool UInkBodyComponent::ResolveBodyUVImpl(const FVector& Local, float MaxDistance,
+	const FVector2D* PreferNearUV, bool bUseGrid, FVector2D& OutUV) const
+{
+	// 兩條路的**唯一**差別＝候選從哪來（網格 vs 全掃）；挑選規則以下一字不分岔。
+	float BestDistSq = TNumericLimits<float>::Max();
+	FVector Closest = FVector::ZeroVector;
+	const int32 BestTri = bUseGrid
+		? FindClosestTriLocal(Local, MaxDistance, Closest, BestDistSq)
+		: ClosestTriLinear(Local, Closest, BestDistSq);
+	if (BestTri == INDEX_NONE)
+	{
+		return false; // 網格路徑：容許範圍內確定沒有；全掃路徑：空網格
+	}
+	const FCachedTri& BTri = CachedTris[BestTri];
+	const FVector BBary = FMath::ComputeBaryCentric2D(Closest, BTri.A, BTri.B, BTri.C);
+	FVector2D BestUV = BTri.UVA * BBary.X + BTri.UVB * BBary.Y + BTri.UVC * BBary.Z;
 
 	// 命中點離網格太遠視為無效——通常代表打到別的東西
 	if (BestDistSq > FMath::Square(MaxDistance))
@@ -811,18 +1157,21 @@ bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& O
 	// 縫上兩島的浮點搶點被上一點錨死。帶寬鐵則：只准蓋浮點平手（縫上兩側真等距），
 	// 5mm 帶會把平滑區的相鄰三角形全捲進來＝解算黏滑（stick-slip）＝每條筆跡
 	// 高頻方波鋸齒（07-20 viewport 實錘、二改 0.5mm）。
+	// 08-25：候選集可由空間索引提供（升序索引＝重現全掃走訪順序），規則未動。
 	if (PreferNearUV)
 	{
-		const float SlackSq = FMath::Square(FMath::Sqrt(BestDistSq) + 0.05f);
+		const float Slack = FMath::Sqrt(BestDistSq) + 0.05f;
+		const float SlackSq = FMath::Square(Slack);
 		float BestUvDistSq = FVector2D::DistSquared(BestUV, *PreferNearUV);
-		for (const FCachedTri& Tri : CachedTris)
+		auto Consider = [&](int32 T)
 		{
-			const FVector Closest = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
-			if (FVector::DistSquared(Closest, Local) > SlackSq)
+			const FCachedTri& Tri = CachedTris[T];
+			const FVector Cl = FMath::ClosestPointOnTriangleToPoint(Local, Tri.A, Tri.B, Tri.C);
+			if (FVector::DistSquared(Cl, Local) > SlackSq)
 			{
-				continue;
+				return;
 			}
-			const FVector Bary = FMath::ComputeBaryCentric2D(Closest, Tri.A, Tri.B, Tri.C);
+			const FVector Bary = FMath::ComputeBaryCentric2D(Cl, Tri.A, Tri.B, Tri.C);
 			const FVector2D UV = Tri.UVA * Bary.X + Tri.UVB * Bary.Y + Tri.UVC * Bary.Z;
 			const float UvDistSq = FVector2D::DistSquared(UV, *PreferNearUV);
 			if (UvDistSq < BestUvDistSq)
@@ -830,9 +1179,141 @@ bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& O
 				BestUvDistSq = UvDistSq;
 				BestUV = UV;
 			}
+		};
+		if (bUseGrid)
+		{
+			TArray<int32> Near;
+			Near.Reserve(64);
+			GatherTrisNearLocal(Local, Slack, Near);
+			int32 Prev = INDEX_NONE;
+			for (const int32 T : Near)
+			{
+				if (T == Prev)
+				{
+					continue; // 排序後相鄰的跨格重複（重複無害，跳過純為省算）
+				}
+				Prev = T;
+				Consider(T);
+			}
+		}
+		else
+		{
+			for (int32 T = 0; T < CachedTris.Num(); ++T)
+			{
+				Consider(T);
+			}
 		}
 	}
 
 	OutUV = BestUV;
 	return true;
+}
+
+bool UInkBodyComponent::ResolveBodyUV(const FVector& WorldPosition, FVector2D& OutUV, float MaxDistance,
+	const FVector2D* PreferNearUV)
+{
+	if (!bTriCacheBuilt && !BuildTriCache())
+	{
+		return false;
+	}
+	if (!bPosGridBuilt)
+	{
+		BuildPosGrid(); // 一次性建置；建不起來就保底走全掃（答案不變、只是慢）
+	}
+	const FVector Local = GetComponentTransform().InverseTransformPosition(WorldPosition);
+	return ResolveBodyUVImpl(Local, MaxDistance, PreferNearUV, bPosGridBuilt, OutUV);
+}
+
+FString UInkBodyComponent::DebugUvGridBench(int32 NumSamples)
+{
+	// 樣本＝tri-cache 均勻抽樣、重心沿面法線外推 0.5mm ＝ 作畫時射線命中點的形狀
+	//（`ResolveAimToTargetUV` 容差 0.15cm、且恆帶 PreferNearUV＝縫區遲滯）。
+	if (!bTriCacheBuilt && !BuildTriCache())
+	{
+		return TEXT("bench: no tri cache");
+	}
+	const double B0 = FPlatformTime::Seconds();
+	if (!bPosGridBuilt)
+	{
+		BuildPosGrid();
+	}
+	const double BuildMs = (FPlatformTime::Seconds() - B0) * 1000.0;
+	if (!bPosGridBuilt)
+	{
+		return TEXT("bench: grid build failed");
+	}
+
+	const int32 N = FMath::Clamp(NumSamples, 1, 20000);
+	TArray<FVector> Pts;
+	TArray<FVector2D> Prevs;
+	Pts.Reserve(N);
+	Prevs.Reserve(N);
+	const int32 Step = FMath::Max(1, CachedTris.Num() / N);
+	for (int32 T = 0; T < CachedTris.Num() && Pts.Num() < N; T += Step)
+	{
+		const FCachedTri& Tri = CachedTris[T];
+		const FVector Cen = (Tri.A + Tri.B + Tri.C) / 3.0;
+		const FVector Nrm = FVector::CrossProduct(Tri.B - Tri.A, Tri.C - Tri.A).GetSafeNormal();
+		Pts.Add(Cen + Nrm * 0.05);                                  // 本地空間，直接餵 Impl
+		Prevs.Add((Tri.UVA + Tri.UVB + Tri.UVC) / 3.0f);            // 上一點 UV 的替身
+	}
+
+	// 兩條路各跑一輪；逐點比對回傳值與 UV（逐位）
+	TArray<FVector2D> RefUV, GridUV;
+	TArray<uint8> RefOk, GridOk;
+	RefUV.SetNum(Pts.Num()); GridUV.SetNum(Pts.Num());
+	RefOk.SetNum(Pts.Num()); GridOk.SetNum(Pts.Num());
+
+	const double R0 = FPlatformTime::Seconds();
+	for (int32 I = 0; I < Pts.Num(); ++I)
+	{
+		FVector2D UV = FVector2D::ZeroVector;
+		RefOk[I] = ResolveBodyUVImpl(Pts[I], 0.15f, &Prevs[I], /*bUseGrid=*/false, UV) ? 1 : 0;
+		RefUV[I] = UV;
+	}
+	const double R1 = FPlatformTime::Seconds();
+	for (int32 I = 0; I < Pts.Num(); ++I)
+	{
+		FVector2D UV = FVector2D::ZeroVector;
+		GridOk[I] = ResolveBodyUVImpl(Pts[I], 0.15f, &Prevs[I], /*bUseGrid=*/true, UV) ? 1 : 0;
+		GridUV[I] = UV;
+	}
+	const double R2 = FPlatformTime::Seconds();
+
+	int32 Mismatch = 0;
+	int32 Hits = 0;
+	for (int32 I = 0; I < Pts.Num(); ++I)
+	{
+		if (RefOk[I]) { ++Hits; }
+		const bool bSame = (RefOk[I] == GridOk[I]) &&
+			(!RefOk[I] || (RefUV[I].X == GridUV[I].X && RefUV[I].Y == GridUV[I].Y));
+		if (!bSame) { ++Mismatch; }
+	}
+
+	// 遠距（打空）樣本：舊路徑照樣全掃 204k，新路徑靠 AABB／MaxDistance 早退
+	TArray<FVector> Far;
+	const FVector Mid = (PosGridMin + PosGridMax) * 0.5;
+	const FVector Ext = (PosGridMax - PosGridMin);
+	for (int32 I = 0; I < 64; ++I)
+	{
+		const double A = 2.0 * PI * I / 64.0;
+		Far.Add(Mid + FVector(FMath::Cos(A), FMath::Sin(A), 0.0) * (Ext.Size() * 0.75));
+	}
+	const double F0 = FPlatformTime::Seconds();
+	for (const FVector& P : Far) { FVector2D UV; ResolveBodyUVImpl(P, 0.15f, nullptr, false, UV); }
+	const double F1 = FPlatformTime::Seconds();
+	for (const FVector& P : Far) { FVector2D UV; ResolveBodyUVImpl(P, 0.15f, nullptr, true, UV); }
+	const double F2 = FPlatformTime::Seconds();
+
+	const double RefMs = (R1 - R0) * 1000.0 / FMath::Max(1, Pts.Num());
+	const double GridMs = (R2 - R1) * 1000.0 / FMath::Max(1, Pts.Num());
+	const double FarRefMs = (F1 - F0) * 1000.0 / Far.Num();
+	const double FarGridMs = (F2 - F1) * 1000.0 / Far.Num();
+	return FString::Printf(
+		TEXT("bench tris=%d cells=%dx%dx%d cell=%.2f items=%d buildMs=%.1f n=%d hits=%d mismatch=%d ")
+		TEXT("refMs=%.4f gridMs=%.4f speedup=%.1f farRefMs=%.4f farGridMs=%.4f farSpeedup=%.1f"),
+		CachedTris.Num(), PosGridDim[0], PosGridDim[1], PosGridDim[2], PosGridCell,
+		PosGridItems.Num(), BuildMs, Pts.Num(), Hits, Mismatch,
+		RefMs, GridMs, GridMs > 1e-9 ? RefMs / GridMs : -1.0,
+		FarRefMs, FarGridMs, FarGridMs > 1e-9 ? FarRefMs / FarGridMs : -1.0);
 }

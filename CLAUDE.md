@@ -123,6 +123,20 @@ canvas 做不到毛玻璃半透明）**。
   （robo_veiltime／robo_tricount）。連帶兩條：**效能修的驗收＝輸出逐位相同**（分類計數與
   擬合結果全等才叫「只改了速度」）；**先量分解再動手**（三段計時器一跑就知道 98.8% 在 UV
   解算，省掉整輪對 trace／IK 的無效優化）。
+- **引擎的滑鼠平滑會推翻你寫在程式裡的「靜止不抖」不變量**（2026-08-25 血價）：
+  `bEnableMouseSmoothing` 預設 **True**，`UPlayerInput::SmoothMouse` 除了把 delta 跨幀
+  重分配（純滯後），還有 `aMouse == 0` 分支——**手停下後繼續合成位移**。本作到處寫著
+  「滑鼠 delta=0 ⇒ aim 靜止 ⇒ 靜止不抖由構造保證」，那句在平滑開著時是假的，而
+  註解與 ini 之間沒有任何東西在對賬。已於 `Config/DefaultInput.ini` 關閉（平均增益
+  不變＝速率正規化不是縮放，純延遲修）。同族記帳：**`bEnableFOVScaling`（仍 True）
+  會把滑鼠乘 `0.01111×FOV`**⇒ 鎖定 FOV36 ×0.40，疊上專案自己的開鏡定律 ×0.325
+  ＝**實際 0.130 的雙重補償**；速度是 user 口味域，沒點名不准動。
+- **同 tick group 內 actor 順序不保證＝隨機一幀輸入延遲，且不會出現在 profiler 上**
+  （2026-08-25）：`PC->GetInputMouseDelta()` 讀的 `KeyState.Value` 只在
+  `APlayerController::PlayerTick → ProcessInputStack` 刷新，而角色與 PC 同住
+  `TG_PrePhysics` ⇒ 角色先跑就讀到上一幀。修＝`AddTickPrerequisiteActor(PC)`。
+  **相機反而天生安全**：`UWorld::Tick` 明文「Update cameras last, after all actors
+  have been ticked」。凡「A 讀 B 這一幀算出來的東西」都要 prerequisite，不能靠註冊順序。
 - **unity build 會把不同 .cpp 的匿名 namespace 併進同一個 TU**：新加的
   `SmoothStep01` 撞到 `NeckStretchComponent.cpp` 的同名匿名函式（C2084 主體已宣告）
   ——匿名 namespace 不保證隔離，取名要唯一。
@@ -224,7 +238,10 @@ canvas 做不到毛玻璃半透明）**。
   **08-02 稿筆純輸入（已提交 264bfe8）**＝user 抓「有人在干擾滑鼠」→定罪
   07-20 One Euro 濾波殘留（畫面歸針時代防姿勢抖、07-31 自由游標制後=慢速
   ~0.16s 果凍感）→EffectiveDrawAz/Tilt 單點分流：稿筆本人=**生 aim**（游標/
-  墨/姿勢全鏈同源零延遲、靜止不抖=構造保證）、機器工具照舊濾波、他端複製
+  墨/姿勢全鏈同源零延遲、靜止不抖=構造保證）、機器工具照舊濾波（**08-25 已作廢
+  ——延遲戰役把 One Euro 整個改成預設關 `bDrawAimFilterEnabled=false`：Liner 的
+  濾波源本來就是被 v_max 限速的針 aim＝天生平滑、Shader 是手擁有速度＝滯後直接
+  被感覺到；見追記81**）、他端複製
   追趕自帶平滑；同批：拉繩穩定器（Lazy Mouse）入庫**預設 0=關**（旋鈕
   StencilLazyRadiusCm；user 驗收「鈍」——手抖僅筆寬一成+上游已濾=收益不可感）；
   錨點曲線制同日建又刪（user 終裁、原始碼零殘留）——全史+教訓（交付說明
@@ -248,8 +265,12 @@ canvas 做不到毛玻璃半透明）**。
   FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉；**tri-cache 實測 204,398 tris**（08-25 robo_tricount；褌戰役細分後，
   程式舊註解「23k」已過期）⇒ **UV→世界走 UV 網格索引 `FindTriAtUV`**（08-25 修：原本線性
   全掃＝單次 1.46ms，害可畫域灰紗要 21.6 秒才出現→現 0.11s；等價性＝候選超集＋最小索引
-  ＋同容差，驗收＝輸出逐位相同）；**世界→UV `ResolveBodyUV` 仍是全掃、傳 PreferNearUV 時
-  掃兩遍，而它在每一個筆劃點上（3.15ms/次）＝下一刀待裁**）、
+  ＋同容差，驗收＝輸出逐位相同）；**世界→UV `ResolveBodyUV`＋`BuildSurfacePatch` 種子
+  已於 08-25 延遲戰役接上本地空間均勻網格（追記81）：作畫呼叫（容差 0.15cm＋
+  PreferNearUV 縫區遲滯＝**掃兩遍、實測 7.10ms/針**）→ 0.012ms，**598 倍、2200 樣本
+  逐位相同**；等價性＝AABB 登記⇒盒外距離下界＋同平手規則；兩條路走同一個
+  `ResolveBodyUVImpl` 只差 `bUseGrid`。**加速結構第一版必驗最壞查詢**——遠距＋寬容差
+  會走完 45 萬空格＝17.9ms 比全掃還慢 5 倍，現以格數預算超標退回全掃保證永不更慢）、
   GameMode（回合狀態機＋PreLogin/Logout 斷線防護＋AbortRound）、GameState（相位/受害者/計時）、
   **`NiceInkBottle`＋入睡儀式（2026-08-16~18；帳本=Docs/OPENING_CEREMONY_PLAN.md）＝
   轉酒瓶→拾瓶→喝→醉倒的全程序化演出（user 兩條定案：①先抽後演——伺服器先均勻抽人、
@@ -479,7 +500,7 @@ canvas 做不到毛玻璃半透明）**。
   旋鈕全是 Scalar Parameter：Headlight*/SkinBrightness/SkinDesat/ChromaStrength/SkinSpecular；
   血色場再生=Tools/AssetPrep/sumo_body_chroma_*；**皮膚零烘焙陰影鐵律不破，勿再提案皮膚陰影/AO**）。
 - 墨水圖集 UV0＝**均勻紋素密度**（sumo 實測 0.617 px/mm；RT 解析度 4096＝筆寬 4.7px
-  ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000584`＝3.8mm 全身一致；線的跨縫
+  ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000452`＝3.0mm 全身一致（08-02 user 定值；**RT 4096 下 1 texel=0.81mm、線寬=3.70 texel**）；線的跨縫
   ＝點刺制逐點解算天然安全；**排針（面積章）的跨縫＝InkBody 縫資料層＋表面攤平補丁
   逐點落墨（縫 2.5cm 內自動切換）**。**改 UV0 排布＝舊存檔刺青座標全部作廢。**
   **褌現制（08-23）＝弓形實體**（user 定案「以兩邊的接觸線為邊界，形成一個有厚度、側面看來
@@ -594,6 +615,17 @@ canvas 做不到毛玻璃半透明）**。
   （稿筆=生 aim 全鏈同源零延遲；機器工具/他端照舊）＋拉繩穩定器休眠入庫
   （預設 0）＋錨點曲線制建又刪全史（帳本 08-02 各節）；probe 15/0＋directdraw
   71/72（既知 flake）；**純輸入手感待 user viewport**。
+  **＋08-25 作畫延遲全鏈戰役八刀 SHIPPED-自驗（user 指令「把所有延遲優化到最低，
+  也要注意玩家的操作到真實筆移動之間的延遲」；帳本=SHIP_PLAN 追記81＋
+  DIRECT_DRAW_PLAN 08-25 節）**：①引擎滑鼠平滑關閉（它在手停後合成位移＝推翻
+  程式裡「靜止不抖是構造保證」那句）②角色 tick 掛 PC prerequisite（同組順序不
+  保證＝隨機一幀輸入延遲）③One Euro 預設關（τ40~160ms→0）④落墨批次改每 tick 送
+  （**listen 主機自己的墨從 0~50ms 跳格→同幀**）⑤世界→UV 空間索引（**7.10ms→
+  0.012ms/針、598×、2200 樣本逐位相同**）⑥⑦aim/臉指向/俯仰上報 30Hz/0.5°→
+  60Hz/0.1°、追趕 K20→K30；驗證=robo_uvgrid 2200/0＋directdraw 59/6（既有失敗集
+  子集、檢查數 65 逐字相同=零新增）；**③⑥⑦ 動手感，待 user viewport**；
+  未動待裁=bEnableFOVScaling 雙重補償（實際 0.130 vs 設計 0.325）／
+  r.OneFrameThreadLag（關掉延遲降但幀率也降）／第三人稱墨線無 mip。
 
 ## 收尾紀律
 

@@ -105,6 +105,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.1", ClampMax = "10"))
 	float DrawAimFilterMinCutoffHz = 1.0f;
 
+	// One Euro 總開關（2026-08-25 延遲戰役；user 指令「把所有延遲優化到最低，
+	// 也要注意玩家的操作到真實筆移動之間的延遲」）——**預設關**。
+	// 帳：fc = MinCutoff + Beta·|角速| ⇒ 30°/s 時 fc≈1.9Hz、τ≈84ms；100°/s 時
+	// τ≈40ms。稿筆 08-02 就是為了這段滯後（「有人在干擾滑鼠」）拆掉的；同一個
+	// 論證原封不動適用於機器工具：
+	//   ・Liner：濾波源本來就是**針 aim**，而針已經被 v_max 守恆式限速＝天生平滑
+	//     ——再過一層低通只剩滯後（原註解自己寫「追趕本身已是平滑器」）。
+	//   ・Shader：手擁有速度，濾波滯後被手直接感覺到，收益＝抑制 ~0.5mm 手抖
+	//     （對公尺級身體姿勢不可見，08-02 已量）。
+	// 前提條件（同批一起做）：引擎 bEnableMouseSmoothing 關掉——否則「滑鼠不動
+	// ⇒ delta=0 ⇒ aim 靜止」這條構造保證是假的（引擎會在停手後繼續合成位移）。
+	// 旋鈕留著＝手感有異議時一鍵回舊行為（robo 亦可 A/B）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint")
+	bool bDrawAimFilterEnabled = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0", ClampMax = "0.5"))
 	float DrawAimFilterBeta = 0.03f;
 
@@ -1282,6 +1297,9 @@ private:
 	// ghost 材質佔用旗標（ApplyGhostView 設、ReapplyCanonicalMaterials 清）——
 	// 站姿的皮膚 MID 晚綁防護不得覆蓋 ghost 半透明
 	bool bGhostMaterialApplied = false;
+
+	// tick 順序寫死用（08-25）：已掛上 prerequisite 的控制器（換人時重掛）
+	TWeakObjectPtr<AController> TickPrereqController;
 
 	// 作畫中（本地端）
 	bool bPainting = false;

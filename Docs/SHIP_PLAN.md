@@ -2414,3 +2414,121 @@ tick（3ms 預算）＝**30fps 下也 ≤0.35s**。
 - 儀器：`Tools/RoboTest/robo_veiltime.py`（入鎖→灰紗三段分解）、`robo_tricount.py`
   （tri-cache 規模＋世界→UV 單次牆鐘）。兩支都**唯讀、不掛 ini**；C++ 側計時器是
   臨時碼，量完已 `git checkout` 拆除。
+
+## 2026-08-25 追記81：作畫延遲全鏈戰役（八刀；SHIPPED-自驗，手感待 viewport）
+
+**起點＝user 指令**：「把所有延遲優化到最低延遲，**也要注意玩家的操作到真實筆移動
+之間的延遲，而不能只看筆移動到筆跡出現之間的延遲**」——後半句是本批的主軸：
+過去所有延遲工作（07-26 網路遲鈍根治、08-02 稿筆純輸入）都盯著「筆→墨」那一段，
+**「手→筆」那一段從來沒有人量過**。量了，裡面有兩隻。
+
+### 一、把整條鏈拆開量（分段，含此前沒人看的兩段）
+
+| 段 | 現況 | 定罪方式 |
+|---|---|---|
+| ①手→引擎拿到 delta | 引擎滑鼠平滑**開著**（`bEnableMouseSmoothing=True`） | 讀 UE 源碼 `UPlayerInput::SmoothMouse` |
+| ②引擎 delta→角色讀到 | 角色與 PC 同在 `TG_PrePhysics`、**同組順序不保證** | 讀 `APlayerController::PlayerTick`→`ProcessInputStack` |
+| ③aim→筆/墨 | 機器工具仍吃 One Euro，τ 40~160ms | 讀 `EffectiveDrawAz` |
+| ④落墨→自己畫面 | client 同幀；**listen 主機 0~50ms 跳格** | 讀 `bLocalEcho = !HasAuthority()` |
+| ⑤幀時間本身 | 每一針 **7.10ms**（世界→UV 全掃 ×2） | `DebugUvGridBench`（新儀器） |
+| ⑥落墨→他端 | 50ms 批次＋30Hz/0.5° 死區 | 讀碼 |
+
+**①的機理（兩件事，第二件是架構級的）**：`SmoothMouse` 除了把 delta 跨幀重分配
+（純滯後），還有一條 `aMouse == 0` 分支——**手停下後它會繼續吐 `SmoothedMouse ×
+dt/取樣間隔`**。而本作程式裡寫著的承重不變量是「滑鼠 delta=0 ⇒ aim 靜止 ⇒ P 走快取
+⇒ **靜止不抖由構造保證**」（`EffectiveDrawAz` 註解，08-02 定案）。
+**那條保證在引擎平滑開著的時候是假的。** 07-31 六版 user 逐字定案的「放滑鼠自由，
+僅接收資訊而不控制滑鼠的走向」，引擎在上游就違反了。
+
+**②的機理**：`GetInputMouseDelta()` 讀的是 `KeyState.Value`，而它只在
+`ProcessInputStack`（住 `APlayerController::PlayerTick`）才刷新。同 tick group 內
+actor 順序不保證 ⇒ 角色先跑的那一半機率下讀到的是**上一幀**的滑鼠量＝白送一整幀。
+（相機不受影響：`UWorld::Tick` 明文「Update cameras last, after all actors have been
+ticked」⇒ 眼錨定相機本來就是同幀。）
+
+**⑤的真值比追記80 §5 估的還糟**：那裡記 3.15ms（`DebugResolveBodyUV` 單遍）。
+但作畫路徑恆帶 `PreferNearUV`（縫區遲滯）＝**掃兩遍**，實測 **7.10ms/針**。
+成本正比於「每秒畫多長」而非幀率——針距 1.5mm ⇒ 手速 30cm/s＝200 針/s＝
+**1.42 秒 CPU／秒**。這就是「慢慢描不卡、一加速就頓」的形狀。
+
+### 二、八刀
+
+| # | 刀 | 前 → 後 |
+|---|---|---|
+| ① | 引擎滑鼠平滑關閉（`DefaultInput.ini`） | 跨幀重分配＋停手後合成位移 → 無 |
+| ② | 角色 tick 掛 `AddTickPrerequisiteActor(PC)` | 不確定 0~1 幀 → **確定 0 幀** |
+| ③ | One Euro 預設關（`bDrawAimFilterEnabled=false`） | τ 40~160ms → 0 |
+| ④ | 落墨批次改每 tick 送 | 主機自己的墨 0~50ms 跳格 → 同幀 |
+| ⑤ | **世界→UV 空間索引**（`ResolveBodyUV`＋`BuildSurfacePatch` 種子） | **7.10ms → 0.012ms／針** |
+| ⑥ | 作畫 aim 上報 30Hz/0.5° → 60Hz/0.1°、追趕 K20→K30 | 他端筆 τ50ms→33ms、慢畫時有效更新率 ~15Hz→60Hz |
+| ⑦ | 沉睡臉指向、站立俯仰同樣 30Hz/0.5° → 60Hz/0.1°、K20→K30 | 同上 |
+| ⑧ | （記帳）`bEnableFOVScaling` 雙重補償——**未動**，見四 | — |
+
+**③的論證**（不是拍腦袋）：`fc = MinCutoff + Beta·|角速|` ⇒ 30°/s 時 τ≈84ms。
+稿筆 08-02 就是為這段滯後（user「有人在干擾滑鼠」）拆掉的，同一論證原封不動適用：
+Liner 的濾波源本來就是**針 aim**，而針已被 `v_max` 守恆式限速＝天生平滑（原註解
+自己寫「追趕本身已是平滑器」），再過一層低通只剩滯後；Shader 是手擁有速度，滯後
+直接被手感覺到，收益只有壓掉 ~0.5mm 手抖（對公尺級身體姿勢不可見，08-02 已量）。
+**③依賴①**：沒有①，「delta=0 ⇒ aim 靜止」是假的，拆濾波會把引擎合成的位移放行。
+旋鈕留著，一鍵回舊行為。
+
+**⑤的等價性是構造保證，不是近似**：三角形登記進自己 AABB 蓋到的每一格 ⇒ 某格盒
+沒登記到的三角形必整個落在盒外 ⇒ 距離下界＝查詢點到盒面距離；掃完 Chebyshev 殼 R
+就拿到這個下界。平手規則沿用全掃的「嚴格 < ⇒ 最小索引勝」。兩條路現在走**同一個**
+`ResolveBodyUVImpl`，只差候選來源（`bUseGrid`）——差異被關進一個布林。
+
+### 三、驗收
+
+**A. 等價性＋加速比**（`robo_uvgrid.py`＋`DebugUvGridBench`，新儀器；2-client listen PIE）
+
+| 樣本 | 全掃參考 | 空間索引 | 倍率 | mismatch |
+|---|---|---|---|---|
+| 作畫點 n=200（容差 0.15cm＋PreferNearUV） | 7.116 ms | 0.0185 ms | **385×** | **0/200** |
+| 作畫點 n=2000 | 7.097 ms | 0.0119 ms | **598×** | **0/2000** |
+| 遠距打空 n=64 | 3.23 ms | ~0 ms | — | — |
+
+網格＝100×52×88、cell 2cm、items 450,910、**一次性建置 13.5ms**。
+**mismatch=0／2200 ⇒ 「同一個答案、快 600 倍」**（追記80 定下的唯一驗收形式）。
+
+**B. 迴歸**（`robo_directdraw_test`）：執行 65 個檢查，**6 FAIL**，名稱＝
+ghosts／shader row-metered／palette／far-reach ×3 ——**全部落在追記80 同日、同一個
+工作樹記錄的既有失敗集（7 個）之內，零新增失敗名稱**；執行檢查數 65 與當時
+（58 PASS＋7 FAIL）逐字相同＝同一個既有中止點（`samepoint` 階段 `find_char` 回 None，
+**與本批無關、本來就在**）。少掉的那一個 far-reach 現在 PASS——**未追查是真修好還是
+既知 flake，記帳不宣稱。**
+
+### 四、未動（記帳＋待 user 裁決）
+
+1. **`bEnableFOVScaling` 雙重補償（讀碼發現，未修）**：引擎會把滑鼠乘上
+   `FOVScale(0.01111) × FOV` ⇒ 站姿 FOV90 ×1.0、鎖定 FOV36 **×0.40**；而
+   `DrawAimSensitivity()` 又自己乘了一次開鏡定律 `tan18/tan45 ≈ 0.325`
+   ⇒ **鎖定作畫的實際增益是 0.130，不是設計的 0.325**。關掉它游標會快 2.5 倍——
+   **速度是 user 的口味域**（08-01 血價：「太敏感」的主詞不是速度、0.4 版誤修已還原），
+   沒點名不准動。要改＝先量再裁。
+2. **`r.OneFrameThreadLag`（預設 1）＝還剩一整幀**。關掉會把 CPU/GPU 從
+   `max(CPU,GPU)` 變成 `CPU+GPU`：3060@1440p 估 12.8ms→~18ms（78→55fps），
+   但總延遲 25.6ms→18ms＝**延遲降、幀率也降**。這是真取捨、且 iGPU 那台是 GPU-bound，
+   所以**不自己拍板**。要試＝`Config/DefaultEngine.ini` 的 `[/Script/Engine.RendererSettings]`
+   加 `r.OneFrameThreadLag=0` 一行。
+3. **第三人稱墨線的欠取樣**：三張 RT 都是 `bAutoGenerateMips=false`＝只有 mip0，
+   而 2.3m 外 3.0mm 墨線只有 1.25~1.67 螢幕像素 ⇒ 結構上必然欠取樣（銳化在此
+   自動退場：`k=clamp(1/fwidth,1,32)` 遠看 →1）。**尚未有任何儀器看著它**，
+   也還沒被 user 點名。要修＝開 mips（VRAM +33%）或改 SDF，都是量級跳躍。
+
+### 五、鐵則沉澱
+
+- **「延遲」不是一個數字，是一條鏈；沒被量過的那一段就是最貴的那一段。** 本批
+  兩隻新蟲（引擎滑鼠平滑、tick 順序）都住在「手→筆」，而過去三個月的延遲工作
+  全部盯著「筆→墨」。user 一句話點出的就是這件事。
+- **引擎預設值會偷偷推翻你寫在程式裡的不變量。** 「滑鼠 delta=0 ⇒ 靜止不抖是構造
+  保證」這句註解是真心的，但 `bEnableMouseSmoothing` 讓它變成假的——而註解與 ini
+  之間沒有任何東西在對賬。（同族：追記80 的「23k tris」。）
+- **同組 tick 順序不保證＝隨機一幀延遲**，而它不會出現在任何 profiler 上。
+  凡是「A 讀 B 這一幀算出來的東西」，就要有 prerequisite，不能靠註冊順序。
+- **加速結構的第一版量測要包含「最壞的那類查詢」**：本批首版在遠距＋寬容差下會走完
+  45 萬個空格＝17.9ms，**比它取代的全掃還慢 5 倍**——而作畫路徑完全量不到這件事。
+  修法＝格數預算超過就退回全掃（**保證永不比舊路徑慢**）。
+  「新結構在熱路徑快 600 倍」和「新結構在所有路徑都不比舊的慢」是兩個命題，要分別驗。
+- 儀器：`Tools/RoboTest/robo_uvgrid.py`＋`UInkBodyComponent::DebugUvGridBench`
+  （等價性＋加速比，全在 C++ 內量、無 python 開銷）；`DebugResolveBodyUV` 現在
+  **同時跑兩條路並自報 match**——這個對照組永遠留在程式裡，不准拆。

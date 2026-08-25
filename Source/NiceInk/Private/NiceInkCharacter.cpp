@@ -54,7 +54,14 @@ namespace
 	const FVector BodyLieRelLoc(-87.0f, 0.0f, -60.0f);
 	const FRotator BodyLieRelRot(0.0f, 90.0f, -90.0f);
 
-	constexpr float PointFlushInterval = 0.05f;
+	// 08-25 延遲戰役：批次上服改成「每 tick 一定送」。舊值 50ms/10 針有兩個代價——
+	// ①**listen 主機自己的墨要等這個批次**（主機 bLocalEcho=false，本地預測不適用；
+	//   註解說的「multicast 同幀＝零延遲」只對 Begin 成立、對 Points 不成立）
+	//   ⇒ 主機看自己的線是每秒 20 次、每次 ≤1.5cm 的跳格生長
+	// ②他端墨平均多等 25ms／最壞 50ms，且塊狀出現（筆平滑、墨跳格）。
+	// 頻寬帳：60 包/秒 × (RPC 標頭 ~20B + 針數×8B)，200 針/秒的快畫也只有 ~2.8KB/s
+	// ——對比 MaxClientRate 2MB/s。Interval 留 0 是為了保留「有 pending 就送」的語義。
+	constexpr float PointFlushInterval = 0.0f;
 	constexpr int32 PointFlushMaxBatch = 10;
 
 	// 脖底切盤關節（2026-07-16 Blender 手術燒進網格的常數——不是調參旋鈕）：
@@ -460,6 +467,23 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	const bool bLocal = PC && IsLocallyControlled();
 
+	// 08-25 延遲戰役（操作→筆的第一段）：把「本角色 tick 必在自己的 PlayerController
+	// 之後」寫死。兩者都住 TG_PrePhysics，**同組內順序不保證**——角色先跑的那一半
+	// 機率下，`PC->GetInputMouseDelta()` 拿到的是上一幀的滑鼠量（引擎在
+	// APlayerController::PlayerTick → ProcessInputStack 才把 RawValueAccumulator
+	// 刷進 KeyState.Value）＝白送一整幀輸入延遲。加 prerequisite ⇒ 由不確定的
+	// 0~1 幀變成確定的 0 幀。相機不受影響：UWorld::Tick 明文「Update cameras last,
+	// after all actors have been ticked」⇒ 眼錨定相機本來就是同幀生效。
+	if (bLocal && PC != TickPrereqController.Get())
+	{
+		if (AController* OldPrereq = TickPrereqController.Get())
+		{
+			RemoveTickPrerequisiteActor(OldPrereq);
+		}
+		AddTickPrerequisiteActor(PC);
+		TickPrereqController = PC;
+	}
+
 	// 08-14 根治②補丁：本人端關掉 CMC 網路平滑——平滑載體（GetMesh）只服務
 	// 「看別人」（simulated proxy／listen server 看 client）。本人的 client 修正
 	// 若也被攤 100ms，入鎖瞬間讀骨會拿到半路位置＝凍結相機錨污染
@@ -558,9 +582,10 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	{
 		if (!IsLocallyControlled())
 		{
-			// 追趕係數 12→20（07-26 遲鈍根治）：τ 83ms→50ms——上報 30Hz＋server
-			// tick 60Hz 後包距縮半，較快的追趕不再顯跳格
-			const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
+			// 追趕係數 12→20（07-26 遲鈍根治）→30（08-25 延遲戰役）：τ 83→50→33ms。
+			// 上報自 08-25 起 60Hz、死區 0.1°＝包距 16.7ms ⇒ τ33ms 仍是 2 個包距的
+			// 平滑窗（跳格看不見），但他端的筆少滯後 17ms。
+			const float K = FMath::Clamp(DeltaSeconds * 30.0f, 0.0f, 1.0f);
 			if (bRemoteDrawSnap)
 			{
 				RemoteDrawAzDeg = DrawAimAzDeg;
@@ -1127,10 +1152,12 @@ void ANiceInkCharacter::PollSleepHead(APlayerController* PC, float DeltaSeconds)
 		}
 
 		// 頭部轉動破綻：臉指向節流上報（閉眼不送＝盲瞄不洩漏）；30Hz（07-26 20→30）
+		// →60Hz/死區 0.1°（08-25 延遲戰役，與 draw-aim 同批同理）：頭部破綻是
+		// 「操作→旁人看見」的一條，0.5° 死區在慢轉頭時把有效更新率壓到十幾 Hz。
 		SleepLookSendAccum += DeltaSeconds;
-		if (SleepLookSendAccum >= 0.0333f &&
-			(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentAimAz, SleepAimAzLocal)) > 0.5f ||
-			 FMath::Abs(LastSentAimTilt - SleepAimTiltLocal) > 0.5f))
+		if (SleepLookSendAccum >= 0.0166f &&
+			(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentAimAz, SleepAimAzLocal)) > 0.1f ||
+			 FMath::Abs(LastSentAimTilt - SleepAimTiltLocal) > 0.1f))
 		{
 			SleepLookSendAccum = 0.0f;
 			LastSentAimAz = SleepAimAzLocal;
@@ -1199,9 +1226,10 @@ void ANiceInkCharacter::PollLook(APlayerController* PC, float DeltaSeconds)
 
 	// 站立視野俯仰上報（08-15）：他端據此擺 Neck+Head 俯仰（左右不上報＝全身跟
 	// 控制器 yaw、頭身零相對位移=user 定案）；30Hz 節流＋變化 >0.5° 才送
+	// 08-25 延遲戰役：30Hz/0.5° → 60Hz/0.1°（同批同理；Unreliable 小包）
 	const float Now = GetWorld()->GetTimeSeconds();
-	if (Now - LookPitchLastReport >= 1.0f / 30.0f &&
-		FMath::Abs(CameraPitch - LookPitchReportedDeg) > 0.5f)
+	if (Now - LookPitchLastReport >= 1.0f / 60.0f &&
+		FMath::Abs(CameraPitch - LookPitchReportedDeg) > 0.1f)
 	{
 		LookPitchLastReport = Now;
 		LookPitchReportedDeg = CameraPitch;
@@ -1668,10 +1696,15 @@ void ANiceInkCharacter::PollDrawAim(APlayerController* PC, float DeltaSeconds, b
 	const bool bRepGaze = SelectedNeedle == EInkNeedle::Stencil && bDrawGazeInit;
 	const float RepAz = bRepGaze ? DrawGazeAz : SrcAz;
 	const float RepTilt = bRepGaze ? DrawGazeTilt : SrcTilt;
+	// 08-25 延遲戰役：30Hz→60Hz（＝server tick 上限，再快也沒有載體）＋死區
+	// 0.5°→0.1°。死區的代價被低估過：鎖定 FOV36 @1440p ≈71px/°，0.5° 死區＝
+	// 他端的筆要等本人動了 ~35 螢幕像素才更新；慢工細描（~8°/s）下實際更新率
+	// 只有 ~15Hz ⇒ 旁人看到的筆是 0.5° 一格地跳。RPC 是 Unreliable、包很小，
+	// 60Hz × ~16B ≈ 1KB/s，換掉這個是純賺。
 	DrawAimSendAccum += DeltaSeconds;
-	if (DrawAimSendAccum >= 0.0333f &&
-		(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentDrawAz, RepAz)) > 0.5f ||
-			FMath::Abs(LastSentDrawTilt - RepTilt) > 0.5f ||
+	if (DrawAimSendAccum >= 0.0166f &&
+		(FMath::Abs(FMath::FindDeltaAngleDegrees(LastSentDrawAz, RepAz)) > 0.1f ||
+			FMath::Abs(LastSentDrawTilt - RepTilt) > 0.1f ||
 			bLastSentTargetValid != bDrawTargetValid))
 	{
 		DrawAimSendAccum = 0.0f;
@@ -2279,9 +2312,18 @@ float ANiceInkCharacter::EffectiveDrawAz() const
 	// 變成游標的直接滯後（慢速 ~0.16s 果凍感）。靜止不抖由構造保證（滑鼠
 	// delta=0→aim 靜止→P 走快取）；移動中手抖 ≈0.5mm 對公尺級身體姿勢不可見。
 	// 機器工具照舊吃濾波（巡航/導引鏈粒度敏感、且畫面歸針下滯後無感）。
+	// 08-25 延遲戰役 user 指令「把所有延遲優化到最低」：濾波預設關（見
+	// bDrawAimFilterEnabled 的理由）。未濾波源＝PollDrawAim 餵給濾波器的**同一個**
+	// SrcAz（追趕中=針 aim、自由時=生 aim），只是不再過 One Euro ⇒ 畫面歸針、
+	// 收放筆的連續性全部原樣，差別只有那段滯後。
 	if (IsLocallyControlled())
 	{
-		return SelectedNeedle == EInkNeedle::Stencil ? DrawAimAzLocal : DrawAimAzFilt;
+		if (SelectedNeedle == EInkNeedle::Stencil)
+		{
+			return DrawAimAzLocal;
+		}
+		return bDrawAimFilterEnabled ? DrawAimAzFilt
+			: (bTattooChaseActive ? TattooNeedleAz : DrawAimAzLocal);
 	}
 	return RemoteDrawAzDeg;
 }
@@ -2290,7 +2332,13 @@ float ANiceInkCharacter::EffectiveDrawTilt() const
 {
 	if (IsLocallyControlled())
 	{
-		return SelectedNeedle == EInkNeedle::Stencil ? DrawAimTiltLocal : DrawAimTiltFilt;
+		if (SelectedNeedle == EInkNeedle::Stencil)
+		{
+			return DrawAimTiltLocal;
+		}
+		return bDrawAimFilterEnabled ? DrawAimTiltFilt
+			: FMath::Clamp(bTattooChaseActive ? TattooNeedleTilt : DrawAimTiltLocal,
+				DrawTiltMinDeg, DrawTiltMaxDeg);
 	}
 	return RemoteDrawTiltDeg;
 }
@@ -2978,6 +3026,7 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	if (PendingPoints.Num() > 0 &&
 		(PendingPoints.Num() >= PointFlushMaxBatch || PointFlushTimer >= PointFlushInterval))
 	{
+		// PointFlushInterval=0 ⇒ 只要有針就當 tick 送（見常數處的頻寬帳）
 		FlushPendingPoints();
 		PointFlushTimer = 0.0f;
 	}
@@ -6031,8 +6080,8 @@ void ANiceInkCharacter::UpdateSleepBodyDouble(float DeltaSeconds)
 		}
 		else
 		{
-			// 追趕係數 12→20（07-26）：同 draw-aim——頭部破綻旁人要早 30ms 看到
-			const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
+			// 追趕係數 12→20（07-26）→30（08-25）：同 draw-aim——頭部破綻旁人要早看到
+			const float K = FMath::Clamp(DeltaSeconds * 30.0f, 0.0f, 1.0f);
 			const float DAz = FMath::FindDeltaAngleDegrees(RemoteAimAzDeg, SleepAimAzDeg);
 			RemoteAimAzDeg = FMath::Fmod(FMath::Fmod(RemoteAimAzDeg + DAz * K, 360.0f) + 360.0f, 360.0f);
 			RemoteAimTiltDeg += (SleepAimTiltDeg - RemoteAimTiltDeg) * K;
@@ -7581,14 +7630,14 @@ FString ANiceInkCharacter::DebugRoboCeremonyStats() const
 float ANiceInkCharacter::CurrentLookPitchForPose(float DeltaSeconds)
 {
 	// 本人＝相機 pitch 零延遲（旁人相機/第三人稱鏡頭下看自己）；他端＝複製值平滑追趕
-	//（上報 30Hz、追趕 K20＝τ50ms，同 aim 同步慣例）
+	//（上報 60Hz、追趕 K30＝τ33ms，同 aim 同步慣例；08-25 延遲戰役前為 30Hz/K20）
 	if (IsLocallyControlled())
 	{
 		RemoteLookPitchDeg = CameraPitch;
 	}
 	else
 	{
-		const float K = FMath::Clamp(DeltaSeconds * 20.0f, 0.0f, 1.0f);
+		const float K = FMath::Clamp(DeltaSeconds * 30.0f, 0.0f, 1.0f);
 		RemoteLookPitchDeg += (LookPitchDeg - RemoteLookPitchDeg) * K;
 	}
 	// 指數飽和映射（user 定案）：|p|∈[0,89] → [0,Max]，p=89 恰=Max；符號保留

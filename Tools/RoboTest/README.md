@@ -271,6 +271,18 @@
 - `robo_tricount.py`＝**tri-cache 規模量測**（`DebugResolveBodyUV` 回報 `tris=`）
   ＋世界→UV 單次牆鐘。任何「墨水解算變慢」的調查從這支開始：08-25 一跑就看到
   **204,398 tris**（程式註解以為是 23k）。結果檔 `Saved/robo_tricount_result.txt`。
+  註：`DebugResolveBodyUV` 自 08-25 延遲戰役起**同時跑全掃與空間索引兩條路**，
+  額外回報 `gridUv=／gridDist=／match=／gridMs=／buildMs=／cells=／items=`
+  ——`scanMs` 仍是舊全掃的牆鐘，可比性保留。
+- `robo_uvgrid.py`＝**世界→UV 空間索引的等價性＋加速比**（2026-08-25 延遲戰役；
+  帳＝SHIP_PLAN 追記81）。呼叫 `UInkBodyComponent::DebugUvGridBench(N)`——樣本＝
+  tri-cache 均勻抽樣、重心沿面法線外推 0.5mm＝**作畫射線命中點的形狀**，並以
+  真正的作畫參數查詢（容差 0.15cm＋`PreferNearUV` 縫區遲滯）。兩條路走同一個
+  `ResolveBodyUVImpl`、只差 `bUseGrid` ⇒ 比的就是候選來源本身；量測全在 C++ 內
+  （無 python 呼叫開銷）。基準線（08-25 修後）：n=2000 **refMs 7.097 → gridMs
+  0.0119（598×）、mismatch 0/2000**；遠距打空 3.23ms → ~0。
+  **改動任何墨水解算路徑後必須重跑，判準是 `mismatch=0`——效能修的驗收是
+  「輸出逐位相同」，不是「看起來一樣快很多」。** 結果檔 `Saved/robo_uvgrid_result.txt`。
 - 低位鎖點（`LOCKS` 的 `low`）在現行舞台座標下 `DebugRoboEnterLean` 會回 False
   ＝**探針常數還是舊舞台的**（08-18 搬到道場正中央後遺留，同 directdraw 的
   far-reach ×4 既有失敗）。已記帳、未修。
