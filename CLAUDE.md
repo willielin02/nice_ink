@@ -131,6 +131,37 @@ canvas 做不到毛玻璃半透明）**。
   不變＝速率正規化不是縮放，純延遲修）。同族記帳：**`bEnableFOVScaling`（仍 True）
   會把滑鼠乘 `0.01111×FOV`**⇒ 鎖定 FOV36 ×0.40，疊上專案自己的開鏡定律 ×0.325
   ＝**實際 0.130 的雙重補償**；速度是 user 口味域，沒點名不准動。
+- **引擎預設「沒有幀率上限」＝顯卡永遠 100% 滿載**（2026-08-25 血價）：
+  `FrameRateLimit=0`＋`bUseVSync=False` 是引擎預設，而專案裡一年來沒有任何一行
+  程式碼／註解／帳本提過它——**預設值是「沒有人做過決定」，不是「有人決定了預設值」**。
+  實測空道場 1280×720：每幀成本只有 1.94ms，卻跑到 **515fps／GPU 66%／92W／
+  SM 時脈 1942MHz 釘死／63°C**；多開就是倍數，四視窗的幀率在 390 與 11 之間亂跳。
+  現制＝`UNiceInkSettingsSave::PerfDefaultsVersion` 一次性遷移寫 120fps＋設定頁
+  「幀率上限／垂直同步」兩列（正本住引擎 `GameUserSettings`，與視窗模式同一責任邊界）
+  ＋`play_*.bat` 掛 `-ExecCmds="t.MaxFPS 60"`。**坑**：`ApplySettings()` 會連解析度
+  一起套（蓋掉命令列 `-resx/-resy`）⇒ 只改非解析度設定要用 `ApplyNonResolutionSettings()`。
+  **同日續修（追記83）**：120 對 60Hz 是**整數 2 倍**＋VSync 關 ⇒ 撕裂線停在原地
+  ＝user 回報的「水平橫條」（無上限時 515/60＝8.6 讓撕裂糊成雜訊反而看不出來；
+  **整數倍比例是撕裂最顯眼的情況**）。修＝VSync 預設開（v2 遷移）＋
+  `[SystemSettings] r.GTSyncType=2`；功耗再降到 18.7W、時脈 550MHz。
+  **上限管功耗、VSync 管畫面完整性，兩個正交責任只裝一個，另一個必以你沒預期的
+  形式出現。** 同批：「版次」不能兼任「玩家動過沒有」（自動遷移也推進版次
+  ⇒ 混用等於下次遷移必覆寫玩家的選擇）＝拆出 `bPerfTouchedByPlayer`。
+- **用儀器之前先查它的取樣週期**（2026-08-25 血價）：`stat unit` 的 `Input`
+  ＝`FInputLatencyTimer GInputLatencyTimer(2.0f)`＝**每 2 秒才取樣一次**，再套
+  `0.9*old+0.1*raw`＝時間常數 ~20 秒。我拿它在 40 秒的測試窗裡跑了五個組態 A/B
+  並據此宣告「某個 cvar 把延遲從 96.73 降到 81.04ms」——**組內散度大於組間差異，
+  結論全假**。取樣週期＋平滑常數大於測試窗＝那支儀器在這個實驗裡沒有解析度。
+  它也**不是**「滑鼠到畫面」（是 game thread→present 的管線深度，與有沒有動手無關）。
+  連帶已知未解：**`-game` 視窗失焦後會被節流到近乎停擺**（10 分鐘只累積 46 CPU 秒、
+  log 靜止、core ticker 不觸發）⇒ 任何需要長時間掛機的自駕量測都會被它吃掉。
+- **「Out of video memory」的旁邊常常寫著「顯存還剩九成」**（2026-08-25 血價）：
+  崩潰行程自報 `Local Used 1592.77 MB / Local Budget 11347 MB`，同一刻
+  `Physical Memory: 30615 MB used, 1914 MB free`——**倒的是系統記憶體**，D3D12
+  配置失敗被 UE 一律印成 "Out of video memory"。**看崩潰訊息之前先看它自己傾印的數字。**
+  同案：**每人一份的常數乘以人數就是規模**——4096² RGBA8＝64 MiB 看起來還好，
+  ×4 層 ×6 人 ×每個 client 都有一份＝1GB（實測 Render Target 2D 1034.75 MB，
+  而引擎 pooled RT 只有 12 MB）。「每個角色都配一份」的東西是規模設計題，不是初始化細節。
 - **同 tick group 內 actor 順序不保證＝隨機一幀輸入延遲，且不會出現在 profiler 上**
   （2026-08-25）：`PC->GetInputMouseDelta()` 讀的 `KeyState.Value` 只在
   `APlayerController::PlayerTick → ProcessInputStack` 刷新，而角色與 PC 同住
@@ -261,9 +292,17 @@ canvas 做不到毛玻璃半透明）**。
   定案；1-9,0 換色即時生效＋HUD 常駐色票列））/程式化走路/ESC 系統選單）、
   `InkCanvasComponent`（筆劃=真相、**三層 RT 快取**：線層 4096+Valve 銳化／霧層 4096
   軟半透明（銳化不咬）／刺青層；作者 ID/碳黑/雷射/洗掉；批次蓋章＋預烘 stipple 條帶＋
-  縫區表面補丁逐點落墨）、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
-  FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉；**tri-cache 實測 204,398 tris**（08-25 robo_tricount；褌戰役細分後，
-  程式舊註解「23k」已過期）⇒ **UV→世界走 UV 網格索引 `FindTriAtUV`**（08-25 修：原本線性
+  縫區表面補丁逐點落墨；**08-25 改惰性配置**＝4096² RGBA8 每張 64 MiB×最多 4 層×
+  每個角色×每個 client 都有一份＝崩潰現場實測 1,034.75 MB（追記82）。現制由
+  `ComputeLayerNeeds()` 從 Works 算出哪層真的有東西要畫，缺席的層綁 **4×4 全透明替身**
+  （傳 nullptr＝退回材質預設灰格＝整身變灰），釋放只放指標不手動 ReleaseResource；
+  受害者入睡 `PrewarmDrawLayers()` 釘住線層/霧層防第一針掉幀；**兩個消費者都要跟**
+  ——身體 MID 訂閱 `OnLayersChanged` 自己重綁、伸縮脖的抄本要角色顯式
+  `ForceMaterialResync()` 踢（它的門檻是 SkinTone、與貼圖換人無關））、`InkBodyComponent`（世界↔UV 雙向解算、tri-cache＋焊接拓樸、
+  FInkSurfacePatch 表面攤平、縫資料層（近縫旗標+UV 網格索引）、換睡姿網格、眼睛開閉；**兩個三角形數字、不同範圍，別混用**（08-25 實測）：
+  整顆 SM_Sumo＝**306,486 tris／176,478 verts／num_lods=1**（GPU 真的在畫的量）；
+  **tri-cache＝204,398 tris**（`BuildTriCache` 明文跳過褌 section——墨水數學只認皮膚，
+  差額 102,088 就是布；褌戰役細分後，程式舊註解「23k」已過期）⇒ **UV→世界走 UV 網格索引 `FindTriAtUV`**（08-25 修：原本線性
   全掃＝單次 1.46ms，害可畫域灰紗要 21.6 秒才出現→現 0.11s；等價性＝候選超集＋最小索引
   ＋同容差，驗收＝輸出逐位相同）；**世界→UV `ResolveBodyUV`＋`BuildSurfacePatch` 種子
   已於 08-25 延遲戰役接上本地空間均勻網格（追記81）：作畫呼叫（容差 0.15cm＋
@@ -411,9 +450,13 @@ canvas 做不到毛玻璃半透明）**。
   選單 PC 的補位）。
   **08-11~12 選單邏輯與樣式總修（user 逐輪驗收；帳本=SHIP_PLAN 追記①~⑭）**：
   ①20 條互動邏輯修單＋**兩步開房**（頂層只放動詞：開房/加入相鄰、可見性
-  chips+確認移入開房頁）②設定頁=4 列**即點即套**（視窗模式=無邊框↔視窗
-  二態 ToggleWindowMode、畫質=RenderScalePct 50~100 走 r.ScreenPercentage；
-  獨占全螢幕/解析度選單/套用鈕全退役）③**TAA 效能定罪**：UE5.7 預設 TSR
+  chips+確認移入開房頁）②設定頁=**6 列**（08-25 補幀率上限/垂直同步）**即點即套**
+  （視窗模式=無邊框↔視窗二態 ToggleWindowMode、畫質=RenderScalePct 50~100 走
+  r.ScreenPercentage、**幀率上限 60/90/120/144/165/240/無上限（預設 120）、垂直同步
+  （預設開＝08-25 撕裂修，見陷阱年鑑）**；
+  後兩者正本住引擎 GameUserSettings＝與視窗模式同一責任邊界、不進偏好存檔也不上雲，
+  且只能用 `ApplyNonResolutionSettings()`（`ApplySettings()` 會連解析度一起套、
+  蓋掉命令列 -resx/-resy）；獨占全螢幕/解析度選單/套用鈕全退役）③**TAA 效能定罪**：UE5.7 預設 TSR
   @1440p 3060 吃 ~37ms=全遊戲一直在 20fps 下跑；ini 改 TAA+關 Lumen GI/反射
   /VSM=4×（78fps、iGPU 1080p 50fps）；veil robo_veilflicker 待 TAA 下重跑、
   打包版待實測④**樣式源統一**=NiType 角色表+NiSpace 4px 網格（NiceInkUiTokens.h
@@ -533,7 +576,13 @@ canvas 做不到毛玻璃半透明）**。
 - Blender 5.1：`"C:\Program Files\Blender Foundation\Blender 5.1\blender.exe" --background <blend> --python <腳本>`；
   角色源正本＝`SourceAssets/sumo_character_master.blend`（char17 已退役；迭代檔 previews/masters/retopo
   已 gitignore 留本地）。
-- 下一批已知工作：~~噴射出口與褌的視覺（待定 #11）~~（v4.0 移未來更新籃）、
+- 下一批已知工作：**效能三件刻意未做／未驗（08-25 追記82/83 記帳，別當成漏掉）**＝
+  ①角色網格 306,486 tris 無 LOD（GPU 成本量到 1.05ms/幀＝不是瓶頸；自動減面會毀掉
+  褌可見線與脖子縫環 ⇒ 要動先量「六人同框」且必須人工減面）②**沒有可量的最新打包版**
+  （PackagedShipping 停 07-17、Packaged 停 08-07）⇒「玩家實際會遇到什麼」至今未量測、
+  08-11 那句「打包版待實測」仍未兌現；③`r.GTSyncType=2` 的延遲收益未經驗證（留著的
+  理由只有「引擎文件指定＋幀率無可量代價」）。
+  ~~噴射出口與褌的視覺（待定 #11）~~（v4.0 移未來更新籃）、
   平台小號實測（待定 #12）、
   開場動畫場景改寫（待定 #14）、~~RMB 瞄準切分（待定 #15）~~（v4.0 關閉）、鎖定畫布空間感
   ——眼位 20–25cm＋游標 A5 鉗位提案（待定 #16）、**內容動機＋投票經濟設計

@@ -35,6 +35,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "Ink")
 	FOnInkCanvasChanged OnCanvasChanged;
 
+	// 圖層生滅通知（2026-08-25 惰性配置制）：材質綁著的那張貼圖換人了，消費端
+	// 必須重綁。刻意與 OnCanvasChanged 分開——後者每一筆都廣播，重綁不該進熱路徑。
+	UPROPERTY(BlueprintAssignable, Category = "Ink")
+	FOnInkCanvasChanged OnLayersChanged;
+
+	// 「這一層目前不存在」時綁給材質的替身：4×4 全透明。
+	// 與「配好卻整張清成透明的 4096 RT」在取樣上逐位相同（常數的雙線性內插還是
+	// 同一個常數）＝惰性配置對畫面是恆等變換。
+	static UTexture2D* GetEmptyInkTexture();
+
 	// 4096（07-22 六修 user「近看鋸齒」）：紋素密度 0.617→1.234 px/mm、筆寬
 	// 2.35→4.7px＝鋸齒尺度減半。代價=VRAM 每身 Marker+Tattoo 34→134MB、六人房
 	// ~800MB（fullbright 專案 GPU 閒置可吞；嫌重退 3072）。筆寬/針距全是 UV/實體
@@ -214,8 +224,18 @@ public:
 	void RestoreWork(const FInkWork& Work);
 
 	// QA：輸出 <前綴>_marker.png / <前綴>_tattoo.png（絕對路徑前綴）。
+	// 惰性配置制下會先把三層都補齊再傾印——robo 契約恆得到三個檔，語義不變。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
-	bool ExportLayersToPng(const FString& AbsolutePathPrefix) const;
+	bool ExportLayersToPng(const FString& AbsolutePathPrefix);
+
+	// 入睡瞬間預熱作畫層（Marker＋Mist）：第一針才配置 2×64MB 會當場掉一幀，
+	// 而第一針正是手感最敏感的時刻。釘住到甦醒為止（見 ReleaseDrawLayerPin）。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void PrewarmDrawLayers();
+
+	// 解除預熱釘選（甦醒）：之後這兩層的存活只由「Works 裡真的有筆劃」決定。
+	UFUNCTION(BlueprintCallable, Category = "Ink")
+	void ReleaseDrawLayerPin();
 
 private:
 	UPROPERTY(Transient)
@@ -273,6 +293,31 @@ private:
 	mutable FVector SeamPatchCenterWorld = FVector::ZeroVector;
 	mutable bool bSeamPatchValid = false;
 	UInkBodyComponent* ResolveBody() const;
+
+	// --- 惰性圖層配置（2026-08-25）---
+	// 病史：四張 4096² RGBA8 各 64 MiB 在 BeginPlay 無條件配給**每一個**角色，
+	// 而每個 client 都持有房裡所有人的整套 ⇒ 崩潰現場實測 Render Target 2D
+	// 1034.75 MB（16 張），大廳階段卻一筆墨都還沒畫。現制＝需要哪層才配哪層。
+	bool bDrawLayersPinned = false; // 受害者入睡期間釘住 Marker/Mist（防第一針掉幀）
+
+	struct FLayerNeeds
+	{
+		bool bMarker = false;
+		bool bMist = false;
+		bool bTattoo = false;
+		bool bScratch = false;
+	};
+	// 從 Works（唯一真相）算出哪幾層真的有東西要畫
+	FLayerNeeds ComputeLayerNeeds() const;
+
+	UTextureRenderTarget2D* EnsureMarkerRT();
+	UTextureRenderTarget2D* EnsureTattooRT();
+	UTextureRenderTarget2D* EnsureMistRT();
+	UTextureRenderTarget2D* EnsureScratchRT();
+	// 只放掉自己的指標、不碰 RHI 資源：材質／脖子 MID 可能還指著它，交給
+	// UObject 生命週期收（消費端一重綁就沒人參照＝下次 GC 自然回收 VRAM）。
+	// 手動 ReleaseResource 會在「已釋放卻仍被取樣」的那一幀出事。
+	static void ReleaseLayer(TObjectPtr<UTextureRenderTarget2D>& Slot, bool& bOutChanged);
 
 	UTextureRenderTarget2D* CreateLayerRT(const TCHAR* DebugName, int32 Resolution);
 	UTexture2D* GetOrCreateNibTexture();

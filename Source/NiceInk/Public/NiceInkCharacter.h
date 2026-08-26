@@ -1701,6 +1701,12 @@ private:
 	void StopPaintingLocal();
 	void ApplySleepVisual();
 
+	// 惰性墨層生滅（2026-08-25）：身體 MID 由 InkBodyComponent 自己重綁，但伸縮脖
+	// 是「抄一份身體 MID」的第二個消費者，抄的門檻是 SkinTone 變動——墨層換貼圖
+	// 不動 SkinTone ⇒ 必須顯式踢它重抄。兩個消費者都要跟，漏一個就會脫節。
+	UFUNCTION()
+	void HandleInkLayersChanged();
+
 	// 迷宮技能授予去重（server；每回合每存檔點只授一次，ServerSetAsleep(true) 重置）
 	bool bMazeSprayGranted = false;
 	bool bMazeKickGranted = false;

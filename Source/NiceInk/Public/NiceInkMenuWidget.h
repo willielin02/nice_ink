@@ -131,6 +131,13 @@ private:
 	FText StatusText() const;
 	FSlateColor StatusColor() const;
 	void ToggleWindowMode();       // 無邊框↔視窗（進視窗給桌面 70% 初始大小、其後用拖的）
+
+	// 效能列（2026-08-25 幀率上限制）：正本在引擎 GameUserSettings，與視窗模式
+	// 同一責任邊界＝設定頁直接讀寫它、即點即套即存
+	FString FrameLimitValueText() const;
+	void StepFrameLimit(int32 Dir);
+	void ToggleVSync();
+	void MarkPerfDefaultsTouched(); // 玩家動過＝一次性預設從此不再介入
 	TSharedRef<SWidget> MakeStatusRow(); // 狀態行＋進行中取消鈕（Root/Join 共用）
 
 	TSharedRef<SWidget> BuildRootPage();

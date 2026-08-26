@@ -1106,6 +1106,28 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 								[this]() { if (UNiceInkGameInstance* I = GI()) { I->RenderScalePct = FMath::Clamp(I->RenderScalePct + 5.0f, 50.0f, 100.0f); I->ApplyRenderScale(); I->SaveSettings(); } })
 						]
 
+						// 幀率上限（2026-08-25）：引擎預設無上限＝顯卡被拉到滿速去畫
+						// 每秒 500 張（實測空道場 1280×720 GPU 成本只有 1.05ms/幀）。
+						// 風扇狂叫、筆電發燙、多開直接把機器打爆——煞車必須存在，
+						// 而且要是玩家看得到、改得動的那種。
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS)
+						[
+							MakeRow(LocS(ENiLocKey::FrameLimit),
+								[this]() { return FrameLimitValueText(); },
+								[this]() { StepFrameLimit(-1); },
+								[this]() { StepFrameLimit(+1); })
+						]
+						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS)
+						[
+							MakeRow(LocS(ENiLocKey::VSyncLabel),
+								[this]()
+								{
+									const UGameUserSettings* GUS = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+									return LocS((GUS && GUS->IsVSyncEnabled()) ? ENiLocKey::OptionOn : ENiLocKey::OptionOff);
+								},
+								[this]() { ToggleVSync(); },
+								[this]() { ToggleVSync(); })
+						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS)
 						[
 							MakeRow(LocS(ENiLocKey::MouseSensitivity),
@@ -1140,6 +1162,67 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 			]
 		]
 	];
+}
+
+FString SNiMenu::FrameLimitValueText() const
+{
+	const UGameUserSettings* GUS = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	const float Limit = GUS ? GUS->GetFrameRateLimit() : 0.0f;
+	return (Limit <= 0.0f)
+		? LocS(ENiLocKey::Unlimited)
+		: FString::Printf(TEXT("%d FPS"), FMath::RoundToInt(Limit));
+}
+
+void SNiMenu::StepFrameLimit(int32 Dir)
+{
+	UGameUserSettings* GUS = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	if (!GUS)
+	{
+		return;
+	}
+	const TArray<float>& Choices = UNiceInkGameInstance::GetFrameRateLimitChoices();
+	const float Current = GUS->GetFrameRateLimit();
+
+	// 目前值找不到就落在最接近的一格（玩家可能從 ini 手改過任意值）
+	int32 Index = 0;
+	float BestErr = TNumericLimits<float>::Max();
+	for (int32 I = 0; I < Choices.Num(); ++I)
+	{
+		const float Err = FMath::Abs(Choices[I] - Current);
+		if (Err < BestErr) { BestErr = Err; Index = I; }
+	}
+	Index = (Index + Dir + Choices.Num()) % Choices.Num();
+
+	GUS->SetFrameRateLimit(Choices[Index]);
+	GUS->ApplyNonResolutionSettings(); // 不碰解析度／視窗模式
+	GUS->SaveSettings();
+	MarkPerfDefaultsTouched();
+}
+
+void SNiMenu::ToggleVSync()
+{
+	UGameUserSettings* GUS = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	if (!GUS)
+	{
+		return;
+	}
+	GUS->SetVSyncEnabled(!GUS->IsVSyncEnabled());
+	GUS->ApplyNonResolutionSettings(); // 不碰解析度／視窗模式
+	GUS->SaveSettings();
+	MarkPerfDefaultsTouched();
+}
+
+void SNiMenu::MarkPerfDefaultsTouched()
+{
+	// 玩家親手動過＝往後任何版本的預設遷移都不准再碰（就算他選了「無上限」
+	// 或把 VSync 關掉也算數）。**旗標與版次要分開**：自動遷移也會推進版次，
+	// 兩者混用就分不出「系統設的」與「玩家選的」。
+	if (UNiceInkGameInstance* I = GI())
+	{
+		I->bPerfTouchedByPlayer = true;
+		I->PerfDefaultsVersion = UNiceInkGameInstance::NiPerfDefaultsVersion;
+		I->SaveSettings();
+	}
 }
 
 void SNiMenu::ToggleWindowMode()

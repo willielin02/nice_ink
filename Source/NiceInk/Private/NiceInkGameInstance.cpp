@@ -5,6 +5,7 @@
 #include "HAL/IConsoleManager.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
+#include "GameFramework/GameUserSettings.h"
 #include "IOnlineSubsystemEOS.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Kismet/GameplayStatics.h"
@@ -151,8 +152,11 @@ void UNiceInkGameInstance::LoadSettings()
 		RenderScalePct = FMath::Clamp(Save->RenderScalePct, 50.0f, 100.0f);
 		SavedLang = Save->LanguageIndex;
 		SettingsRevision = Save->Revision;
+		PerfDefaultsVersion = Save->PerfDefaultsVersion;
+		bPerfTouchedByPlayer = Save->bPerfTouchedByPlayer;
 	}
 	ApplyRenderScale();
+	ApplyPerfDefaultsOnce();
 
 	// 語言優先序：-culture= 命令列（robo/測試；引擎已套用、只跟隨不覆蓋）
 	// > 存檔 > OS 偵測
@@ -225,8 +229,11 @@ void UNiceInkGameInstance::NiSpotMap(int32 On)
 			continue;
 		}
 		// 麥克筆層是墨的載體：換掉它＝把普查圖當成「畫在身上的墨」，材質零改動。
+		// 惰性圖層制（08-25）：線層可能根本還沒配置——還原成全透明替身，
+		// 不能傳 nullptr（材質參數設 null 會退回材質預設貼圖＝整身灰格）
 		UTexture* Restore = (It->InkCanvas && It->InkCanvas->GetMarkerRenderTarget())
-			? Cast<UTexture>(It->InkCanvas->GetMarkerRenderTarget()) : nullptr;
+			? Cast<UTexture>(It->InkCanvas->GetMarkerRenderTarget())
+			: Cast<UTexture>(UInkCanvasComponent::GetEmptyInkTexture());
 		Mid->SetTextureParameterValue(TEXT("MarkerRT"), (On != 0) ? Cast<UTexture>(SpotTex) : Restore);
 		++Applied;
 	}
@@ -284,7 +291,65 @@ UNiceInkSettingsSave* UNiceInkGameInstance::BuildSettingsSaveObject() const
 	Save->RenderScalePct = RenderScalePct;
 	Save->LanguageIndex = MenuLanguage;
 	Save->Revision = SettingsRevision;
+	Save->PerfDefaultsVersion = PerfDefaultsVersion;
+	Save->bPerfTouchedByPlayer = bPerfTouchedByPlayer;
 	return Save;
+}
+
+const TArray<float>& UNiceInkGameInstance::GetFrameRateLimitChoices()
+{
+	// 60 起跳＝本作是滑鼠精描遊戲，再低會被感覺到；240 之上對這個場景毫無意義
+	//（實測空道場的 GPU 成本 1.05ms/幀，上限之外全是純燒電）。0＝無上限恆在末位。
+	static const TArray<float> Choices = { 60.0f, 90.0f, 120.0f, 144.0f, 165.0f, 240.0f, 0.0f };
+	return Choices;
+}
+
+void UNiceInkGameInstance::ApplyPerfDefaultsOnce()
+{
+	if (bPerfTouchedByPlayer || PerfDefaultsVersion >= NiPerfDefaultsVersion)
+	{
+		return; // 玩家動過、或這版預設已套過＝不再介入
+	}
+
+	UGameUserSettings* GUS = GEngine ? GEngine->GetGameUserSettings() : nullptr;
+	if (!GUS)
+	{
+		return; // 引擎還沒準備好＝這次跳過，下次啟動再套（版次沒推進＝不會漏）
+	}
+
+	bool bChanged = false;
+
+	// v1：幀率上限。只在「還是引擎那個無上限」時介入
+	if (PerfDefaultsVersion < 1 && GUS->GetFrameRateLimit() <= 0.0f)
+	{
+		GUS->SetFrameRateLimit(NiDefaultFrameRateLimit);
+		bChanged = true;
+		UE_LOG(LogTemp, Log, TEXT("NiPerf: frame rate cap defaulted to %.0f fps (was unlimited)"),
+			NiDefaultFrameRateLimit);
+	}
+
+	// v2：VSync 開。上限只管功耗，畫面完整性是 VSync 的工作——而且 120 對 60Hz
+	// 螢幕是整數 2 倍，撕裂線會幾乎定在同一高度不動＝最顯眼的那種撕裂
+	//（2026-08-25 user 回報「遊戲房間內常常出現橫向像素錯位、像水平橫條」）。
+	if (PerfDefaultsVersion < 2 && !GUS->IsVSyncEnabled())
+	{
+		GUS->SetVSyncEnabled(true);
+		bChanged = true;
+		UE_LOG(LogTemp, Log, TEXT("NiPerf: v-sync defaulted ON (tearing fix)"));
+	}
+
+	if (bChanged)
+	{
+		// ApplyNonResolutionSettings（不是 ApplySettings）：後者會連解析度一起套，
+		// 把命令列的 -resx/-resy 蓋掉（實測 1280×720 的測試視窗被縮回存檔裡的 960×540）
+		GUS->ApplyNonResolutionSettings();
+		GUS->SaveSettings();
+	}
+
+	PerfDefaultsVersion = NiPerfDefaultsVersion;
+	// 直接寫槽：不走 SaveSettings——那會遞增 Revision 並推雲端，而這只是本機
+	// 一次性遷移，不是玩家改了偏好
+	UGameplayStatics::SaveGameToSlot(BuildSettingsSaveObject(), SettingsSlotName, 0);
 }
 
 void UNiceInkGameInstance::ApplyRenderScale()

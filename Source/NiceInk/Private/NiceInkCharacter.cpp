@@ -327,6 +327,12 @@ void ANiceInkCharacter::BeginPlay()
 		}
 	}
 
+	// 惰性墨層（2026-08-25）：畫布配置／釋放任一層時踢伸縮脖重抄身體 MID
+	if (InkCanvas)
+	{
+		InkCanvas->OnLayersChanged.AddUniqueDynamic(this, &ANiceInkCharacter::HandleInkLayersChanged);
+	}
+
 	// 雲端隨身上行（B3）：只有 packaged/-game 的遠端客戶端有戲——等本機雲端
 	// 拉取完成後把資產交給主機。PIE/robo（WorldType≠Game）與 listen 主機不啟動。
 	if (GetWorld() && GetWorld()->WorldType == EWorldType::Game && !HasAuthority() &&
@@ -3999,8 +4005,31 @@ void ANiceInkCharacter::OnRep_EyesOpen()
 	ApplySleepVisual();
 }
 
+void ANiceInkCharacter::HandleInkLayersChanged()
+{
+	if (NeckStretch)
+	{
+		NeckStretch->ForceMaterialResync();
+	}
+}
+
 void ANiceInkCharacter::ApplySleepVisual()
 {
+	// 惰性墨層預熱／解釘（2026-08-25）：受害者一入睡就把 Marker/Mist 配好——
+	// 第一針才配 2×64MB 會當場掉一幀，而第一針是手感最敏感的時刻。
+	// 甦醒解釘後這兩層還在不在，改由「Works 裡真的有筆劃」決定（稿線還在＝照留）。
+	if (InkCanvas)
+	{
+		if (bAsleep)
+		{
+			InkCanvas->PrewarmDrawLayers();
+		}
+		else
+		{
+			InkCanvas->ReleaseDrawLayerPin();
+		}
+	}
+
 	if (!Body)
 	{
 		return;

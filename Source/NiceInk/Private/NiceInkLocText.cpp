@@ -484,6 +484,32 @@ namespace
 		TEXT("모든 언어"), TEXT("todos los idiomas"), TEXT("toutes les langues"), TEXT("tutte le lingue"),
 		TEXT("alle Sprachen"), TEXT("todos os idiomas"), TEXT("все языки"),
 		TEXT("tüm diller"), TEXT("كل اللغات") } },
+	// FrameLimit（設定：幀率上限——玩家語言用「上限」，t.MaxFPS 是實作詞）
+	// 設定列標籤一律小寫（同頁 window mode／graphics quality 的既有慣例）
+	{ { TEXT("frame rate cap"), TEXT("フレームレート上限"), TEXT("幀率上限"), TEXT("帧率上限"),
+		TEXT("프레임 제한"), TEXT("límite de fps"), TEXT("limite de fps"), TEXT("limite fps"),
+		TEXT("bildraten-limit"), TEXT("limite de fps"), TEXT("ограничение fps"),
+		TEXT("kare hızı sınırı"), TEXT("حد معدل الإطارات") } },
+	// VSyncLabel（設定：垂直同步）
+	{ { TEXT("v-sync"), TEXT("垂直同期"), TEXT("垂直同步"), TEXT("垂直同步"),
+		TEXT("수직 동기화"), TEXT("sincronización vertical"), TEXT("synchro verticale"), TEXT("sincronia verticale"),
+		TEXT("v-sync"), TEXT("sincronização vertical"), TEXT("вертикальная синхр."),
+		TEXT("dikey eşitleme"), TEXT("المزامنة الرأسية") } },
+	// Unlimited（幀率上限的「無上限」值）
+	{ { TEXT("unlimited"), TEXT("無制限"), TEXT("無上限"), TEXT("无上限"),
+		TEXT("무제한"), TEXT("sin límite"), TEXT("illimité"), TEXT("illimitato"),
+		TEXT("unbegrenzt"), TEXT("sem limite"), TEXT("без ограничения"),
+		TEXT("sınırsız"), TEXT("بلا حد") } },
+	// OptionOn
+	{ { TEXT("on"), TEXT("オン"), TEXT("開"), TEXT("开"),
+		TEXT("켜기"), TEXT("activado"), TEXT("activé"), TEXT("attivo"),
+		TEXT("an"), TEXT("ligado"), TEXT("вкл"),
+		TEXT("açık"), TEXT("تشغيل") } },
+	// OptionOff
+	{ { TEXT("off"), TEXT("オフ"), TEXT("關"), TEXT("关"),
+		TEXT("끄기"), TEXT("desactivado"), TEXT("désactivé"), TEXT("spento"),
+		TEXT("aus"), TEXT("desligado"), TEXT("выкл"),
+		TEXT("kapalı"), TEXT("إيقاف") } },
 	};
 
 	static const TCHAR* GNativeNames[NiLoc::NumLangs] = {

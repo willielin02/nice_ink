@@ -71,6 +71,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Neck")
 	FString GetDebugSummary() const;
 	void ForceRebuild(); // 清跳過快取＝下一 UpdateNeck 必重建（actor 現身邊緣用）
+
+	// 強制下一 UpdateNeck 整組重抄身體 MID（惰性墨層生滅時用）：
+	// 平時的重抄門檻是「SkinTone 變了」，而墨層換貼圖不動 SkinTone ⇒ 脖子會
+	// 抱著上一張已無人參照的 RT 不放（畫面上＝脖子的墨與身體對不上）。
+	void ForceMaterialResync() { LastSyncedTone = FLinearColor(-1.0f, -1.0f, -1.0f, -1.0f); }
 	// 身體 MID 晚綁（client 上 InitFromSource 時 MID 常未建）：角色每 tick 指標比對推入
 	void SetBodyMaterialRef(UMaterialInstanceDynamic* BodyMid);
 	bool bNeckStretchEnabled = true; // 08-15 雙版制：縫合版網格上停用（脖子=蒙皮本體）

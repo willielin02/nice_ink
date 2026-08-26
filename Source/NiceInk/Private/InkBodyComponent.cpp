@@ -80,15 +80,47 @@ void UInkBodyComponent::BindCanvas(UInkCanvasComponent* Canvas)
 		SetMaterial(0, DynamicBodyMaterial);
 	}
 
-	DynamicBodyMaterial->SetTextureParameterValue(MarkerRTParam, Canvas->GetMarkerRenderTarget());
-	DynamicBodyMaterial->SetTextureParameterValue(TattooRTParam, Canvas->GetTattooRenderTarget());
-	DynamicBodyMaterial->SetTextureParameterValue(MistRTParam, Canvas->GetMistRenderTarget());
+	// 圖層生滅訂閱（惰性配置制）：只認一具畫布，換人時先退訂舊的
+	if (BoundCanvas.Get() != Canvas)
+	{
+		if (UInkCanvasComponent* Old = BoundCanvas.Get())
+		{
+			Old->OnLayersChanged.RemoveDynamic(this, &UInkBodyComponent::HandleInkLayersChanged);
+		}
+		BoundCanvas = Canvas;
+		Canvas->OnLayersChanged.AddUniqueDynamic(this, &UInkBodyComponent::HandleInkLayersChanged);
+	}
+
+	ApplyInkLayerTextures(Canvas);
 	DynamicBodyMaterial->SetVectorParameterValue(SkinToneParam, SkinTone);
 	if (EyeMaskTexture)
 	{
 		DynamicBodyMaterial->SetTextureParameterValue(EyeMaskParam, EyeMaskTexture);
 	}
 	ApplyFaceTexture();
+}
+
+void UInkBodyComponent::ApplyInkLayerTextures(UInkCanvasComponent* Canvas)
+{
+	if (!DynamicBodyMaterial || !Canvas)
+	{
+		return;
+	}
+	// 缺席的層綁全透明替身——絕不能傳 nullptr：材質參數設 null 會退回材質預設
+	// 貼圖（引擎預設是灰格），整具身體會被塗成一片灰。
+	UTexture2D* const Empty = UInkCanvasComponent::GetEmptyInkTexture();
+	const auto Pick = [Empty](UTextureRenderTarget2D* RT) -> UTexture*
+	{
+		return RT ? static_cast<UTexture*>(RT) : static_cast<UTexture*>(Empty);
+	};
+	DynamicBodyMaterial->SetTextureParameterValue(MarkerRTParam, Pick(Canvas->GetMarkerRenderTarget()));
+	DynamicBodyMaterial->SetTextureParameterValue(TattooRTParam, Pick(Canvas->GetTattooRenderTarget()));
+	DynamicBodyMaterial->SetTextureParameterValue(MistRTParam, Pick(Canvas->GetMistRenderTarget()));
+}
+
+void UInkBodyComponent::HandleInkLayersChanged()
+{
+	ApplyInkLayerTextures(BoundCanvas.Get());
 }
 
 void UInkBodyComponent::SwapBodyMesh(UStaticMesh* NewMesh)

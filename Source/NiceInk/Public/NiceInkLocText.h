@@ -49,6 +49,14 @@ enum class ENiLocKey : uint8
 	RoomNameHint,         // 房名輸入框 hint（說明用途：讓別人知道你在找怎樣的玩家）
 	OpenPublicShortcut,   // 加入頁空狀態捷徑「自己開一間」（死路變轉化）
 	AllLanguages,         // 加入頁語言過濾「全部語言」選項
+	// 效能設定（2026-08-25）：引擎預設 FrameRateLimit=0＋VSync off＝顯卡被拉到
+	// 滿速去畫每秒 500 張（實測空道場 1280×720 Frame 1.95ms／GPU 67%／93W）。
+	// 「沒有上限」不是設計選擇，是沒人踩煞車——補上煞車，並讓玩家自己決定。
+	FrameLimit,           // 設定：幀率上限
+	VSyncLabel,           // 設定：垂直同步
+	Unlimited,            // 幀率上限的「無上限」值
+	OptionOn,             // 通用二態：開
+	OptionOff,            // 通用二態：關
 	COUNT
 };
 

@@ -30,18 +30,133 @@ void UInkCanvasComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// 惰性配置制（2026-08-25）：這裡不再無條件配四張 4096——RebuildRenderTargets
+	// 依 Works 內容決定要哪幾層。空畫布＝零 VRAM，材質綁 4×4 全透明替身。
+	RebuildRenderTargets();
+}
+
+UTexture2D* UInkCanvasComponent::GetEmptyInkTexture()
+{
+	static UTexture2D* Empty = nullptr;
+	if (Empty && IsValid(Empty))
+	{
+		return Empty;
+	}
+	constexpr int32 Size = 4;
+	Empty = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8, TEXT("InkEmptyLayer"));
+	Empty->SRGB = false;
+	Empty->Filter = TF_Bilinear;
+	Empty->NeverStream = true;
+	FTexture2DMipMap& Mip = Empty->GetPlatformData()->Mips[0];
+	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	for (int32 I = 0; I < Size * Size; ++I)
+	{
+		Pixels[I] = FColor(0, 0, 0, 0); // 預乘全透明＝「這裡沒有墨」
+	}
+	Mip.BulkData.Unlock();
+	Empty->UpdateResource();
+	Empty->AddToRoot(); // 全域共用、永不回收（64 byte）
+	return Empty;
+}
+
+UInkCanvasComponent::FLayerNeeds UInkCanvasComponent::ComputeLayerNeeds() const
+{
+	FLayerNeeds Needs;
+	Needs.bMarker = bDrawLayersPinned;
+	Needs.bMist = bDrawLayersPinned;
+	for (const FInkWork& Work : Works)
+	{
+		if (Work.State == EInkWorkState::Marker)
+		{
+			// 稿線／液線→線層、打霧→霧層（渲染分層與 StampIntoLayerRT 的路由同構）
+			for (const FInkStroke& Stroke : Work.Strokes)
+			{
+				if (Stroke.NeedleType == EInkNeedle::Shader)
+				{
+					Needs.bMist = true;
+				}
+				else
+				{
+					Needs.bMarker = true;
+				}
+			}
+		}
+		else
+		{
+			Needs.bTattoo = true;
+			if (Work.LaserLevel > 0 && LaserOpacity(Work.LaserLevel) > 0.0f)
+			{
+				Needs.bScratch = true; // 淡化合成的暫存畫布
+			}
+		}
+	}
+	return Needs;
+}
+
+void UInkCanvasComponent::ReleaseLayer(TObjectPtr<UTextureRenderTarget2D>& Slot, bool& bOutChanged)
+{
+	if (Slot)
+	{
+		Slot = nullptr;
+		bOutChanged = true;
+	}
+}
+
+UTextureRenderTarget2D* UInkCanvasComponent::EnsureMarkerRT()
+{
 	if (!MarkerRT)
 	{
 		MarkerRT = CreateLayerRT(TEXT("InkMarkerRT"), RenderTargetResolution);
+		OnLayersChanged.Broadcast();
 	}
+	return MarkerRT;
+}
+
+UTextureRenderTarget2D* UInkCanvasComponent::EnsureTattooRT()
+{
 	if (!TattooRT)
 	{
 		TattooRT = CreateLayerRT(TEXT("InkTattooRT"), RenderTargetResolution);
+		OnLayersChanged.Broadcast();
 	}
+	return TattooRT;
+}
+
+UTextureRenderTarget2D* UInkCanvasComponent::EnsureMistRT()
+{
 	if (!MistRT)
 	{
 		MistRT = CreateLayerRT(TEXT("InkMistRT"), MistRenderTargetResolution);
+		OnLayersChanged.Broadcast();
 	}
+	return MistRT;
+}
+
+UTextureRenderTarget2D* UInkCanvasComponent::EnsureScratchRT()
+{
+	if (!ScratchRT)
+	{
+		// 只是合成暫存、不進材質＝不必廣播
+		ScratchRT = CreateLayerRT(TEXT("InkScratchRT"), RenderTargetResolution);
+	}
+	return ScratchRT;
+}
+
+void UInkCanvasComponent::PrewarmDrawLayers()
+{
+	bDrawLayersPinned = true;
+	EnsureMarkerRT();
+	EnsureMistRT();
+}
+
+void UInkCanvasComponent::ReleaseDrawLayerPin()
+{
+	if (!bDrawLayersPinned)
+	{
+		return;
+	}
+	bDrawLayersPinned = false;
+	// 釘選解除後這兩層還在不在，改由 Works 決定（甦醒時稿線通常還在＝照樣留著）
 	RebuildRenderTargets();
 }
 
@@ -642,19 +757,41 @@ void UInkCanvasComponent::SetRoundIndex(int32 NewRoundIndex)
 
 void UInkCanvasComponent::RebuildRenderTargets()
 {
-	if (!MarkerRT || !TattooRT)
+	// 批次 context 若還開著，BatchRT 是裸指標——重播前先收，免得指向剛被放掉的層
+	EndStampBatch();
+
+	// 惰性配置：先配齊需要的，再放掉不需要的。順序不可反——消費端要先收到
+	// 「新的那張」才安全（釋放只是放開指標，資源由 UObject 生命週期收）。
+	const FLayerNeeds Needs = ComputeLayerNeeds();
+	if (Needs.bMarker) { EnsureMarkerRT(); }
+	if (Needs.bMist)   { EnsureMistRT(); }
+	if (Needs.bTattoo) { EnsureTattooRT(); }
+
+	bool bLayerSetChanged = false;
+	if (!Needs.bMarker)  { ReleaseLayer(MarkerRT, bLayerSetChanged); }
+	if (!Needs.bMist)    { ReleaseLayer(MistRT, bLayerSetChanged); }
+	if (!Needs.bTattoo)  { ReleaseLayer(TattooRT, bLayerSetChanged); }
+	if (!Needs.bScratch) { bool bIgnored = false; ReleaseLayer(ScratchRT, bIgnored); }
+	if (bLayerSetChanged)
 	{
-		return;
+		OnLayersChanged.Broadcast();
 	}
 
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, MarkerRT, FLinearColor::Transparent);
-	UKismetRenderingLibrary::ClearRenderTarget2D(this, TattooRT, FLinearColor::Transparent);
+	if (MarkerRT)
+	{
+		UKismetRenderingLibrary::ClearRenderTarget2D(this, MarkerRT, FLinearColor::Transparent);
+	}
+	if (TattooRT)
+	{
+		UKismetRenderingLibrary::ClearRenderTarget2D(this, TattooRT, FLinearColor::Transparent);
+	}
 	if (MistRT)
 	{
 		UKismetRenderingLibrary::ClearRenderTarget2D(this, MistRT, FLinearColor::Transparent);
 	}
 
 	// 麥克筆線層：玩家原色、全不透明，直接 stamp（只收 Liner——銳化只咬線）
+	if (MarkerRT)
 	{
 		UCanvas* Canvas = nullptr;
 		FVector2D CanvasSize = FVector2D::ZeroVector;
@@ -696,6 +833,7 @@ void UInkCanvasComponent::RebuildRenderTargets()
 	// 刺青層：碳黑墨色。未淡化的直接 stamp；
 	// 淡化的先在 ScratchRT 以滿透明度畫完，再整張以工作透明度合成
 	//（半透明 stamp 直接重疊會產生堆疊條紋）。
+	if (TattooRT)
 	{
 		UCanvas* Canvas = nullptr;
 		FVector2D CanvasSize = FVector2D::ZeroVector;
@@ -717,7 +855,7 @@ void UInkCanvasComponent::RebuildRenderTargets()
 
 	for (const FInkWork& Work : Works)
 	{
-		if (Work.State == EInkWorkState::Marker || Work.LaserLevel == 0)
+		if (Work.State == EInkWorkState::Marker || Work.LaserLevel == 0 || !TattooRT)
 		{
 			continue;
 		}
@@ -728,10 +866,7 @@ void UInkCanvasComponent::RebuildRenderTargets()
 			continue;
 		}
 
-		if (!ScratchRT)
-		{
-			ScratchRT = CreateLayerRT(TEXT("InkScratchRT"), RenderTargetResolution);
-		}
+		EnsureScratchRT();
 		UKismetRenderingLibrary::ClearRenderTarget2D(this, ScratchRT, FLinearColor::Transparent);
 
 		{
@@ -1121,7 +1256,8 @@ void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2
 {
 	// 針型路由：Liner→線層（銳化咬=脆的實心墨）；Shader→霧層
 	//（獨立層=銳化不咬=半透明針點成立——兩種材質語義分層的結構保證，三版鐵則）
-	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? ToRawPtr(MistRT) : ToRawPtr(MarkerRT);
+	// 惰性配置：真的有墨要落才配那一層（受害者入睡已預熱＝這裡通常是命中）
+	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? EnsureMistRT() : EnsureMarkerRT();
 	if (!LayerRT)
 	{
 		return;
@@ -1176,7 +1312,7 @@ void UInkCanvasComponent::BeginStampBatchFor(int32 AuthorId)
 		return;
 	}
 	const EInkNeedle Needle = Work->Strokes.Last().NeedleType;
-	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? ToRawPtr(MistRT) : ToRawPtr(MarkerRT);
+	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? EnsureMistRT() : EnsureMarkerRT();
 	if (!LayerRT)
 	{
 		return;
@@ -1252,8 +1388,14 @@ FVector2D UInkCanvasComponent::ClampUV(FVector2D UV)
 	return FVector2D(FMath::Clamp(UV.X, 0.0f, 1.0f), FMath::Clamp(UV.Y, 0.0f, 1.0f));
 }
 
-bool UInkCanvasComponent::ExportLayersToPng(const FString& AbsolutePathPrefix) const
+bool UInkCanvasComponent::ExportLayersToPng(const FString& AbsolutePathPrefix)
 {
+	// 惰性配置制：傾印是 QA/robo 路徑，先把三層補齊＝契約仍恆得到三個檔
+	//（新配的層是全透明＝與「舊制配了但沒畫過」的內容逐位相同）
+	EnsureMarkerRT();
+	EnsureTattooRT();
+	EnsureMistRT();
+
 	const bool bMarkerSaved = SaveRTToPng(MarkerRT, AbsolutePathPrefix + TEXT("_marker.png"));
 	const bool bTattooSaved = SaveRTToPng(TattooRT, AbsolutePathPrefix + TEXT("_tattoo.png"));
 	const bool bMistSaved = SaveRTToPng(MistRT, AbsolutePathPrefix + TEXT("_mist.png"));

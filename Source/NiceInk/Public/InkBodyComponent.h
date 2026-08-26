@@ -110,6 +110,12 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void BindCanvas(UInkCanvasComponent* Canvas);
 
+	// 惰性圖層制（2026-08-25）：畫布的某一層被配置／釋放時，材質上綁的那張
+	// 貼圖換人了——訂閱 OnLayersChanged 當場重綁。缺席的層綁 4×4 全透明替身
+	//（取樣結果與「配好卻空白的 4096」逐位相同）。
+	UFUNCTION()
+	void HandleInkLayersChanged();
+
 	// 沉睡表現的核心：閉眼＝換 _Closed 臉貼圖；睜眼＝換回。
 	UFUNCTION(BlueprintCallable, Category = "Ink")
 	void SetEyesClosed(bool bClosed);
@@ -181,6 +187,10 @@ public:
 private:
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> DynamicBodyMaterial;
+
+	// 目前綁著的畫布（惰性圖層重綁用；弱參照＝畫布先死也不留懸指標）
+	TWeakObjectPtr<UInkCanvasComponent> BoundCanvas;
+	void ApplyInkLayerTextures(UInkCanvasComponent* Canvas);
 
 	bool bEyesClosed = false;
 

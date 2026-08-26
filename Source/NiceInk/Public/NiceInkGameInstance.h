@@ -47,6 +47,21 @@ public:
 	// RenderScalePct 改動後即時生效（r.ScreenPercentage）；載入/雲端套用後也要呼叫
 	void ApplyRenderScale();
 
+	// --- 效能預設（2026-08-25 幀率上限制）---
+	// 幀率上限／VSync 的正本住引擎 GameUserSettings（與視窗模式同一責任邊界，
+	// 不進本作的偏好存檔、也不上雲——那是每台機器自己的事）。這裡只負責
+	// 「首次啟動把煞車裝上去」：引擎預設無上限＝顯卡永遠 100% 滿載。
+	// v1＝120fps 上限；v2＝VSync 開（120 對 60Hz 是整數 2 倍＋VSync 關 ⇒ 撕裂線
+	// 幾乎不動＝user 回報的「水平橫條」）。上限管功耗，VSync 管畫面完整性。
+	static constexpr int32 NiPerfDefaultsVersion = 2;
+	static constexpr float NiDefaultFrameRateLimit = 120.0f;
+	int32 PerfDefaultsVersion = 0;
+	bool bPerfTouchedByPlayer = false; // 玩家動過＝任何版本的預設遷移都不准再碰
+	void ApplyPerfDefaultsOnce();
+
+	// 設定頁的幀率上限選項（0＝無上限，恆為最後一項）
+	static const TArray<float>& GetFrameRateLimitChoices();
+
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Settings")
 	void SaveSettings();
 
