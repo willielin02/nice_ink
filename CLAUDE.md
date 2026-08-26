@@ -542,6 +542,13 @@ canvas 做不到毛玻璃半透明）**。
   皮膚質感＝M_InkBodyChar 材質內假光（SPEC 定案 #37：全啞光＋頭燈假光＋掃描色度血色場；
   旋鈕全是 Scalar Parameter：Headlight*/SkinBrightness/SkinDesat/ChromaStrength/SkinSpecular；
   血色場再生=Tools/AssetPrep/sumo_body_chroma_*；**皮膚零烘焙陰影鐵律不破，勿再提案皮膚陰影/AO**）。
+  **`T_BodyChroma` 現制（08-27）＝解剖色調**（乳頭/乳暈/肚臍加深；追記84）：血色場自 08-22
+  中和成 32×32 純色後整條通道是空的，現在裝的是 `sumo_anat_tint.py` 烘的 2048 BC7 乘法場
+  ——**位置與範圍直接讀網格的「保護島」**（SumoRetopo 有 5 顆獨立連通元件＝乳頭 170v／
+  乳暈 266v／肚臍 2304v，島邊界就是特徵邊界；**不要再拿 `sumo_bump_scan.py` 的 `ANATOMY`
+  當中心——那是排除球，球心刻意埋在皮下 12mm**）。強度旋鈕＝材質的 `ChromaStrength`（0.6）；
+  形狀旋鈕＝腳本預設（暗度 0.475/0.45/0.475、淡出 1.5mm，**預設即出貨值、重跑逐位相同**），
+  改完要跑 `ue_import_anat_tint.py` 重匯。
 - 墨水圖集 UV0＝**均勻紋素密度**（sumo 實測 0.617 px/mm；RT 解析度 4096＝筆寬 4.7px
   ＋線層 Valve alpha 銳化）；筆寬 `MarkerUvRadius 0.000452`＝3.0mm 全身一致（08-02 user 定值；**RT 4096 下 1 texel=0.81mm、線寬=3.70 texel**）；線的跨縫
   ＝點刺制逐點解算天然安全；**排針（面積章）的跨縫＝InkBody 縫資料層＋表面攤平補丁
