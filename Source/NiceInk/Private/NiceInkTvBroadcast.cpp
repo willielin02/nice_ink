@@ -1157,7 +1157,7 @@ void DrawBroadcastChrome(FCan& C, int32 Shot, float U, int32 FrameNo)
 	// ⇒ 主役の二拍（A>0.55、約 4.9 秒）は chrome を一切載せない。
 	struct FTelop { int32 Text; float In0, In1, Out0, Out1; };
 	static const FTelop Telops[2] = {
-		{ NiceInkTvTelop::Txt_Natsumatsuri, 0.02f, 0.05f, 0.29f, 0.32f }, // 0.2~3.3s（夜祭→太鼓）
+		{ NiceInkTvTelop::Txt_Ennichi, 0.02f, 0.05f, 0.29f, 0.32f }, // 0.2~3.3s（夜祭→太鼓）
 		{ NiceInkTvTelop::Txt_Mikoshi,      0.35f, 0.38f, 0.50f, 0.53f }, // 3.6~5.5s（神輿）
 	};
 	for (const FTelop& T : Telops)
