@@ -2829,3 +2829,49 @@ user 看了極端版（暗 0.95）：「乳頭和肚臍定位都有問題，你�
 ⇒ 引擎端（ChromaStrength 0.6）實際變暗 **28.5%**。**這組值已寫成腳本預設**：
 不帶任何環境變數重跑，產物與出貨的 `body_chroma_anat.png` **逐位相同**（md5 對賬過）。
 偏紅權重 (0.82,1.00,1.08) 與較軟的邊緣（6mm）留成旋鈕，未採用。
+
+## 2026-08-27~28 追記85：開場動畫五拍＋蹲踞拾瓶＋Radiola 電視（BUILT-自驗，待 viewport）
+
+**起點**：user 定案敘事（逐字）「坐在榻榻米上喝酒看電視，看到電視上一群極道刺青很帥，
+關上電視後有人提議要來玩互相幫對方刺青的遊戲」＋「機器人的僵硬感是可以的」。
+中間走過一整天的岔路（姿勢域掃描→肥肉引擎 implicit skinning）後 user 裁決：**卸下肥肉
+引擎、不量坐站過渡、照計畫直接做完**。肥肉引擎從未進遊戲（Source/Config/Content 零變更），
+封存 `Tools/AssetPrep/archive_implicit_skin/`；掃描器留下三個實測結論：膝 120° 免費、髖是
+褌的瓶頸（±20°）、軀幹前彎預算 10~15°。
+
+### 每一回合都播的：蹲踞拾瓶
+- 彎 64°→14°、Crouch 32→52、Standoff 40→28、LookDown −26→−14。力士不彎腰撿東西，
+  蹲踞本來就是相撲儀式姿勢＝題材正解與技術正解重合。
+- robo_ceremony_test c1~c10 全綠、handErr 18.7→**12.3cm**。**c11 不可跑**：需 3 人局而
+  3-client PIE OOM 是 08-21 起既有鐵坑（非迴歸，記帳）。2 人局時腳本在 round2 無限卡
+  （Accuse 需第三人且逾時每 tick 被重置）——腳本缺陷，未修。
+
+### 只播一次的：五拍
+- `ENiCeremonyStep` Gather 前插 IntroSit/Notice/TvOff/Propose/Rise；只在本房第一場、
+  PIE 一律跳過（`bOpeningIntroForceInPIE` 供自驗）。**儀式步驟全體 +5，三支 robo 腳本已修。**
+- 入座＝當幀 teleport（與導演鏡頭 blend=0 硬切同幀）；坐姿＝SitBones 第一個消費者；
+  坐→站＝Propose→Rise 剪接間 snap（不做過渡——中間幀只有被拍到才存在）。
+- 席弧：24°@r260、依在場名次置中（第一版 17°＝兩人互穿、固定槽位＝少人局擠弧西端）。
+- 機位表 `ViewIntro`：全景東側側拍（背拍＝電視永遠被身體擋住）、電視特寫緩推、房主腰上
+  近景；反拍砍掉（並排坐不轉頭＝只拍到背影）。
+- 電視：第一版方塊拼裝→user 下載 Sketchfab "Radiola from Matrix"（Sirenko，CC-BY-4.0
+  可商用需署名）→ 三輪 user 打回：①RT 平板浮貼把凸框整片蓋成螢幕→拆 `TvGlass` 槽＋UV
+  歸一化（**內凹的才是玻璃**，探深度分佈才知道）；②框/玻璃分不清→AO 接回材質＋熄滅玻璃
+  灰綠＋RT 邊緣暗角。信用：選單授權頁一行＋THIRD_PARTY_NOTICES 條目＋ATTRIBUTION.txt。
+- 電視節目＝CanvasRT 畫背部剪影＋DreamTrace motif 輪播（蛇/鶴/龜/櫻）＝**電視上的圖
+  就是玩家夢裡要描的圖**；12Hz 更新、掃描線、閃爍；關機白線收縮。
+
+### v1 刻意未做（記帳）
+房主手上無刺青機道具網格（舉拳＋marker_loop 補位）；坐姿飲酒動作；電視音效；
+開場期間 HUD 仍顯示 BOTTLE SPIN 倒數；Propose 腰上近景只能在 client 視窗驗。
+
+### 同批：兩起畫面出鬼＋一道防線
+- 選單舞者黑鋸齒碎片（間歇、冷開重現不出、user 當時四開＋有視窗強關）→ jiggle 寫入端加
+  **NaN 防線**（所有鉗位對 NaN 失效；壞值重置＋`NiJiggle: NaN` 報警）。之後 user 未再見。
+- 轉瓶段閃黑斑（重開仍在、單視窗 HighResShot 連拍零瞬態）→ 定性為四開未 cook 編輯器行程
+  的記憶體壓力在**峰值幀（全員＋刺青 RT＋電視同框）**的資源駐留失效；HighResShot 是離屏
+  重渲＝看不見顯示鏈路瞬態（儀器路徑記帳）。**開發端無可修、出口＝打包版**（待 user 點時間）。
+
+### 鐵坑（全文見 CLAUDE.md 陷阱年鑑）
+Interchange 讀不了 FBX 內嵌貼圖／glb 貼圖無副檔名；曝光 bias 下 unlit 自發光 ×8；
+NaN 穿鉗位；Live Coding 殘留擋 Build；列舉中插值＝robo 步驟號全過期。

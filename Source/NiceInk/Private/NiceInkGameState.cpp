@@ -100,6 +100,44 @@ FVector ANiceInkGameState::GetCeremonySlotLocation(int32 SeatIndex) const
 		FVector(FMath::Cos(Rad), FMath::Sin(Rad), 0.0f) * CeremonyRadiusCm;
 }
 
+FVector ANiceInkGameState::GetIntroTvLocation() const
+{
+	// 舞台中心的純函式（**不可寫死世界座標**——舞台搬家要跟；ViewWide 同一條鐵則）
+	return CeremonyCenter + FVector(0.0f, -310.0f, 0.0f);
+}
+
+FVector ANiceInkGameState::GetIntroSitLocation(int32 SeatIndex) const
+{
+	// 弧上角位：席位 0..5 從左到右各 17°；基準向＝電視朝觀眾群的 +Y。
+	// 半徑 260 ⇒ 弧在舞台中心南側一點點（y≈−54），坐在榻榻米區。
+	// 24 deg @ r260 = 鄰居間距 109cm（體寬 ~95cm；17°=77cm 實測兩人互穿）。
+	// 依**在場名次**置中（同 GetCeremonySlotRank 慣例）：用固定六席樽位會讓
+	// 2~5 人局搠在弧的西端（截圖自查實錬），人群要永遠坐在電視正前。
+	constexpr float StepDeg = 24.0f;
+	const int32 Rank = GetCeremonySlotRank(SeatIndex);
+	int32 Count = 0;
+	for (const APlayerState* PS : PlayerArray)
+	{
+		if (const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+		{
+			if (NIPS->SeatIndex >= 0)
+			{
+				++Count;
+			}
+		}
+	}
+	const int32 UseRank = (Rank == INDEX_NONE) ? 0 : Rank;
+	const float Fan = (UseRank - (FMath::Max(Count, 1) - 1) * 0.5f) * StepDeg;
+	const FVector Dir = FVector(0.0f, 1.0f, 0.0f).RotateAngleAxis(Fan, FVector::UpVector);
+	return GetIntroTvLocation() + Dir * 260.0f;
+}
+
+float ANiceInkGameState::GetIntroSitYawDeg(int32 SeatIndex) const
+{
+	const FVector ToTv = GetIntroTvLocation() - GetIntroSitLocation(SeatIndex);
+	return FMath::RadiansToDegrees(FMath::Atan2(ToTv.Y, ToTv.X));
+}
+
 void ANiceInkGameState::SetPhase(ENiceInkPhase NewPhase, float DurationSeconds)
 {
 	CurrentPhase = NewPhase;

@@ -42,6 +42,15 @@ linked or reproduced below. This file ships next to the game executable.
 - The sauna venue is retained in the project as an alternate stage (L_Sauna).
   If the shipped build excludes L_Sauna, this credit is retained out of courtesy.
 
+### "Radiola from \"Matrix\"" by Sirenko
+- Source: Sketchfab (https://sketchfab.com/3d-models/radiola-from-matrix-62beeb98552846bea1f7a2d4b42396a8)
+- Author: Sirenko (https://sketchfab.com/sirenko)
+- License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)
+- Used as the opening-cutscene television (SM_TvRadiola); remains in the dojo as furniture.
+- Required credit text (from the model's license.txt): This work is based on
+  "Radiola from \"Matrix\"" by Sirenko, licensed under CC-BY-4.0.
+- Archive: SourceAssets/Television_Sirenko/ (ATTRIBUTION.txt inside).
+
 ### Dojo scene
 - Source/license: **PENDING — must be confirmed by the project owner before
   commercial release.** (SourceAssets/dojo carries no attribution record.)

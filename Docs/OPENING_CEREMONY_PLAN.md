@@ -484,3 +484,31 @@ Elbow = Shoulder + D̂·A + Pole·H
   `SitBones`/`LeanBones`、**沒有睡姿骨表**，`UpdateSleepBodyDouble` **脖子以下不擺骨**。
   看起來像「大字」是因為相撲 bind pose 本來就張開（rest 膝 X ±58.7cm、大腿間距 67cm）。
 - **這是既有設計，user 明確表示照舊。未經指示不得更動。**
+
+## 2026-08-27~28 開場動畫（本房第一場專屬的前五拍；每回合儀式不動）
+
+user 定案敘事：「原本大家都是坐在榻榻米上喝酒看電視，看到電視上一群極道刺青很帥，關上電視後
+有人提議要來玩互相幫對方刺青的遊戲，進而開始我們的遊戲」；「機器人的僵硬感是可以的」。
+
+| # | 拍 | 秒 | 內容 | 載體 |
+|---|---|---|---|---|
+| ① | IntroSit | 4.0 | 全員盤腿坐榻榻米看電視；全景緩推 | SitBones（ComposeSitBaseCS）＋jiggle |
+| ② | IntroNotice | 2.6 | 剪→電視正面特寫緩推 | ViewIntro 機位表 |
+| ③ | IntroTvOff | 1.5 | 畫面壓成白線→橫向收成點 | CanvasRT 純繪製 |
+| ④ | IntroPropose | 3.0 | 房主右臂 IK 舉起、刺青機馬達聲；腰上近景 | 二骨 IK（ApplyCeremonyPose 同構）＋marker_loop |
+| ⑤ | IntroRise | 1.2 | 剪回全景：全員已站立 → 接既有 Gather | 姿勢交還步態；起身發生在剪接中 |
+
+- **零過渡的正當性**：#53 的「零硬切」管的是身體與位置的連續性，不是鏡頭；剪接是電影
+  語言。坐→站在 Propose→Rise 的剪接期間 snap，中間幀不上鏡。（曾量過坐→站逐骨插值帶
+  `pose_domain_sitstand.py`：t=0 盤腿坐本身在現行褌下 xsect 2769／cross 1082，t≥0.375
+  即乾淨——資料留 Saved/PoseProbe/sitstand.tsv，user 裁決不需要先量。）
+- 入座＝BeginOpeningIntro 當幀 SetActorLocation＋ClientSyncPoseTransform＋DisableMovement
+  （與導演鏡頭 blend=0 同幀＝玩家看不見自己被搬）；Rise 拍 ReleasePlayersFromIntro 恢復行走。
+- 幾何全部＝CeremonyCenter 的純函式（GetIntroTvLocation／GetIntroSitLocation／
+  GetIntroSitYawDeg）：電視在舞台中心北 310cm 面朝 +Y；席弧以電視為心 r=260、24°/席、
+  依在場名次置中。舞台搬家自動跟。
+- 電視 `ANiceInkTvSet`：SM_TvRadiola（Sirenko CC-BY-4.0）＋`TvGlass` 槽 MID 餵 512×384
+  CanvasRT；視覺＝(step,t) 純函式、零複製欄位；開場後留場當家具。
+- 播放門檻：`bOpeningIntroEnabled`＋`!bOpeningIntroPlayed`＋WorldType==Game（或
+  `bOpeningIntroForceInPIE`）。續攤直接 Gather。
+- 儀器：`Tools/RoboTest/robo_intro_shots.py`（五拍＋Gather 交接＋轉瓶連拍 10 張）。

@@ -793,6 +793,12 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 		}
 		break;
 	case ENiceInkPhase::BottleSpin:
+		// 開場五拍＝分拍機位表（真剪接）；Gather/Spin 照舊全景
+		if (NiCeremonyStepIsIntro(GS->CeremonyStep))
+		{
+			ViewIntro(PC, GS->CeremonyStep, GS->GetCeremonyAlpha());
+			return;
+		}
 		bWide = true; // 轉瓶儀式全景
 		break;
 	case ENiceInkPhase::Seating:
@@ -946,6 +952,83 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 		bWideViewActive = true;
 		bThirdPersonActive = false;
 		LastViewWorkId = INDEX_NONE;
+	}
+}
+
+void ANiceInkCharacter::ViewIntro(APlayerController* PC, ENiCeremonyStep Step, float T)
+{
+	// 分拍機位表：每拍一顆固定機位＋單調緩推；換拍＝blend 0 真剪接。
+	// 「切機位用真剪接、機位內只做緩推」——讓鏡頭在空間裡飛是業餘感最大的單一來源。
+	const ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>();
+	if (!GS)
+	{
+		return;
+	}
+	const FVector TvLoc = GS->GetIntroTvLocation();
+	const FVector ScreenC = TvLoc + FVector(0.0f, 37.0f, 70.0f); // Radiola 玻璃中心 // 螢幕面（yaw90 ⇒ +Y）
+	const FVector GroupC = TvLoc + FVector(0.0f, 252.0f, 0.0f);  // 觀眾弧質心
+
+	ANiceInkCharacter* Host = nullptr;
+	for (APlayerState* PSIter : GS->PlayerArray)
+	{
+		const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PSIter);
+		if (NIPS && NIPS->bIsRoomHost)
+		{
+			Host = Cast<ANiceInkCharacter>(NIPS->GetPawn());
+			break;
+		}
+	}
+
+	// 全景＝東側側拍（群體面向 −Y 看電視 ⇒ 側面才同框；從背後拍＝電視永遠被身體擋住，截圖自查實錬）
+	const FVector Mid = (GroupC + TvLoc) * 0.5f;
+	FVector CamPos = Mid + FVector(540.0f, 40.0f, 122.0f);
+	FVector LookAt = Mid + FVector(0.0f, 0.0f, 55.0f);
+	float PushCm = 22.0f;
+	switch (Step)
+	{
+	case ENiCeremonyStep::IntroSit:
+	case ENiCeremonyStep::IntroRise:
+		break; // 全景：群體與電視同框；Rise＝剪回同一顆
+	case ENiCeremonyStep::IntroNotice:
+	case ENiCeremonyStep::IntroTvOff:
+		CamPos = TvLoc + FVector(0.0f, 168.0f, 80.0f);
+		LookAt = ScreenC;
+		PushCm = (Step == ENiCeremonyStep::IntroNotice) ? 42.0f : 0.0f;
+		break;
+	case ENiCeremonyStep::IntroPropose:
+		if (Host && Host != this)
+		{
+			const FVector Fwd = Host->GetActorForwardVector();
+			{
+				// 腰上近景：上半身動作在框內、腿（坐姿）在框外。
+				// 房主本人看全景（不做反拍：其餘人並排坐且不會轉頭看他，
+				// 反拍拍到的只有背影——截圖自查實錬）
+				CamPos = Host->GetActorLocation() + Fwd * 118.0f + FVector(0.0f, 0.0f, 34.0f);
+				LookAt = Host->GetActorLocation() + FVector(0.0f, 0.0f, 14.0f);
+			}
+			PushCm = 10.0f;
+		}
+		break;
+	default:
+		break;
+	}
+
+	const FVector Dir = (LookAt - CamPos).GetSafeNormal();
+	CamPos += Dir * (PushCm * FMath::Clamp(T, 0.0f, 1.0f));
+	CamPos = ClampToRoom(CamPos);
+
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
+	{
+		Cam->SetActorLocationAndRotation(CamPos, (LookAt - CamPos).Rotation());
+		if (!bViewOverridden || LastIntroCamStep != Step)
+		{
+			PC->SetViewTargetWithBlend(Cam, 0.0f); // 真剪接：blend=0
+			bViewOverridden = true;
+			bWideViewActive = false;
+			bThirdPersonActive = false;
+			LastViewWorkId = INDEX_NONE;
+			LastIntroCamStep = Step;
+		}
 	}
 }
 
@@ -4732,6 +4815,37 @@ void ANiceInkCharacter::ComposeLeanBaseCS(const FReferenceSkeleton& Ref, TArray<
 	}
 }
 
+void ANiceInkCharacter::ComposeSitBaseCS(const FReferenceSkeleton& Ref, TArray<FTransform>& OutCS) const
+{
+	// 盤腿坐（SitBones=Backup2，user 七月手擺）——與 ComposeLeanBaseCS 同構造、
+	// 只換姿勢表。這是 SitBones 入庫以來的**第一個消費者**（開場動畫 2026-08-27）。
+	const int32 NumBones = Ref.GetNum();
+	OutCS.SetNum(NumBones);
+	auto FindPose = [](const FName& Bone) -> const DrawPoseData::FBonePose* {
+		for (const DrawPoseData::FBonePose& P : DrawPoseData::SitBones)
+		{
+			if (Bone == FName(P.Name))
+			{
+				return &P;
+			}
+		}
+		return nullptr;
+	};
+	for (int32 i = 0; i < NumBones; ++i)
+	{
+		FTransform Local = Ref.GetRefBonePose()[i];
+		if (const DrawPoseData::FBonePose* P = FindPose(Ref.GetBoneName(i)))
+		{
+			const FVector RefScale = Local.GetScale3D();
+			Local = FTransform(FQuat(P->QX, P->QY, P->QZ, P->QW).GetNormalized(),
+				FVector(P->LX, P->LY, P->LZ));
+			Local.SetScale3D(RefScale); // 保 scale（節點根骨 100 鏈）
+		}
+		const int32 Parent = Ref.GetParentIndex(i);
+		OutCS[i] = Local * (Parent != INDEX_NONE ? OutCS[Parent] : FTransform::Identity);
+	}
+}
+
 bool ANiceInkCharacter::WriteBowPoseConverged(const FReferenceSkeleton& Ref, const TArray<FTransform>& CS,
 	const TArray<FName>& VerifyBones)
 {
@@ -7172,6 +7286,12 @@ void ANiceInkCharacter::UpdateCeremony(float DeltaSeconds)
 		bCeremCollapseCaptured = false;
 		bCeremBottleLocalValid = false;
 		CeremStuckSeconds = CeremSideStepSeconds = 0.0f;
+		if (IntroMachineLoop)
+		{
+			IntroMachineLoop->Stop();
+			IntroMachineLoop = nullptr;
+		}
+		LastIntroCamStep = ENiCeremonyStep::None;
 		bCeremonySeatValid = false; // 下一回合的儀式重錄席位（現身要站回**當時**的席位）
 		return;
 	}
@@ -7185,6 +7305,14 @@ void ANiceInkCharacter::UpdateCeremony(float DeltaSeconds)
 
 	const bool bVictim = IsCeremonyVictim();
 	const float T = GS->GetCeremonyAlpha();
+
+	// 開場動畫（本房第一場）：全員盤腿坐看電視；坐→站不插值＝發生在
+	// Propose→Rise 的剪接期間（中間幀只有被拍到才存在）
+	if (NiCeremonyStepIsIntro(Step))
+	{
+		ApplyIntroSitPose(GS, DeltaSeconds);
+		return;
+	}
 
 	// 走位（Gather／Approach）＝合成輸入；姿勢照常由步態負責
 	UpdateCeremonyWalk(DeltaSeconds, GS);
@@ -7622,6 +7750,133 @@ void ANiceInkCharacter::ApplyCeremonyPose(float DeltaSeconds)
 	BowBody->SetRelativeLocationAndRotation(NowLoc, NowQ);
 }
 
+void ANiceInkCharacter::ApplyIntroSitPose(const ANiceInkGameState* GS, float DeltaSeconds)
+{
+	if (!Body || !BowBody || !EnsureBowBodyAsset() || !GS)
+	{
+		return;
+	}
+	const ENiCeremonyStep Step = GS->CeremonyStep;
+	const float T = GS->GetCeremonyAlpha();
+
+	// Rise 拍＝姿勢交還步態（站姿由 gait idle 寫入；坐→站的過渡不上鏡）
+	if (Step == ENiCeremonyStep::IntroRise)
+	{
+		if (bCeremonyPoseActive)
+		{
+			bCeremonyPoseActive = false;
+			bStandDoubleActive = false;
+			bGaitIdleWritten = false;
+		}
+		if (IntroMachineLoop)
+		{
+			IntroMachineLoop->Stop();
+			IntroMachineLoop = nullptr;
+		}
+		if (IsLocallyControlled() && !bAsleep && GetCharacterMovement() &&
+			GetCharacterMovement()->MovementMode == MOVE_None)
+		{
+			GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		}
+		return;
+	}
+
+	// 坐姿期間本地端也鎖移動（server 已鎖；autonomous proxy 不自鎖＝預測打架）
+	if (IsLocallyControlled() && !bAsleep && GetCharacterMovement() &&
+		GetCharacterMovement()->MovementMode != MOVE_None)
+	{
+		GetCharacterMovement()->StopMovementImmediately();
+		GetCharacterMovement()->DisableMovement();
+	}
+
+	if (!bCeremonyPoseActive)
+	{
+		bCeremonyPoseActive = true;
+		bStandDoubleActive = false;
+		bGaitIdleWritten = false;
+		SetBowBodyVariant(/*bWhole=*/false);
+		ResetBowBodyBones();
+		BowBody->SetRelativeLocationAndRotation(BodyStandRelLoc, BodyStandRelRot);
+		BowBody->SetOwnerNoSee(false); // 導演鏡頭：全員入鏡（含本人）
+	}
+	Body->SetVisibility(false);
+	BowBody->SetVisibility(true);
+
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+	TArray<FTransform> CS;
+	ComposeSitBaseCS(Ref, CS);
+
+	// 房主提議拍：右臂 IK 舉起（目標＝頭旁外上——「給全場看」的手勢；
+	// CS 慣例臉朝 +Y、上 +Z、+X=角色左 ⇒ 右側=−X）＋刺青機馬達聲。
+	// 誠實記帳：v1 手上沒有機器道具網格——舉拳讀作「舉起機器」靠聲音補位。
+	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
+	const bool bHost = PS && PS->bIsRoomHost;
+	if (bHost && Step == ENiCeremonyStep::IntroPropose)
+	{
+		const float S = CeremEase01(FMath::Min(T * 1.7f, 1.0f)); // 前 60% 舉到位、其後定住
+		const int32 ArmIdx = Ref.FindBoneIndex(TEXT("RightArm"));
+		const int32 ForeIdx = Ref.FindBoneIndex(TEXT("RightForeArm"));
+		const int32 HandIdx = Ref.FindBoneIndex(TEXT("RightHand"));
+		const int32 HeadIdx = Ref.FindBoneIndex(TEXT("Head"));
+		if (ArmIdx != INDEX_NONE && ForeIdx != INDEX_NONE && HandIdx != INDEX_NONE &&
+			HeadIdx != INDEX_NONE && S > 0.001f)
+		{
+			const FVector Shoulder = CS[ArmIdx].GetLocation();
+			const FVector RefElbow = CS[ForeIdx].GetLocation();
+			const FVector RefHand = CS[HandIdx].GetLocation();
+			const float L1 = FVector::Dist(Shoulder, RefElbow);
+			const float L2 = FVector::Dist(RefElbow, RefHand);
+			const FVector TargetCS = CS[HeadIdx].GetLocation() + FVector(-28.0f, 16.0f, 26.0f);
+			const FVector Want = FMath::Lerp(RefHand, TargetCS, S);
+			FVector D = Want - Shoulder;
+			float DLen = D.Size();
+			DLen = FMath::Clamp(DLen, FMath::Abs(L1 - L2) + 0.5f, (L1 + L2) - 0.5f);
+			const FVector DHat = D.GetSafeNormal();
+			const FVector RefAxis = (RefHand - Shoulder).GetSafeNormal();
+			const FVector ElbowOff = RefElbow - Shoulder;
+			const FVector PoleRef = (ElbowOff - FVector::DotProduct(ElbowOff, RefAxis) * RefAxis).GetSafeNormal();
+			FVector Pole = (PoleRef - FVector::DotProduct(PoleRef, DHat) * DHat).GetSafeNormal();
+			if (Pole.IsNearlyZero())
+			{
+				Pole = PoleRef;
+			}
+			const float A = (L1 * L1 - L2 * L2 + DLen * DLen) / (2.0f * DLen);
+			const float H = FMath::Sqrt(FMath::Max(L1 * L1 - A * A, 1.0f));
+			const FVector Elbow = Shoulder + DHat * A + Pole * H;
+			const FVector HandSolved = Shoulder + DHat * DLen;
+			const FQuat UpperDelta = FQuat::FindBetweenNormals((RefElbow - Shoulder).GetSafeNormal(),
+				(Elbow - Shoulder).GetSafeNormal());
+			// 前臂 delta 相對「已被上臂帶走之後」算（08-16 血價：handErr 71.9cm）
+			const FVector ForeDirAfterUpper = UpperDelta.RotateVector(RefHand - RefElbow).GetSafeNormal();
+			const FQuat LowerDelta = FQuat::FindBetweenNormals(ForeDirAfterUpper,
+				(HandSolved - Elbow).GetSafeNormal());
+			RotSubtreeAboutPivotCS(Ref, CS, ArmIdx, UpperDelta, Shoulder);
+			RotSubtreeAboutPivotCS(Ref, CS, ForeIdx, LowerDelta, CS[ForeIdx].GetLocation());
+		}
+		if (!IntroMachineLoop)
+		{
+			if (USoundBase* Loop = LoadObject<USoundBase>(nullptr,
+				TEXT("/Game/Audio/marker_loop.marker_loop")))
+			{
+				IntroMachineLoop = UGameplayStatics::SpawnSoundAttached(Loop, GetRootComponent(),
+					NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset,
+					/*bStopWhenAttachedToDestroyed=*/true, 0.9f);
+			}
+		}
+	}
+	else if (IntroMachineLoop)
+	{
+		IntroMachineLoop->Stop();
+		IntroMachineLoop = nullptr;
+	}
+
+	static const TArray<FName> SitVerifyBones = {
+		FName(TEXT("LeftFoot")), FName(TEXT("RightFoot")),
+		FName(TEXT("RightHand")), FName(TEXT("Head")) };
+	WriteBowPoseConverged(Ref, CS, SitVerifyBones);
+}
+
 FString ANiceInkCharacter::DebugRoboCeremonyStats() const
 {
 	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
@@ -7910,6 +8165,23 @@ void ANiceInkCharacter::UpdateJiggleBones(float DeltaSeconds)
 		// 骨頭沿旋轉繞樞軸走＋徑向平移（肚：樞軸=骨頭＝頭不動、只轉）
 		const FVector NewLoc = PivotCS + DeltaQ.RotateVector(BaseCS - PivotCS) + Radial;
 		const FQuat NewRot = DeltaQ * BaseRot;
+		// NaN 防線（2026-08-28，user 選單舞者間歇性黑碎片破圖）：
+		// 下游所有鉗位（MaxCm/MaxRoll/Inward）對 NaN 全部失效（NaN 比大小恆 false）
+		// ——一顆 NaN 寫進骨頭＝蒙皮頂點飛散＝蒸黑鋸齒碎片。
+		// 防法＝寫入前驗 finite；壞値＝彈簧整顆重置貼齊錮點＋開口報警
+		//（無聲失敗必須先開口）。四視窗低幀率卡頓下的 dt 突刺是頭號嫌疑人。
+		if (NewLoc.ContainsNaN() || NewRot.ContainsNaN() ||
+			S.PosW.ContainsNaN() || S.VelW.ContainsNaN())
+		{
+			UE_LOG(LogTemp, Warning,
+				TEXT("NiJiggle: NaN detected bone=%s pos=%s vel=%s anchor=%s dt=%.4f - spring reset"),
+				*Bone.ToString(), *S.PosW.ToString(), *S.VelW.ToString(),
+				*AnchorW.ToString(), DeltaSeconds);
+			S.PosW = AnchorW;
+			S.VelW = AnchorVel.ContainsNaN() ? FVector::ZeroVector : AnchorVel;
+			S.LastAnchorW = AnchorW.ContainsNaN() ? CompT.TransformPosition(T.GetLocation()) : AnchorW;
+			continue; // 這顆骨本幀不寫＝維持姿勢層的乾淨骨位
+		}
 		// 靜止收斂＝零寫入；但**收斂終止的那一次必須真的寫下去**（省寫門檻 0.02cm／
 		// 0.17° 會把「最後一步歸零」吞掉，骨頭就停在門檻內的殘留上＝還是沒回原位）。
 		// （收斂態的門檻不能壓到浮點回讀噪音以下——CS→骨空間→CS 的來回誤差 ~1e-5，

@@ -1264,6 +1264,7 @@ TSharedRef<SWidget> SNiMenu::BuildCreditsPage()
 		TEXT("Noto Serif family & Noto Naskh Arabic — (c) The Noto Project Authors, SIL OFL 1.1"),
 		TEXT("icons adapted from game-icons.net — CC BY 3.0"),
 		TEXT("\"Sauna\" 3d scene by local.yany (sketchfab) — CC BY 4.0"),
+		TEXT("\"Radiola from Matrix\" 3d model by Sirenko (sketchfab) — CC BY 4.0"),
 		TEXT(""),
 		TEXT("full license texts: THIRD_PARTY_NOTICES.md next to the game executable"),
 	};

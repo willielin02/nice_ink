@@ -51,14 +51,31 @@ enum class ENiceInkAccusationResult : uint8
 UENUM(BlueprintType)
 enum class ENiCeremonyStep : uint8
 {
-	None,      // 非儀式期間
-	Gather,    // 全員從席位走到圈上角位、面向圈心
-	Spin,      // 酒瓶原地轉、ease-out 停在受害者正前方（先抽後演）
-	Approach,  // 受害者走進圈心、停在瓶邊
-	PickUp,    // 屈膝前彎、右臂 IK 伸向瓶頸、瓶附著到手
-	Drink,     // 起身、瓶抬到嘴、頭後仰
-	Collapse   // 瓶脫手、膝軟、整體翻倒到躺姿
+	None,         // 非儀式期間
+	// --- 開場動畫（2026-08-27；只在本房第一場、Gather 之前播）---
+	// user 定案敘事：坐在榻榻米上喝酒看電視 → 電視上極道刺青 → 關電視 →
+	// 有人（房主）提議 → 開始遊戲。全程導演鏡頭；坐→站不做過渡＝發生在
+	// Propose→Rise 的**剪接**期間（中間幀只有被拍到才存在——電影語言，不是省工）。
+	IntroSit,     // 六人盤腿坐（SitBones）看電視；鏡頭＝全景緩推
+	IntroNotice,  // 鏡頭剪到電視正面特寫（身體不動——他們本來就在看）
+	IntroTvOff,   // 電視畫面收成一條白線熄滅（純 RT 動畫）
+	IntroPropose, // 房主舉起刺青機、馬達聲；鏡頭＝房主腰上近景（腿在框外）
+	IntroRise,    // 剪回全景：全員已站立（起身發生在剪接中）
+	// --- 每一局都播的儀式 ---
+	Gather,       // 全員從席位走到圈上角位、面向圈心
+	Spin,         // 酒瓶原地轉、ease-out 停在受害者正前方（先抽後演）
+	Approach,     // 受害者走進圈心、停在瓶邊
+	PickUp,       // 蹲踞拾瓶（そんきょ：上身近直立、高度從膝出——08-27 取代彎腰 64°，
+	              // 掃描實錘：膝 120° 摺疊≈0、軀幹前彎預算只有 10~15°）
+	Drink,        // 起身、瓶抬到嘴、頭後仰
+	Collapse      // 瓶脫手、膝軟、整體翻倒到躺姿
 };
+
+// 開場動畫工具：這一步是否屬於開場（列舉連續段判定，別散寫比較式）
+inline bool NiCeremonyStepIsIntro(ENiCeremonyStep S)
+{
+	return S >= ENiCeremonyStep::IntroSit && S <= ENiCeremonyStep::IntroRise;
+}
 
 // 一位玩家的 avatar 資產組（FacePipeline 產出、已入引擎）。
 // 以索引複製（PlayerState.AvatarIndex），各端自行載入資產。

@@ -17,8 +17,12 @@ import unreal, time, math, re, traceback
 OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_ceremony_result.txt"
 LINES = []
 
-STEP_NONE, STEP_GATHER, STEP_SPIN, STEP_APPROACH, STEP_PICKUP, STEP_DRINK, STEP_COLLAPSE = range(7)
-STEP_NAME = ["None", "Gather", "Spin", "Approach", "PickUp", "Drink", "Collapse"]
+# 2026-08-27 開場動畫：列舉在 Gather 前插五拍（IntroSit..IntroRise=1..5）⇒ 儀式步驟全體 +5。
+# PIE 不播開場（WorldType 閘），本測試的六拍契約不變。
+STEP_NONE = 0
+STEP_GATHER, STEP_SPIN, STEP_APPROACH, STEP_PICKUP, STEP_DRINK, STEP_COLLAPSE = range(6, 12)
+STEP_NAME = ["None", "IntroSit", "IntroNotice", "IntroTvOff", "IntroPropose", "IntroRise",
+             "Gather", "Spin", "Approach", "PickUp", "Drink", "Collapse"]
 
 
 def log(msg):

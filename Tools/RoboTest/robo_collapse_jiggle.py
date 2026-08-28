@@ -135,7 +135,7 @@ class Probe:
                 hc.call_method("DebugRoboViewAt", CAM_LOC + CAM_LOOK)
             st = step_of(gs)
             v = self.victim(w)
-            if st == 6 and self.collapse_t0 is None:
+            if st == 11 and self.collapse_t0 is None:  # Collapse=11（開場入列舉 +5）
                 self.collapse_t0 = time.monotonic()
                 log("collapse begin")
             if self.collapse_t0 is not None and v:
@@ -170,7 +170,7 @@ class Probe:
                 self.finish()
 
     def report(self):
-        col = [x for x in self.samples if x[0] == 6]
+        col = [x for x in self.samples if x[0] == 11]
         aft = [x for x in self.samples if x[0] != 6]
         def stat(rows, label):
             if not rows:

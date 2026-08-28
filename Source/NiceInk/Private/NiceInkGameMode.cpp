@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/GameSession.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
@@ -11,6 +12,7 @@
 #include "Misc/Crc.h"
 #include "NiceInkBottle.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkTvSet.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkGameInstance.h"
 #include "NiceInkGameSession.h"
@@ -1341,6 +1343,29 @@ ANiceInkBottle* ANiceInkGameMode::GetOrSpawnBottle()
 	return B;
 }
 
+ANiceInkTvSet* ANiceInkGameMode::GetOrSpawnTvSet()
+{
+	if (IntroTvSet.IsValid())
+	{
+		return IntroTvSet.Get();
+	}
+	UWorld* World = GetWorld();
+	const ANiceInkGameState* GS = NIState();
+	if (!World || !GS)
+	{
+		return nullptr;
+	}
+	FVector At = GS->GetIntroTvLocation();
+	At.Z = ProbeFloorZ(At);
+	// 面朝 +Y（朝觀眾弧）；開場後留在場上＝道場家具（離舞台 310cm，不擋任何動線）
+	FActorSpawnParameters SP;
+	SP.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	ANiceInkTvSet* Tv = World->SpawnActor<ANiceInkTvSet>(ANiceInkTvSet::StaticClass(), At,
+		FRotator(0.0f, 90.0f, 0.0f), SP);
+	IntroTvSet = Tv;
+	return Tv;
+}
+
 void ANiceInkGameMode::EnsureStageGeometry()
 {
 	// 舞台幾何寫進 GameState＝**單一來源**（GameMode 只活在伺服器，但客戶端的
@@ -1426,8 +1451,70 @@ void ANiceInkGameMode::EnterBottleSpin()
 		GS->BottleEndYaw = GS->BottleStartYaw; // Gather 期間不轉；Spin 開始才算終角
 	}
 
+	// 開場動畫：只在本房第一場、非 PIE（robo 契約零干擾）。播過＝直接 Gather。
+	const bool bWantIntro = bOpeningIntroEnabled && !bOpeningIntroPlayed && GetWorld() &&
+		(GetWorld()->WorldType == EWorldType::Game || bOpeningIntroForceInPIE);
+	if (bWantIntro)
+	{
+		bOpeningIntroPlayed = true;
+		BeginOpeningIntro();
+		return;
+	}
+
 	GS->SetPhase(ENiceInkPhase::BottleSpin, CeremonyGatherSeconds + CeremonySpinSeconds);
 	SetCeremonyStep(ENiCeremonyStep::Gather, CeremonyGatherSeconds);
+}
+
+void ANiceInkGameMode::BeginOpeningIntro()
+{
+	ANiceInkGameState* GS = NIState();
+	GetOrSpawnTvSet();
+	SeatPlayersForIntro();
+	const float Total = IntroSitSeconds + IntroNoticeSeconds + IntroTvOffSeconds +
+		IntroProposeSeconds + IntroRiseSeconds + CeremonyGatherSeconds + CeremonySpinSeconds;
+	GS->SetPhase(ENiceInkPhase::BottleSpin, Total);
+	SetCeremonyStep(ENiCeremonyStep::IntroSit, IntroSitSeconds);
+}
+
+void ANiceInkGameMode::SeatPlayersForIntro()
+{
+	// 入座＝一次性 teleport（與導演鏡頭的硬切**同幀**＝玩家看不見搬運）。
+	// 沿用睡姿傳送的既有慣例：server 搬 actor＋ClientSyncPoseTransform 讓
+	// owning client 本地落地（否則 autonomous proxy 的 yaw 永不修正——07-16 血價）。
+	ANiceInkGameState* GS = NIState();
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
+		ANiceInkCharacter* C = NIPS ? Cast<ANiceInkCharacter>(NIPS->GetPawn()) : nullptr;
+		if (!C || NIPS->SeatIndex < 0)
+		{
+			continue;
+		}
+		FVector At = GS->GetIntroSitLocation(NIPS->SeatIndex);
+		At.Z = C->GetActorLocation().Z; // 保持腳下高度（地板同層）
+		const FRotator Face(0.0f, GS->GetIntroSitYawDeg(NIPS->SeatIndex), 0.0f);
+		C->GetCharacterMovement()->StopMovementImmediately();
+		C->GetCharacterMovement()->DisableMovement(); // 坐著＝不受理移動輸入
+		C->SetActorLocationAndRotation(At, Face, false, nullptr, ETeleportType::TeleportPhysics);
+		if (AController* Ctrl = C->GetController())
+		{
+			Ctrl->SetControlRotation(Face);
+		}
+		C->ClientSyncPoseTransform(FTransform(Face, At));
+	}
+}
+
+void ANiceInkGameMode::ReleasePlayersFromIntro()
+{
+	// 起身＝恢復行走（發生在 Propose→Rise 的剪接期間；姿勢端由 UpdateCeremony 收拾）
+	ANiceInkGameState* GS = NIState();
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		if (ANiceInkCharacter* C = Cast<ANiceInkCharacter>(PS->GetPawn()))
+		{
+			C->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		}
+	}
 }
 
 void ANiceInkGameMode::OnCeremonyStepDone()
@@ -1439,7 +1526,9 @@ void ANiceInkGameMode::OnCeremonyStepDone()
 	}
 
 	// 受害者中離防護：抽中的人不在了＝本回合作廢重來（AbortRound 內含人數判斷）
-	const bool bNeedVictim = GS->CeremonyStep != ENiCeremonyStep::Gather;
+	// 開場五拍與 Gather 還不需要受害者本人（Spin 結束才揭曉）
+	const bool bNeedVictim = GS->CeremonyStep != ENiCeremonyStep::Gather &&
+		!NiCeremonyStepIsIntro(GS->CeremonyStep);
 	const int32 CheckId = (GS->CeremonyStep == ENiCeremonyStep::Spin) ? PendingVictimId : GS->VictimPlayerId;
 	if (bNeedVictim && (CheckId == INDEX_NONE ||
 		!ANiceInkCharacter::FindByPlayerId(GetWorld(), CheckId)))
@@ -1452,6 +1541,23 @@ void ANiceInkGameMode::OnCeremonyStepDone()
 
 	switch (GS->CeremonyStep)
 	{
+	case ENiCeremonyStep::IntroSit:
+		SetCeremonyStep(ENiCeremonyStep::IntroNotice, IntroNoticeSeconds);
+		break;
+	case ENiCeremonyStep::IntroNotice:
+		SetCeremonyStep(ENiCeremonyStep::IntroTvOff, IntroTvOffSeconds);
+		break;
+	case ENiCeremonyStep::IntroTvOff:
+		SetCeremonyStep(ENiCeremonyStep::IntroPropose, IntroProposeSeconds);
+		break;
+	case ENiCeremonyStep::IntroPropose:
+		// 坐→站發生在這一格剪接裡（Propose 近景→Rise 全景；中間幀不上鏡）
+		ReleasePlayersFromIntro();
+		SetCeremonyStep(ENiCeremonyStep::IntroRise, IntroRiseSeconds);
+		break;
+	case ENiCeremonyStep::IntroRise:
+		SetCeremonyStep(ENiCeremonyStep::Gather, CeremonyGatherSeconds);
+		break;
 	case ENiCeremonyStep::Gather:
 	{
 		// 轉瓶終角＝瓶心指向受害者**當下實際位置**（大家剛走完位，比用角位更準）

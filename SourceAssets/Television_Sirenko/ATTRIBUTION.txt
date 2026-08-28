@@ -1,0 +1,18 @@
+Asset: "Radiola from "Matrix"" by Sirenko
+Source: https://sketchfab.com/3d-models/radiola-from-matrix-62beeb98552846bea1f7a2d4b42396a8
+Author: Sirenko (https://sketchfab.com/sirenko)
+License: CC Attribution 4.0 (CC-BY-4.0) - http://creativecommons.org/licenses/by/4.0/
+         Commercial use allowed; author must be credited.
+Downloaded: 2026-08-28
+
+REQUIRED CREDIT (must appear in game credits before any public release):
+  This work is based on "Radiola from "Matrix""
+  (https://sketchfab.com/3d-models/radiola-from-matrix-62beeb98552846bea1f7a2d4b42396a8)
+  by Sirenko (https://sketchfab.com/sirenko) licensed under CC-BY-4.0
+  (http://creativecommons.org/licenses/by/4.0/)
+
+Files: radiola-from-matrix.zip (source model.zip + PBR textures),
+       radiola_from_matrix.zip (gltf + license.txt),
+       radiola_from_matrix.glb (2k), radiola_from_matrix (1).glb (1k),
+       Radiola_from_Matrix.usdz
+Used in game: SM_TvRadiola (Content/Props) via Tools/AssetPrep/tv_radiola_prep.py

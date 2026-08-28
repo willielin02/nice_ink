@@ -125,3 +125,9 @@ SourceAssets/**/*.blend1
 
 # git-lfs 誤寫的字面 dev/null 勾子檔（垃圾，可手動刪）
 /dev/
+
+# Radiola 電視資產（Sirenko, CC-BY-4.0）：只入庫管線正本（2k glb + gltf zip 含 license.txt
+# + ATTRIBUTION）；重複下載格式留本地（同 Sauna 慣例）
+SourceAssets/Television_Sirenko/Radiola_from_Matrix.usdz
+SourceAssets/Television_Sirenko/radiola_from_matrix (1).glb
+SourceAssets/Television_Sirenko/radiola-from-matrix.zip

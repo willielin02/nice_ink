@@ -6,6 +6,7 @@
 #include "Engine/NetSerialization.h"
 #include "GameFramework/Character.h"
 #include "InkTypes.h"
+#include "NiceInkTypes.h"
 #include "NiceInkCharacter.generated.h"
 
 class ACameraActor;
@@ -690,6 +691,10 @@ public:
 	// 儀式驅動（Tick 呼叫）：走位（合成輸入）＋姿勢＋崩塌
 	void UpdateCeremony(float DeltaSeconds);
 
+	// 開場動畫（2026-08-27）：盤腿坐（SitBones＝user 手擺、七月入庫、今日首個消費者）
+	// ＋房主舉刺青機（右臂 IK 疊在坐姿 CS 上）。全員同式；坐→站不插值＝剪接跳過。
+	void ApplyIntroSitPose(const class ANiceInkGameState* GS, float DeltaSeconds);
+
 	// 儀式姿勢（屈膝/前彎/臂 IK/頭俯仰/翻倒）——BowBody 骨骼載體，與步態互斥
 	void ApplyCeremonyPose(float DeltaSeconds);
 
@@ -707,14 +712,19 @@ public:
 	// --- 儀式姿勢旋鈕（viewport 即調）---
 	// 拾取值由實測反推：初版 standoff 58／bend 52／crouch 24 ⇒ 肩到瓶頸 96.4cm
 	// 而臂長只有 78.0cm（探針數字），差 18cm＝手永遠搆不到。
+	// 2026-08-27 蹲踞（そんきょ）改制：彎 64° 是七月已判死刑的幾何（SPEC #44
+	// 「sumo 體型站立深彎＝肚腹蒙皮塌陷」）在八月被重新引進——姿勢域掃描定罪：
+	// 軀幹前彎預算 10~15°、64° 時 428 條摺＋褌被頂穿 4357 處；而膝是免費的
+	// （120° 摺疊≈0）。修法＝**高度從膝出、上身近直立**（力士不彎腰撿東西，
+	// 蹲踞本來就是相撲自己的儀式姿勢——題材正解與技術正解重合）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
-	float CeremonyStandoffCm = 40.0f;   // 站到瓶邊的距離
+	float CeremonyStandoffCm = 28.0f;   // 站到瓶邊的距離（蹲踞手臂行程短、站近一點）
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
-	float CeremonyPickBendDeg = 64.0f;  // 俯身拾取的上身前彎
+	float CeremonyPickBendDeg = 14.0f;  // 上身前彎（掃描安全域 10~15° 內）
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
-	float CeremonyPickCrouchCm = 32.0f; // 屈膝下沉
+	float CeremonyPickCrouchCm = 52.0f; // 屈膝下沉（腳釘地＋腿 IK ⇒ 深屈膝＝蹲踞）
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
 	float CeremonyDrinkBendDeg = 6.0f;
@@ -723,7 +733,7 @@ public:
 	float CeremonyDrinkCrouchCm = 5.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
-	float CeremonyLookDownDeg = -26.0f; // 低頭看瓶
+	float CeremonyLookDownDeg = -14.0f; // 低頭看瓶（蹲踞制：頭留在脖子解算器驗證域內）
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
 	float CeremonyHeadBackDeg = 32.0f;  // 仰頭灌酒
@@ -1370,6 +1380,7 @@ private:
 	// ApplyBowPose 的基準姿 CS 組合與收斂寫入（拆出＝07-20 趴姿戰役遺產，趴姿已移除）。
 	// VerifyBones 必須含最深鏈尾（雙手）——收斂逐層傳播、驗淺骨=半收斂手臂
 	void ComposeLeanBaseCS(const FReferenceSkeleton& Ref, TArray<FTransform>& OutCS) const;
+	void ComposeSitBaseCS(const FReferenceSkeleton& Ref, TArray<FTransform>& OutCS) const;
 	bool WriteBowPoseConverged(const FReferenceSkeleton& Ref, const TArray<FTransform>& CS,
 		const TArray<FName>& VerifyBones);
 
@@ -1682,6 +1693,14 @@ private:
 	void UpdateCinematicCamera(APlayerController* PC);
 	void ViewWork(APlayerController* PC, int32 WorkId);
 	void ViewWide(APlayerController* PC);
+
+	// 開場動畫導演鏡頭：分拍機位表＋真剪接（blend=0；機位內只做單調緩推——
+	// 剪接乾淨、推軌緩慢是兩件事，不要混）。房主近景那一拍房主本人看反拍。
+	void ViewIntro(APlayerController* PC, ENiCeremonyStep Step, float T);
+	ENiCeremonyStep LastIntroCamStep = ENiCeremonyStep::None;
+	bool bIntroSitAudioStarted = false;
+	UPROPERTY()
+	TObjectPtr<class UAudioComponent> IntroMachineLoop;
 	void ViewSelfThirdPerson(APlayerController* PC);
 	void RestoreView(APlayerController* PC);
 	ACameraActor* GetOrSpawnCinematicCamera();

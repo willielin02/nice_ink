@@ -168,6 +168,13 @@ canvas 做不到毛玻璃半透明）**。
   `TG_PrePhysics` ⇒ 角色先跑就讀到上一幀。修＝`AddTickPrerequisiteActor(PC)`。
   **相機反而天生安全**：`UWorld::Tick` 明文「Update cameras last, after all actors
   have been ticked」。凡「A 讀 B 這一幀算出來的東西」都要 prerequisite，不能靠註冊順序。
+- **5.7 Interchange 讀不了 FBX 內嵌貼圖**（2026-08-28）：`Invalid translator couldn't retrieve a payload`＝材質全空；改成散檔又踩第二坑——**glb 打包貼圖名＝無副檔名的 Image_N**，落地照樣讀不了。正解＝從原始 zip 抽命名乾淨的貼圖各自 AssetImportTask、材質 python 建、slot 腳本指派（桑拿房模式），FBX 只帶網格。
+- **曝光 bias 5.2 下的 unlit 自發光要 ×8 才追得上受光的牆**（2026-08-28）：電視螢幕第一版增益 1.35＝整台黑洞；機身 0.30 同病。而且 unlit 平面色零明暗＝大方塊讀成黑洞⇒ 假光寫進材質（面朝上越亮，同皮膚 #37 哲學）。環境資產**可以**吃烘焙 AO（零烘焙陰影鐵律只管皮膚）——不乘 AO 就沒有「這裡凹進去」的線索。
+- **NaN 穿過所有鉗位**（2026-08-28）：jiggle 出力端 MaxCm/MaxRoll/Inward 全是比較式，NaN 比大小恆 false ⇒ 一顆 NaN 直達骨頭＝蒙皮頂點飛散＝黑鋸齒碎片。防線＝寫入前驗 finite、壞值整顆彈簧重置貼齊＋`NiJiggle: NaN` 報警（無聲失敗先開口）。
+- **HighResShot 是離屏重渲，看不見顯示鏈路的瞬態**（2026-08-28）：轉瓶段連拍 10 張「零黑斑」不能證明 user 看到的閃黑不存在——資源駐留/present 層的失效不會出現在另外渲的那一幀。**四開未 cook 編輯器行程的記憶體壓力**（08-25 實測 32GB 剩 1.9GB）＝三起畫面出鬼（OOM 崩潰／選單舞者碎片／轉瓶黑斑）的共同環境，全部單視窗重現不出、log 乾淨（成功恢復的失敗是無聲的）；**峰值幀＝轉瓶全景（全員＋刺青 RT＋電視同框）**最先失敗。出口＝打包版（每實例記憶體是編輯器行程零頭），開發端無可修。
+- **Live Coding 殘留行程擋 Build.bat**（`Unable to build while Live Coding is active`）：上一場 -game 視窗關了、LiveCoding 主控還在 ⇒ 清 `Unreal*` 全行程再編。
+- **列舉中段插值＝所有寫死步驟號的 robo 腳本一起過期**（2026-08-27）：`ENiCeremonyStep` 前插五拍，robo_ceremony_test/shots/collapse_jiggle 的 `range(7)`全部位移 +5；改列舉先 grep `ceremony_step` 的消費者。
+- **固定六席槽位會讓少人數局擠在弧的一端**：開場席弧第一版用 SeatIndex 直接取槽＝2 人局坐在鏡頭外側；依**在場名次**置中（同 GetCeremonySlotRank 慣例）。席距要用**體寬**算（17°@r260=77cm 兩個力士互穿，24°=109cm 才過）。
 - **unity build 會把不同 .cpp 的匿名 namespace 併進同一個 TU**：新加的
   `SmoothStep01` 撞到 `NeckStretchComponent.cpp` 的同名匿名函式（C2084 主體已宣告）
   ——匿名 namespace 不保證隔離，取名要唯一。
@@ -322,7 +329,8 @@ canvas 做不到毛玻璃半透明）**。
   ⇒ 睡姿接管當幀零跳變**（站→躺本來就是同一網格的剛體旋轉，那條 slerp 的中間態是
   恆等中間姿勢不是近似）；右臂解析二骨 IK＝本案唯一新解算；瓶子交接＝捕捉當幀相對變換
   （不動父子關係）；儀器=robo_ceremony_test（11 契約）/robo_ceremony_probe/
-  robo_ceremony_shots/robo_collapse_jiggle/robo_sleeppose_ab）、
+  robo_ceremony_shots/robo_collapse_jiggle/robo_sleeppose_ab；**08-27 蹲踞拾瓶**＝PickBend 64→14°／Crouch 32→52／Standoff 40→28／LookDown −26→−14（姿勢域掃描定罪：軀幹前彎預算 10~15°、膝 120° 免費；handErr 18.7→12.3cm、c1~c10 綠；**c11 需 3 人局＝3-client PIE OOM 既有鐵坑，現階段不可跑**）），
+  **開場動畫（2026-08-27~28 BUILT-自驗、待 viewport；帳本=OPENING_CEREMONY_PLAN 08-27 節＋SHIP_PLAN 追記85）**＝user 逐字定案「坐在榻榻米上喝酒看電視→電視上極道刺青→關電視→有人提議→開局」：`ENiCeremonyStep` 在 Gather 前插五拍 IntroSit/Notice/TvOff/Propose/Rise（**儀式步驟全體 +5＝robo 腳本寫死的步驟號已同步修**）；只在本房第一場播（`bOpeningIntroPlayed`）、**PIE 一律跳過**（robo 契約零擾動；自驗走 `bOpeningIntroForceInPIE`＋`robo_intro_shots.py`）；入座＝相位切換當幀 teleport（與導演鏡頭硬切同幀＝看不見搬運）；坐姿＝SitBones 第一個消費者（`ComposeSitBaseCS`）、席弧依在場名次置中（24°@r260＝109cm＞體寬；17° 會互穿）；**坐→站不插值＝Propose→Rise 剪接間 snap**（中間幀只有被拍到才存在）；分拍機位表`ViewIntro`（blend=0 真剪接、機位內單調緩推；反拍在並排坐時只拍到背影＝砍掉）；電視 `ANiceInkTvSet`＝**SM_TvRadiola**（"Radiola from Matrix" by Sirenko，Sketchfab CC-BY-4.0 可商用需署名；SourceAssets/Television_Sirenko/ATTRIBUTION.txt、信用已列選單授權頁＋THIRD_PARTY_NOTICES；管線=tv_radiola_prep.py→ue_import_television.py）＋CanvasRT 512×384 畫「和彫特輯」（**DreamTrace motif 資料原樣＝電視上的圖＝夢裡要描的圖**）畫在模型自己的 `TvGlass` 材質槽上（內凹圓角玻璃 52.5×44.7、UV 歸一化到島；浮貼平板退役）；AO 接回櫃體材質、熄滅玻璃灰綠、RT 邊緣映像管暗角＝框/玻璃邊界對比（user 三輪打回定案）；開場後電視留場當家具。**v1 記帳未做**：房主手上無機器道具網格（舉拳＋marker_loop 補位）、坐姿飲酒、電視音效、開場期間 HUD 仍顯示 BOTTLE SPIN 倒數）、
   `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅式沿線描
   （自交避讓 2.6×帶半寬鐵律）＋割線機制 2D 移植（**08-04 與割線完全同制＝user
   鐵則「不准機制分岔」**：自由游標 v_max 追趕/無皮繩無域牆（bbox+4 防跑飛牆=
@@ -587,7 +595,7 @@ canvas 做不到毛玻璃半透明）**。
   ①角色網格 306,486 tris 無 LOD（GPU 成本量到 1.05ms/幀＝不是瓶頸；自動減面會毀掉
   褌可見線與脖子縫環 ⇒ 要動先量「六人同框」且必須人工減面）②**沒有可量的最新打包版**
   （PackagedShipping 停 07-17、Packaged 停 08-07）⇒「玩家實際會遇到什麼」至今未量測、
-  08-11 那句「打包版待實測」仍未兌現；③`r.GTSyncType=2` 的延遲收益未經驗證（留著的
+  08-11 那句「打包版待實測」仍未兌現、**08-28 起又多一個動機：四開黑斑的唯一出口**（user 已知悉「打包版是什麼」、待他點時間開跑）；③`r.GTSyncType=2` 的延遲收益未經驗證（留著的
   理由只有「引擎文件指定＋幀率無可量代價」）。
   ~~噴射出口與褌的視覺（待定 #11）~~（v4.0 移未來更新籃）、
   平台小號實測（待定 #12）、

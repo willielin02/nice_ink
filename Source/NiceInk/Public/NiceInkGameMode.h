@@ -126,6 +126,34 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Ceremony")
 	int32 CeremonySpinTurnsMax = 5;
 
+	// --- 開場動畫（2026-08-27；user 定案敘事：榻榻米喝酒看電視→極道刺青→關電視→
+	// 房主提議→開局）。**只在本房第一場播**（續攤直接 Gather）；PIE 一律跳過＝robo
+	// 契約零干擾。入座＝相位切換當幀 teleport——與導演鏡頭的硬切同幀，玩家看不見
+	// 自己的 pawn 被搬（同一招＝「載入淡入蓋掉起始態」的既有前例）。---
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	bool bOpeningIntroEnabled = true;
+
+	// robo 自驗專用：預設 false＝PIE 永遠跳過開場（契約零擾動）；
+	// 截圖腳本用 python 翻成 true 才能在 PIE 拍開場五拍
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	bool bOpeningIntroForceInPIE = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	float IntroSitSeconds = 4.0f;      // 全景：六人盤腿看電視
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	float IntroNoticeSeconds = 2.6f;   // 電視特寫緩推
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	float IntroTvOffSeconds = 1.5f;    // 白線收掉
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	float IntroProposeSeconds = 3.0f;  // 房主舉機、馬達聲
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
+	float IntroRiseSeconds = 1.2f;     // 剪回全景：全員已站立
+
 	// 巡禮每幅約 20 秒（SPEC；playtest 調整）
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Flow")
 	float TourSecondsPerWork = 20.0f;
@@ -357,6 +385,14 @@ private:
 	float ComputeCeremonySlotOffset() const;
 	bool IsCeremonySpotClear(const FVector& At) const;
 	class ANiceInkBottle* GetOrSpawnBottle();
+
+	// 開場動畫：電視道具（開場才生、之後留在場上＝道場家具）＋入座/起身
+	class ANiceInkTvSet* GetOrSpawnTvSet();
+	void BeginOpeningIntro();
+	void SeatPlayersForIntro();
+	void ReleasePlayersFromIntro();
+	bool bOpeningIntroPlayed = false;   // 本房第一場已播（GameMode 生命週期＝本房）
+	TWeakObjectPtr<class ANiceInkTvSet> IntroTvSet;
 
 	// 抽中但尚未揭曉的受害者（轉瓶結束才寫進 GameState——HUD 不提前劇透）
 	int32 PendingVictimId = INDEX_NONE;

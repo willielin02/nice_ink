@@ -130,6 +130,20 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Nice Ink")
 	float GetCeremonyAlpha() const;
 
+	// --- 開場動畫幾何（2026-08-27；全部＝CeremonyCenter 的純函式，各端逐位相同）---
+	// 電視：舞台中心往北牆方向（−Y）310cm、面朝 +Y（朝觀眾群）。
+	// 道場實測（部件包圍盒）：長廳 y −352..406，中心 y=40 ⇒ 電視 y≈−270、離牆 80cm。
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	FVector GetIntroTvLocation() const;
+
+	// 觀眾席：以電視為圓心、半徑 260cm 的扇形弧（每席 17°、面朝電視）。
+	// 席位序＝弧上左→右；空席就是空位，不重排（決定性）。
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	FVector GetIntroSitLocation(int32 SeatIndex) const;
+
+	UFUNCTION(BlueprintPure, Category = "Nice Ink")
+	float GetIntroSitYawDeg(int32 SeatIndex) const;
+
 	// --- 翻身提案（2026-07-15 user 定案：作畫者之一提出、其餘作畫者同意後翻身）---
 	// 一次一案；INDEX_NONE＝無提案。表決細節在 GameMode（server-only），這裡只放 HUD 顯示位。
 

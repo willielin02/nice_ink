@@ -1,23 +1,21 @@
-# 入睡儀式截圖矩陣（2026-08-16）：六拍 × 固定機位自查
-# 機位＝既有的 DebugRoboViewFrom 鉤子（python 在 PIE 世界沒有 spawn API），
-#   受害者設成 host（seat 0）⇒ 鏡頭恆盯著正在做動作的那個人。
-# 拍點：Gather 中 / Spin 中 / Spin 末（瓶口指人）/ PickUp 中 / PickUp 末 /
-#       Drink 中 / Collapse t≈0.3,0.6,0.9 / 入睡後
-# 產出：Saved/Screenshots/WindowsEditor/cerem_*.png + Saved/robo_ceremony_shots.txt
+# 開場動畫截圖矩陣（2026-08-27）：五拍 × 實際導演鏡頭自查。
+# 與 robo_ceremony_shots 不同：**不掛 DebugRoboViewAt**——要拍的就是 ViewIntro 的
+# 分拍機位本身（拍別的機位＝驗了一個沒人會看到的畫面）。
+# 需要 GameMode.bOpeningIntroForceInPIE=True（wait_pie 階段由本腳本翻旗）。
+# 產出：Saved/Screenshots/WindowsEditor/intro_*.png + Saved/robo_intro_shots.txt
+# 注意：主視窗＝host ⇒ Propose 那一拍拍到的是**反拍**（房主本人視角）；
+# 標準腰上近景在 client 視窗（自查記帳；user viewport 四視窗全都看得到）。
 import unreal, time, ctypes, re, traceback
 
-OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_ceremony_shots.txt"
+OUT = r"C:\games\Unreal Engine\nice_ink\Saved\robo_intro_shots.txt"
 LINES = []
 STEP_NAME = ["None", "IntroSit", "IntroNotice", "IntroTvOff", "IntroPropose", "IntroRise",
              "Gather", "Spin", "Approach", "PickUp", "Drink", "Collapse"]
 
-CAM_LOC = (215.0, -195.0, 195.0)    # 固定機位：舞台西南側高位
-CAM_LOOK = (430.0, 40.0, 55.0)      # 注視舞台中心（酒瓶所在）
-
 
 def log(msg):
     LINES.append(str(msg))
-    unreal.log_warning("[SHOTS] " + str(msg))
+    unreal.log_warning("[INTRO] " + str(msg))
     with open(OUT, "w", encoding="utf-8") as f:
         f.write("\n".join(LINES))
 
@@ -53,19 +51,26 @@ def focus_main_window():
 
 
 # (step, t 下限, 檔名)
-# 2026-08-27 開場動畫入列舉：儀式步驟整體 +5（Gather=6..Collapse=11）
 PLAN = [
-    (6, 0.50, "01_gather"),
-    (7, 0.35, "02_spin"),
-    (7, 0.95, "03_spin_end"),
-    (8, 0.80, "04_approach_end"),
-    (9, 0.50, "05_pickup"),
-    (9, 0.88, "06_pickup_end"),
-    (10, 0.55, "07_drink"),
-    (11, 0.28, "08_collapse_a"),
-    (11, 0.60, "09_collapse_b"),
-    (11, 0.85, "10_collapse_c"),
-    (0, 0.00, "11_asleep"),
+    (1, 0.30, "01_sit_wide"),
+    (1, 0.85, "02_sit_wide_push"),
+    (2, 0.50, "03_tv_closeup"),
+    (3, 0.30, "04_tv_off_line"),
+    (3, 0.80, "05_tv_off_end"),
+    (4, 0.55, "06_propose"),
+    (5, 0.50, "07_rise_wide"),
+    (6, 0.50, "08_gather_handoff"),
+    # 2026-08-28 user 回報「轉酒瓶時畫面區塊暫時變黑」：轉瓶段連拍抓瞬態
+    (7, 0.05, "09_spin_a"),
+    (7, 0.15, "10_spin_b"),
+    (7, 0.25, "11_spin_c"),
+    (7, 0.35, "12_spin_d"),
+    (7, 0.45, "13_spin_e"),
+    (7, 0.55, "14_spin_f"),
+    (7, 0.65, "15_spin_g"),
+    (7, 0.75, "16_spin_h"),
+    (7, 0.85, "17_spin_i"),
+    (7, 0.95, "18_spin_j"),
 ]
 
 
@@ -74,9 +79,7 @@ class Shots:
         self.t0 = time.monotonic()
         self.stage = "boot"
         self.stage_t = self.t0
-        self.cam = None
         self.plan_i = 0
-        self.seen_collapse = False
         self.handle = unreal.register_slate_post_tick_callback(self.tick)
 
     def advance(self, st):
@@ -94,13 +97,6 @@ class Shots:
             log("EXC:\n" + traceback.format_exc())
             self.finish()
 
-    def host_char(self, w):
-        for c in unreal.GameplayStatics.get_all_actors_of_class(w, unreal.NiceInkCharacter):
-            ctl = c.get_controller()
-            if ctl and ctl.is_local_player_controller():
-                return c
-        return None
-
     def step(self):
         s = self.stage
         if s == "boot":
@@ -114,7 +110,8 @@ class Shots:
             w = get_world("UEDPIE_0")
             gm = unreal.GameplayStatics.get_game_mode(w) if w else None
             if gm:
-                gm.set_editor_property("DebugForcedVictimSeat", 0)  # 受害者＝host＝停靠視口
+                gm.set_editor_property("bOpeningIntroForceInPIE", True)
+                gm.set_editor_property("DebugForcedVictimSeat", 0)
                 focus_main_window()
                 self.advance("shoot")
             elif self.elapsed() > 25:
@@ -125,28 +122,20 @@ class Shots:
             gs = unreal.GameplayStatics.get_game_state(w) if w else None
             if not gs:
                 return
-            # 每 tick 重申機位（遊戲的演出鏡頭在相位切換時會搶一次）
-            hc = self.host_char(w)
-            if hc:
-                hc.call_method("DebugRoboViewAt", CAM_LOC + CAM_LOOK)
             if self.plan_i >= len(PLAN):
                 log("ALL SHOTS DONE")
                 self.finish()
                 return
             step = step_of(gs)
             t = gs.call_method("GetCeremonyAlpha", ())
-            if step == 11:
-                self.seen_collapse = True
             want_step, want_t, name = PLAN[self.plan_i]
-            hit = (step == want_step and t >= want_t) if want_step != 0 else \
-                  (self.seen_collapse and step == 0)
-            if hit:
+            if step == want_step and t >= want_t:
                 unreal.SystemLibrary.execute_console_command(
-                    w, f"HighResShot 1280x720 filename=cerem_{name}")
+                    w, f"HighResShot 1280x720 filename=intro_{name}")
                 log(f"SHOT {name} :: step={STEP_NAME[step]} t={t:.2f}")
                 self.plan_i += 1
-            elif self.elapsed() > 25:
-                log(f"TIMEOUT waiting for {PLAN[self.plan_i][2]} (now step={STEP_NAME[step]} t={t:.2f})")
+            elif self.elapsed() > 30:
+                log(f"TIMEOUT waiting {PLAN[self.plan_i][2]} (now step={STEP_NAME[step]} t={t:.2f})")
                 self.plan_i += 1
                 self.stage_t = time.monotonic()
 
