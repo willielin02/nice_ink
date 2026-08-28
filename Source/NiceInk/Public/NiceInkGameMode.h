@@ -143,7 +143,12 @@ public:
 	float IntroSitSeconds = 4.0f;      // 全景：六人盤腿看電視
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
-	float IntroNoticeSeconds = 2.6f;   // 電視特寫緩推
+	// 電視特寫：**節目五分鏡を頭から全部流す長さ**（2026-08-28 user 指定
+	// 「請把時間延長讓玩家可以在電視前完整看完你準備的影片片段」）。2.6→10.4。
+	// 分鏡の割りは NiceInkTvFilm::ResolveShot の比率表が持つので、**長さはこの一つの
+	// 旋鈕だけ**で決まる（比率は自動で等比伸縮、動画の物理速度は別経路で保たれる）。
+	// 開場全長への影響＝BeginOpeningIntro の Total が自動で吸収（相位計時器も伸びる）。
+	float IntroNoticeSeconds = 10.4f;  // 電視特寫：夜祭1.5/太鼓2.1/神輿2.2/登場2.5/振り返り2.2
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
 	float IntroTvOffSeconds = 1.5f;    // 白線收掉

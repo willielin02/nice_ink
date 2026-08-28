@@ -993,7 +993,10 @@ void ANiceInkCharacter::ViewIntro(APlayerController* PC, ENiCeremonyStep Step, f
 	case ENiCeremonyStep::IntroTvOff:
 		CamPos = TvLoc + FVector(0.0f, 168.0f, 80.0f);
 		LookAt = ScreenC;
-		PushCm = (Step == ENiCeremonyStep::IntroNotice) ? 42.0f : 0.0f;
+		// 08-28：IntroNotice が 2.6→10.4s になったので緩推も深く（42→56cm）。
+		// 速度はむしろ落ちる（16cm/s→5.4cm/s）＝長回しに正しい忍び寄り。
+		// 終端 131−56＝75cm、玻璃 52.5cm ⇒ 画面幅の約半分＝「観ている」framing。
+		PushCm = (Step == ENiCeremonyStep::IntroNotice) ? 56.0f : 0.0f;
 		break;
 	case ENiCeremonyStep::IntroPropose:
 		if (Host && Host != this)

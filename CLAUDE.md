@@ -170,6 +170,15 @@ canvas 做不到毛玻璃半透明）**。
   have been ticked」。凡「A 讀 B 這一幀算出來的東西」都要 prerequisite，不能靠註冊順序。
 - **5.7 Interchange 讀不了 FBX 內嵌貼圖**（2026-08-28）：`Invalid translator couldn't retrieve a payload`＝材質全空；改成散檔又踩第二坑——**glb 打包貼圖名＝無副檔名的 Image_N**，落地照樣讀不了。正解＝從原始 zip 抽命名乾淨的貼圖各自 AssetImportTask、材質 python 建、slot 腳本指派（桑拿房模式），FBX 只帶網格。
 - **曝光 bias 5.2 下的 unlit 自發光要 ×8 才追得上受光的牆**（2026-08-28）：電視螢幕第一版增益 1.35＝整台黑洞；機身 0.30 同病。而且 unlit 平面色零明暗＝大方塊讀成黑洞⇒ 假光寫進材質（面朝上越亮，同皮膚 #37 哲學）。環境資產**可以**吃烘焙 AO（零烘焙陰影鐵律只管皮膚）——不乘 AO 就沒有「這裡凹進去」的線索。
+- **「低解析度」不能用「畫得糊一點」假裝**（2026-08-28，電視節目）：畫在 512 的 RT 上
+  再做舊電視效果永遠露餡（線條是平滑的）⇒ 影像要真的畫在 **128×96 的 CPU 緩衝**上，
+  再用 `TF_Nearest` 貼圖**整數 4×**放大（非整數倍＝像素塊忽 3 忽 4＝讀成 bug 不是風格）；
+  掃描線／暗角留在 512 那層＝**兩個解析度疊起來才是映像管**，而且掃描線週期要**對齊
+  影格像素**（錯開會與顯示端 0.57 倍縮小干涉出摩爾紋閃爍）。同案兩條美術鐵則：
+  **顔はシルエットの出っ張りで読まれる**（稜線畫在頭的橢圓內側＝剪影還是一顆蛋；要把
+  鼻／唇／顎的突出加進**身體遮罩**再上色，輪廓光才會爬上鼻尖）；**和彫は地が濃く、
+  明るいのは暈しと抜きの細い帯だけ**（把 motif 實心填上去＝明暗顛倒＝「白い星のロゴ」；
+  領域用矩形＝「背在背上的東西」，要橢圓＋抖動邊界）。
 - **NaN 穿過所有鉗位**（2026-08-28）：jiggle 出力端 MaxCm/MaxRoll/Inward 全是比較式，NaN 比大小恆 false ⇒ 一顆 NaN 直達骨頭＝蒙皮頂點飛散＝黑鋸齒碎片。防線＝寫入前驗 finite、壞值整顆彈簧重置貼齊＋`NiJiggle: NaN` 報警（無聲失敗先開口）。
 - **HighResShot 是離屏重渲，看不見顯示鏈路的瞬態**（2026-08-28）：轉瓶段連拍 10 張「零黑斑」不能證明 user 看到的閃黑不存在——資源駐留/present 層的失效不會出現在另外渲的那一幀。**四開未 cook 編輯器行程的記憶體壓力**（08-25 實測 32GB 剩 1.9GB）＝三起畫面出鬼（OOM 崩潰／選單舞者碎片／轉瓶黑斑）的共同環境，全部單視窗重現不出、log 乾淨（成功恢復的失敗是無聲的）；**峰值幀＝轉瓶全景（全員＋刺青 RT＋電視同框）**最先失敗。出口＝打包版（每實例記憶體是編輯器行程零頭），開發端無可修。
 - **Live Coding 殘留行程擋 Build.bat**（`Unable to build while Live Coding is active`）：上一場 -game 視窗關了、LiveCoding 主控還在 ⇒ 清 `Unreal*` 全行程再編。
@@ -192,6 +201,28 @@ canvas 做不到毛玻璃半透明）**。
   ——這條適用所有 dirty-check 寫入層。同案兩條：**漸近收斂 ≠ 回到原位**（指數衰減永遠
   到不了零，要有明確終止才是構造保證）；**契約要量 user 看得到的那個量**（既有
   c6_settle 量彈簧內部狀態，錨點被污染後彈簧讀 0、骨頭歪 3.6cm 照樣 PASS＝空洞契約）。
+- **headless `-ExecutePythonScript` session 看不到遊戲模組的類別**（2026-08-28）：
+  `dir(unreal)` 裡一個 `NiceInk*` 都沒有、`load_class("/Script/NiceInk.…")` 回 None，
+  連 robo 腳本天天在用的 `unreal.NiceInkCharacter` 也不存在（既有 headless 腳本＝資產
+  重匯入那批只碰引擎／編輯器類別，所以一年沒人踩到）。**要叫專案自己的 UFUNCTION，
+  一律走 GUI 編輯器＋StartupScripts**——不進 PIE 也可以（叫完 `quit_editor` 就走，
+  純 CPU 的自查因此只要 60 秒而不是一輪 PIE）。
+- **`Start-Process` 的 uproject 路徑含空白必須自己加引號**（2026-08-28）：
+  `-ArgumentList '"<含空白的 uproject 絕對路徑>"'`。少了引號＝UE 收到兩段參數＝載不到
+  專案 ⇒ 開的是 **Project Browser**，而且 log 改寫到 `Engine/Saved/Logs/` 不是專案的
+  ⇒ 症狀是「編輯器開著、CPU 12%、專案 log 完全沒動靜」，很容易誤判成當掉或卡在 modal。
+- **`play_mode_robo.ps1` 改的是 `Config/DefaultEngine.ini` 的 `EditorStartupMap`**
+  ⇒ 對那個檔跑 `git checkout` 會把 robo 模式一起還原掉（下一輪 robo 直接 EXC
+  「Failed to find property 'bOpeningIntroForceInPIE' on 'NiceInkMenuGameMode'」
+  ＝啟動圖還是主選單）。動過那個檔就重跑一次模式切換腳本。
+- **改 ini／任何帶中文註解的檔，永遠不要用 PS 管線重寫整檔**（2026-08-28 血價——
+  這條本文件原本就有，而我照樣違反了）：`Set-Content -Encoding utf8` 會以 ANSI 讀進來
+  再寫回 ⇒ 全部中文註解變亂碼＋多一個 BOM＋62 行被吃掉。**正解就寫在同一個 repo 的
+  `Tools/RoboTest/play_mode_robo.ps1` 裡**（`[System.IO.File]::ReadAllText/WriteAllText`
+  配 `New-Object System.Text.UTF8Encoding($false)`），或直接用 sed／
+  python(encoding='utf-8')。**要改一個檔的一行，先看 repo 裡別人怎麼改同一個檔。**
+  同族：python 讀 stdin 走系統 codepage（cp950）會把 UTF-8 中文解成含反斜線的亂碼
+  ⇒ heredoc 餵 python 一律 `python -X utf8 -`。
 - **headless `-ExecutePythonScript` 用 PowerShell 管線接 Select-String 會在啟動後即死**（log 停在
   Total Editor Startup Time、exit 255）→ `Start-Process -Wait` 不接管線、事後 grep log。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。
@@ -330,7 +361,7 @@ canvas 做不到毛玻璃半透明）**。
   恆等中間姿勢不是近似）；右臂解析二骨 IK＝本案唯一新解算；瓶子交接＝捕捉當幀相對變換
   （不動父子關係）；儀器=robo_ceremony_test（11 契約）/robo_ceremony_probe/
   robo_ceremony_shots/robo_collapse_jiggle/robo_sleeppose_ab；**08-27 蹲踞拾瓶**＝PickBend 64→14°／Crouch 32→52／Standoff 40→28／LookDown −26→−14（姿勢域掃描定罪：軀幹前彎預算 10~15°、膝 120° 免費；handErr 18.7→12.3cm、c1~c10 綠；**c11 需 3 人局＝3-client PIE OOM 既有鐵坑，現階段不可跑**）），
-  **開場動畫（2026-08-27~28 BUILT-自驗、待 viewport；帳本=OPENING_CEREMONY_PLAN 08-27 節＋SHIP_PLAN 追記85）**＝user 逐字定案「坐在榻榻米上喝酒看電視→電視上極道刺青→關電視→有人提議→開局」：`ENiCeremonyStep` 在 Gather 前插五拍 IntroSit/Notice/TvOff/Propose/Rise（**儀式步驟全體 +5＝robo 腳本寫死的步驟號已同步修**）；只在本房第一場播（`bOpeningIntroPlayed`）、**PIE 一律跳過**（robo 契約零擾動；自驗走 `bOpeningIntroForceInPIE`＋`robo_intro_shots.py`）；入座＝相位切換當幀 teleport（與導演鏡頭硬切同幀＝看不見搬運）；坐姿＝SitBones 第一個消費者（`ComposeSitBaseCS`）、席弧依在場名次置中（24°@r260＝109cm＞體寬；17° 會互穿）；**坐→站不插值＝Propose→Rise 剪接間 snap**（中間幀只有被拍到才存在）；分拍機位表`ViewIntro`（blend=0 真剪接、機位內單調緩推；反拍在並排坐時只拍到背影＝砍掉）；電視 `ANiceInkTvSet`＝**SM_TvRadiola**（"Radiola from Matrix" by Sirenko，Sketchfab CC-BY-4.0 可商用需署名；SourceAssets/Television_Sirenko/ATTRIBUTION.txt、信用已列選單授權頁＋THIRD_PARTY_NOTICES；管線=tv_radiola_prep.py→ue_import_television.py）＋CanvasRT 512×384 畫「和彫特輯」（**DreamTrace motif 資料原樣＝電視上的圖＝夢裡要描的圖**）畫在模型自己的 `TvGlass` 材質槽上（內凹圓角玻璃 52.5×44.7、UV 歸一化到島；浮貼平板退役）；AO 接回櫃體材質、熄滅玻璃灰綠、RT 邊緣映像管暗角＝框/玻璃邊界對比（user 三輪打回定案）；開場後電視留場當家具。**v1 記帳未做**：房主手上無機器道具網格（舉拳＋marker_loop 補位）、坐姿飲酒、電視音效、開場期間 HUD 仍顯示 BOTTLE SPIN 倒數）、
+  **開場動畫（2026-08-27~28 BUILT-自驗、待 viewport；帳本=OPENING_CEREMONY_PLAN 08-27 節＋SHIP_PLAN 追記85）**＝user 逐字定案「坐在榻榻米上喝酒看電視→電視上極道刺青→關電視→有人提議→開局」：`ENiCeremonyStep` 在 Gather 前插五拍 IntroSit/Notice/TvOff/Propose/Rise（**儀式步驟全體 +5＝robo 腳本寫死的步驟號已同步修**）；只在本房第一場播（`bOpeningIntroPlayed`）、**PIE 一律跳過**（robo 契約零擾動；自驗走 `bOpeningIntroForceInPIE`＋`robo_intro_shots.py`）；入座＝相位切換當幀 teleport（與導演鏡頭硬切同幀＝看不見搬運）；坐姿＝SitBones 第一個消費者（`ComposeSitBaseCS`）、席弧依在場名次置中（24°@r260＝109cm＞體寬；17° 會互穿）；**坐→站不插值＝Propose→Rise 剪接間 snap**（中間幀只有被拍到才存在）；分拍機位表`ViewIntro`（blend=0 真剪接、機位內單調緩推；反拍在並排坐時只拍到背影＝砍掉）；電視 `ANiceInkTvSet`＝**SM_TvRadiola**（"Radiola from Matrix" by Sirenko，Sketchfab CC-BY-4.0 可商用需署名；SourceAssets/Television_Sirenko/ATTRIBUTION.txt、信用已列選單授權頁＋THIRD_PARTY_NOTICES；管線=tv_radiola_prep.py→ue_import_television.py）＋**節目＝日本傳統祭典特輯（08-28 user 定案：低解析度舊電視／祭典／誇張帥氣的極道／讓力士羨慕刺青）**：影像＝128×96 CPU 影格（`NiceInkTvBroadcast`）→ `TF_Nearest` 貼圖 → 單一 DrawTile **整數 4×** 進 512×384 CanvasRT（掃描線／陰罩／暗角／關機白線留在 512 那層＝兩個解析度）；五分鏡＝`ResolveShot(step,alpha)` 純函式（夜祭／太鼓／神輿／主役登場／振り返り）——**IntroSit（全景）只負責「電視是開著的」，IntroNotice（特寫 10.4s）把五分鏡從頭全部演完**（08-28 user 指定「讓玩家可以在電視前完整看完」；一修那版有三個分鏡只在全景播＝電視只有 20px＝做了看不到的東西）。**戲劇進度(U) 與物理速度(Seconds) 是兩條路**：U 管緩推／滑落／字幕／キラッ（鏡頭拉長就整體變慢＝正確），Seconds＝實秒管太鼓的拍／提燈的搖（不隨鏡長變——一修用 U 當相位，鏡頭拉長四倍太鼓就變 1/4 速）；分鏡佔比用比率表 ⇒ 長度只有 `IntroNoticeSeconds` 一個旋鈕。開場全長 20.1s（本房一次；`BeginOpeningIntro()` 的 Total 自動吸收相位計時器）。開場期間 **HUD 全部讓開**（`NiCeremonyStepIsIntro` 早退，只留 ESC 選單）；背中の主図仍是 **DreamTrace motif 資料原樣＝電視上的圖＝夢裡要描的圖**（改用輪廓，實心會變成白色星形 logo）；色域＝sRGB byte 40~255（unlit×8 下純黑讀成螢幕破洞）；儀器＝`robo_tv_filmsheet.py` 離線 contact sheet（不用開 PIE）。畫在模型自己的 `TvGlass` 材質槽上（內凹圓角玻璃 52.5×44.7、UV 歸一化到島；浮貼平板退役）；AO 接回櫃體材質、熄滅玻璃灰綠、RT 邊緣映像管暗角＝框/玻璃邊界對比（user 三輪打回定案）；開場後電視留場當家具。**v1 記帳未做**：房主手上無機器道具網格（舉拳＋marker_loop 補位）、坐姿飲酒、電視音效（~~開場期間 HUD 仍顯示 BOTTLE SPIN 倒數~~＝08-28 已修：**記帳過的缺口會隨著別處的改動變質**——特寫從 2.6s 拉到 10.4s 之後，釘在畫面正中央的準星就整整十秒壓在電視螢幕上）)、
   `DreamTrace`/`DreamTraceComponent`（**醉夢描圖 v4.0**：割糖餅式沿線描
   （自交避讓 2.6×帶半寬鐵律）＋割線機制 2D 移植（**08-04 與割線完全同制＝user
   鐵則「不准機制分岔」**：自由游標 v_max 追趕/無皮繩無域牆（bbox+4 防跑飛牆=

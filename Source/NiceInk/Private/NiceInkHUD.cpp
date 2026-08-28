@@ -675,6 +675,19 @@ void ANiceInkHUD::DrawHUD()
 		return;
 	}
 
+	// 開場動畫期間＝**HUD 全部讓開**（2026-08-28）。這是一段導演鏡頭的過場：
+	// 準星釘在畫面正中央，而 IntroNotice 的機位正是把電視放在正中央 ⇒ 準星整整
+	// 十秒壓在螢幕上；頂欄還在倒數「BOTTLE SPIN · 20s」，但這一段玩家什麼都不能操作。
+	// 追記85 把它記成「v1 刻意未做」，那時特寫只有 2.6 秒＝一眼掃過；08-28 把特寫拉長到
+	// 10.4 秒之後同一個瑕疵就變成盯著看的東西——**記帳過的缺口會隨著別處的改動變質，
+	// 不是記了就永遠可以不修**。ESC 選單與除錯面板留著（隨時要能退出）。
+	if (GS && NiCeremonyStepIsIntro(GS->CeremonyStep))
+	{
+		DrawSystemMenu(MyChar);
+		DrawDebugPanel(GS, MyPS, MyChar);
+		return;
+	}
+
 	// ESC 選單開著＝只畫選單（醒著沒有遮蔽義務；底層面板文字互疊會打架）
 	if (MyChar && MyChar->IsSystemMenuOpen())
 	{

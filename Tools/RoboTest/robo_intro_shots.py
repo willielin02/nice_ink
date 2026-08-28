@@ -54,7 +54,14 @@ def focus_main_window():
 PLAN = [
     (1, 0.30, "01_sit_wide"),
     (1, 0.85, "02_sit_wide_push"),
-    (2, 0.50, "03_tv_closeup"),
+    # 2026-08-28 二修：IntroNotice（10.4s）で番組五分鏡を頭から全部流すので、
+    # **一分鏡につき一枚**撮る（比率は NiceInkTvFilm::ResolveShot の Lo/Hi 表と同じ）。
+    #   夜祭 0.00-0.14 ／ 太鼓 0.14-0.34 ／ 神輿 0.34-0.55 ／ 登場 0.55-0.79 ／ 振り返り 0.79-1.00
+    (2, 0.07, "03a_tv_yomatsuri"),
+    (2, 0.24, "03b_tv_taiko"),
+    (2, 0.45, "03c_tv_mikoshi"),
+    (2, 0.67, "03d_tv_reveal"),
+    (2, 0.92, "03e_tv_turn"),
     (3, 0.30, "04_tv_off_line"),
     (3, 0.80, "05_tv_off_end"),
     (4, 0.55, "06_propose"),
@@ -134,6 +141,10 @@ class Shots:
                     w, f"HighResShot 1280x720 filename=intro_{name}")
                 log(f"SHOT {name} :: step={STEP_NAME[step]} t={t:.2f}")
                 self.plan_i += 1
+                # 逾時預算要**從上一張成功的那一刻起算**，不是從進入 shoot 起算
+                #（2026-08-28 抓到：開場延長到 ~20s 後，累積時間超過 30s ⇒ 後面的拍
+                # 全部假 TIMEOUT。原本 12s 的開場剛好蓋得住，所以潛伏了一天沒被發現。）
+                self.stage_t = time.monotonic()
             elif self.elapsed() > 30:
                 log(f"TIMEOUT waiting {PLAN[self.plan_i][2]} (now step={STEP_NAME[step]} t={t:.2f})")
                 self.plan_i += 1
