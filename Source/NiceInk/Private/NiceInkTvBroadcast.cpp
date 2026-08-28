@@ -1,6 +1,7 @@
 #include "NiceInkTvBroadcast.h"
 
 #include "DreamTraceMotifData.h"
+#include "NiceInkTvTelopData.h"
 
 namespace NiceInkTvFilm
 {
@@ -373,21 +374,20 @@ void DrawDigits(FCan& C, float X, float Y, const int32* Glyphs, int32 Count, con
 	}
 }
 
-// 假字塊：2~4 條橫劃＋1~2 條豎劃。漢字在 5×7 上必成噪點，但「這裡有日文字」的
-// 讀感靠的是橫劃堆疊被豎劃穿過的統計紋理，不是字本身。
-void DrawGlyphBlock(FCan& C, float Gx, float Gy, float W, float H, uint32 Hash, const FColor& Ink)
+// 點陣片假名を一字置く。MaxX＝ワイプの右端（これで帯と字が同時に開く）。
+void DrawTelopGlyph(FCan& C, int32 GlyphIdx, float X, float Y, const FColor& Col, float MaxX)
 {
-	const int32 Bars = 2 + int32(Hash % 3u);
-	for (int32 b = 0; b < Bars; ++b)
+	using namespace NiceInkTvTelop;
+	if (GlyphIdx < 0 || GlyphIdx >= Num) { return; }
+	for (int32 R = 0; R < GlyphH; ++R)
 	{
-		const float By = Gy + b * (H - 1.0f) / FMath::Max(Bars - 1, 1);
-		C.Rect(Gx, By, Gx + W, By + 1.0f, Ink, 0.95f);
-	}
-	const int32 Verts = 1 + int32((Hash >> 5) % 2u);
-	for (int32 v = 0; v < Verts; ++v)
-	{
-		const float Vx = Gx + 1.0f + v * (W * 0.45f);
-		C.Rect(Vx, Gy, Vx + 1.0f, Gy + H, Ink, 0.95f);
+		for (int32 Cx = 0; Cx < GlyphW; ++Cx)
+		{
+			if ((Bits[GlyphIdx][R] & (1 << (GlyphW - 1 - Cx))) == 0) { continue; }
+			const float Px = X + Cx;
+			if (Px >= MaxX) { continue; }
+			C.Put(FMath::FloorToInt(Px), FMath::FloorToInt(Y) + R, Col);
+		}
 	}
 }
 
@@ -406,49 +406,46 @@ void DrawStationBug(FCan& C, int32 FrameNo, float FilmClockSec)
 	DrawDigits(C, 102.0f, 20.0f, D, 5, Pal::CapInk);
 }
 
-// 生中継バッジ（左上）：赤地に一文字。世界共通で「今まさに出ている」の記号。
+// 生中継バッジ（左上）：赤地に「生」。真の字になったので記号ではなく言葉として読める。
 void DrawLiveBadge(FCan& C, int32 FrameNo)
 {
-	const bool bBlink = ((FrameNo / 8) % 2) == 0; // ゆっくり明滅＝生きている信号
-	C.Rect(6, 5, 17, 16, Rgb(176, 44, 36), bBlink ? 1.0f : 0.82f);
-	C.Rect(6, 5, 17, 6, Rgb(228, 96, 78), 1.0f);
-	DrawGlyphBlock(C, 8.0f, 7.0f, 6.0f, 7.0f, 0x5A17u, Pal::White);
+	const bool bBlink = ((FrameNo / 16) % 2) == 0; // ゆっくり明滅＝生きている信号
+	C.Rect(6, 4, 18, 17, Rgb(176, 44, 36), bBlink ? 1.0f : 0.84f);
+	C.Rect(6, 4, 18, 5, Rgb(228, 96, 78), 1.0f);
+	DrawTelopGlyph(C, NiceInkTvTelop::SeiIndex, 8.0f, 6.0f, Pal::White, 1000.0f);
 }
 
-// 下三分之一（テロップ）：**新聞感の八割はこれ一枚**。
-// 08-28 版は左下の小さい灰色帯＝字卡の作法。放送のそれは画面幅の 7~9 割、
-// 色の付いた見出しブロック＋二段、そして**ワイプで出入りする**（フェードではない）。
-// 彫物を隠さないよう、主役の二拍だけ早めに引く（実際の報道もそうする＝被写体を潰さない）。
-void DrawLowerThird(FCan& C, int32 GlyphCount, int32 Seed, float Wipe)
+// 下三分之一（テロップ）。**08-29 二修：user viewport 判決「下面的新聞標題太大了，
+// 而且裡面的文字也根本看不出來在寫什麼，也完全不像日本字」——三点とも当たり。**
+//   ① 二段 19px（画面高の 20%）→ **一段 12px（12.5%）**。二段＋見出し帯は速報・重大
+//      ニュースの作法で、祭の特集には過剰だった。「実物は大きい」を一段階読み違えた。
+//   ② 帯幅 116px 固定 → **内容に合わせる**（46~87px）。実物のテロップは内容の幅しかない
+//      ——全幅の帯は「画面に貼った板」に見える。
+//   ③ 假字塊（等幅・横劃が全格を貫く）は**条码に読める**。真の点陣片假名に置き換え
+//      （Tools/AssetPrep/telop_glyphs.py が焼く）。片假名を選ぶ理由＝直線構成だから
+//      8×9 で成立する唯一の日本語文字（平假名の曲線も漢字の劃密度もこの尺では潰れる）。
+void DrawLowerThird(FCan& C, int32 Shot, float Wipe)
 {
+	using namespace NiceInkTvTelop;
 	if (Wipe <= 0.01f) { return; }
-	const float X0 = 6.0f, BandW = 116.0f;
-	const float W = BandW * Sat(Wipe);
-	const float TopY = 74.0f, MidY = 81.0f, BotY = 93.0f;
+	Shot = FMath::Clamp(Shot, 0, 4);
+	const int32 N = CaptionLen[Shot];
+	const float X0 = 6.0f, HeadW = 12.0f, Adv = 9.0f;
+	const float FullW = HeadW + 2.0f + N * Adv + 2.0f;
+	const float W = FullW * Sat(Wipe);
+	const float Y0 = 80.0f, Y1 = 92.0f; // 12px＝画面高の 12.5%
 
-	// 上段＝番組名（細い橙帯）
-	C.Rect(X0, TopY, X0 + W, MidY - 1.0f, Rgb(196, 92, 34), 0.95f);
-	for (int32 g = 0; g < 5; ++g)
+	C.Rect(X0, Y0, X0 + W, Y1, Rgb(18, 22, 44), 0.94f);
+	C.Rect(X0, Y0, X0 + W, Y0 + 1.0f, Rgb(96, 116, 168), 0.9f); // 上縁のハイライト
+	if (W > HeadW) // 見出しブロック（赤地に「生」）
 	{
-		const float Gx = X0 + 3.0f + g * 6.0f;
-		if (Gx + 5.0f > X0 + W) { break; }
-		DrawGlyphBlock(C, Gx, TopY + 1.0f, 4.0f, 4.0f, Hash3(g, Seed + 7, 11), Pal::White);
+		C.Rect(X0, Y0, X0 + HeadW, Y1, Rgb(176, 44, 36), 1.0f);
+		DrawTelopGlyph(C, SeiIndex, X0 + 2.0f, Y0 + 2.0f, Pal::White, X0 + W);
 	}
-	// 下段＝本文（濃紺帯）＋左の赤い見出しブロック
-	C.Rect(X0, MidY, X0 + W, BotY, Rgb(18, 22, 44), 0.94f);
-	C.Rect(X0, MidY, X0 + W, MidY + 1.0f, Rgb(96, 116, 168), 0.9f); // 上縁のハイライト
-	const float HeadW = 17.0f;
-	if (W > HeadW)
+	for (int32 g = 0; g < N; ++g)
 	{
-		C.Rect(X0, MidY, X0 + HeadW, BotY, Rgb(176, 44, 36), 1.0f);
-		DrawGlyphBlock(C, X0 + 2.0f, MidY + 2.0f, 5.0f, 8.0f, Hash3(0, Seed + 31, 3), Pal::White);
-		DrawGlyphBlock(C, X0 + 9.0f, MidY + 2.0f, 5.0f, 8.0f, Hash3(1, Seed + 31, 3), Pal::White);
-	}
-	for (int32 g = 0; g < GlyphCount; ++g)
-	{
-		const float Gx = X0 + HeadW + 3.0f + g * 8.0f;
-		if (Gx + 6.0f > X0 + W) { break; }
-		DrawGlyphBlock(C, Gx, MidY + 2.0f, 6.0f, 8.0f, Hash3(g, Seed, 31), Pal::CapInk);
+		DrawTelopGlyph(C, Caption[Shot][g], X0 + HeadW + 2.0f + g * Adv, Y0 + 2.0f,
+			Pal::CapInk, X0 + W);
 	}
 }
 
@@ -1143,19 +1140,19 @@ void DrawBroadcastChrome(FCan& C, int32 Shot, float U, int32 FrameNo)
 {
 	// テロップの出入り（ワイプ）。主役の二拍だけ早く引く＝彫物を字幕で潰さない
 	//（実際の報道も被写体が来たら引く）。
-	struct FChrome { int32 Glyphs; int32 Seed; float In0, In1, Out0, Out1; };
+	struct FChrome { float In0, In1, Out0, Out1; };
 	static const FChrome Tab[Shot_Num] = {
-		{ 6, 101, 0.06f, 0.18f, 0.78f, 0.92f }, // 夜祭遠景
-		{ 5, 202, 0.05f, 0.17f, 0.80f, 0.94f }, // 太鼓
-		{ 7, 303, 0.06f, 0.18f, 0.78f, 0.92f }, // 神輿渡御
+		{ 0.06f, 0.18f, 0.78f, 0.92f }, // 夜祭遠景
+		{ 0.05f, 0.17f, 0.80f, 0.94f }, // 太鼓
+		{ 0.06f, 0.18f, 0.78f, 0.92f }, // 神輿渡御
 		// 主役の二拍は**さらに早く引く**：彫物がフレーム下半分に来るので、
 		// 帯が生きているうちに payload を潰してしまう（08-29 実測して詰めた）。
-		{ 8, 404, 0.04f, 0.15f, 0.26f, 0.36f }, // 主役登場
-		{ 6, 505, 0.03f, 0.13f, 0.17f, 0.27f }, // 振り返り
+		{ 0.04f, 0.15f, 0.26f, 0.36f }, // 主役登場
+		{ 0.03f, 0.13f, 0.17f, 0.27f }, // 振り返り
 	};
 	const FChrome& Ch = Tab[FMath::Clamp(Shot, 0, Shot_Num - 1)];
 	const float Wipe = Seg01(U, Ch.In0, Ch.In1) * (1.0f - Seg01(U, Ch.Out0, Ch.Out1));
-	DrawLowerThird(C, Ch.Glyphs, Ch.Seed, Wipe);
+	DrawLowerThird(C, Shot, Wipe); // 本文は NiceInkTvTelopData.h の分鏡別テーブル
 	DrawLiveBadge(C, FrameNo);
 	DrawStationBug(C, FrameNo, FMath::Fmod(FrameNo / RedrawHz, 60.0f));
 }
