@@ -239,6 +239,14 @@ canvas 做不到毛玻璃半透明）**。
   「不填滿才是識別特徵」的字上填滿會直接毀掉它**（マ 的左臂拉到底就變 ス，而那一筆
   正是這條新規則叫我加的）。儀器＝`Tools/AssetPrep/telop_glyphs.py`（ASCII art→標頭
   ＋自查 PNG，不用開引擎、一輪 10 秒）；**判讀要看「語」不是看單字**（實際被讀的是詞）。
+- **「不要用某某」寫在註解裡＝等人踩；要寫成資料＋閘門**（2026-08-29 自查翻出）：
+  マ 標了「※不使用」但字表裡還有一條文言在用它——今天不會畫到，哪天有人打開就靜靜
+  渲染成錯字且無人報警。修＝`UNRELIABLE = {"ma"}` 寫成資料，baker 焼く前 assert。
+  **而閘門本身要被測**：把壞字塞回去跑一次確認它開火——第一次測是假通過（exit=2＝
+  檔案找不到，不是閘門攔的；Git Bash 的 /tmp 與 Windows python 的路徑不同）。
+  **「非零就算過」是空洞契約，要驗的是它為了正確的理由失敗。**
+  同案：`Clamp(TextIdx, 0, 4)` 把表的大小抄了一份，文言少一條就越界 ⇒ 改讀標頭的
+  `NumTexts`。**表的大小寫在兩個地方，必有一邊會舊。**
 - **headless `-ExecutePythonScript` 用 PowerShell 管線接 Select-String 會在啟動後即死**（log 停在
   Total Editor Startup Time、exit 255）→ `Start-Process -Wait` 不接管線、事後 grep log。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。

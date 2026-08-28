@@ -428,7 +428,9 @@ void DrawLowerThird(FCan& C, int32 TextIdx, float Wipe)
 {
 	using namespace NiceInkTvTelop;
 	if (Wipe <= 0.01f) { return; }
-	TextIdx = FMath::Clamp(TextIdx, 0, 4);
+	// 上限は**標頭が持つ本数**から取る。08-29：文言を一本減らした瞬間、ここに書き写して
+	// あった 4 が境界外になった——**表の大きさを二箇所に書けば、必ず片方が古くなる**。
+	TextIdx = FMath::Clamp(TextIdx, 0, NumTexts - 1);
 	const int32 N = TextLen[TextIdx];
 	const float X0 = 6.0f, HeadW = 12.0f, Adv = 9.0f;
 	const float FullW = HeadW + 2.0f + N * Adv + 2.0f;

@@ -37,14 +37,14 @@ namespace NiceInkTvTelop
 
 	// **使える文言の一覧**（分鏡別ではない）。どれをいつ出すかは C++ 側が決める。
 	inline constexpr int32 SeiIndex = 18;
-	enum { Txt_Ennichi = 0, Txt_Taiko = 1, Txt_Mikoshi = 2, Txt_Horimono = 3, Txt_Matsurinootoko = 4 };
-	inline constexpr int32 MaxText = 7;
-	inline constexpr int32 TextLen[5] = { 4, 3, 3, 4, 7 };
-	inline constexpr int32 Text[5][MaxText] = {
-		{ 14, 15, 16, 17, 18, 18, 18 }, // ennichi：e n ni chi
-		{ 4, 5, 6, 18, 18, 18, 18 }, // taiko：ta i ko
-		{ 7, 6, 8, 18, 18, 18, 18 }, // mikoshi：mi ko shi
-		{ 9, 3, 10, 11, 18, 18, 18 }, // horimono：ho ri mo no
-		{ 2, 1, 3, 11, 12, 13, 6 }, // matsurinootoko：ma tsu ri no o to ko
+	inline constexpr int32 NumTexts = 4;
+	enum { Txt_Ennichi = 0, Txt_Taiko = 1, Txt_Mikoshi = 2, Txt_Horimono = 3 };
+	inline constexpr int32 MaxText = 4;
+	inline constexpr int32 TextLen[4] = { 4, 3, 3, 4 };
+	inline constexpr int32 Text[4][MaxText] = {
+		{ 14, 15, 16, 17 }, // ennichi：e n ni chi
+		{ 4, 5, 6, 18 }, // taiko：ta i ko
+		{ 7, 6, 8, 18 }, // mikoshi：mi ko shi
+		{ 9, 3, 10, 11 }, // horimono：ho ri mo no
 	};
 }

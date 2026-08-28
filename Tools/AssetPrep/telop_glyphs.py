@@ -246,6 +246,13 @@ GLYPHS = {
     ),
 }
 
+# **この尺で信頼できない字**（註解ではなくデータで持つ）。08-29：マ は ス と 8×9 で
+# 構造が同じで比例しか違わないため、五回描き直しても分離できなかった。
+# 註解に「使わない」と書くだけでは、いつか誰かが有効にして**静かに**壊す
+# ——この専案が何度も踏んだ「註解は腐るのに誰も見ていない」の同族。だから下の
+# assert が焼く前に落とす。字形自体は将来のために残す。
+UNRELIABLE = {"ma"}
+
 ORDER = list(GLYPHS.keys())
 IDX = {k: i for i, k in enumerate(ORDER)}
 
@@ -266,12 +273,21 @@ CAPTIONS = [
     ("taiko",        ["ta", "i", "ko"]),                             # タイコ（太鼓）
     ("mikoshi",      ["mi", "ko", "shi"]),                           # ミコシ（神輿）
     ("horimono",     ["ho", "ri", "mo", "no"]),                      # ホリモノ ※未使用
-    ("matsurinootoko", ["ma", "tsu", "ri", "no", "o", "to", "ko"]),  # マツリノオトコ ※未使用
 ]
 
 ROOT = r"C:\games\Unreal Engine\nice_ink"
 HDR = os.path.join(ROOT, "Source", "NiceInk", "Private", "NiceInkTvTelopData.h")
 PREVIEW = os.path.join(ROOT, "Saved", "TvFilm", "telop_preview.png")
+
+
+# ── 閘門：使えない字を含む文言があれば、焼かずに落とす ────────────────────
+for _name, _seq in CAPTIONS:
+    _bad = sorted(set(_seq) & UNRELIABLE)
+    if _bad:
+        raise SystemExit(
+            "TELOP GATE: 文言 %r が信頼できない字 %s を使っている。"
+            "この尺では読み違えられるので、字を直すのではなく**文言を替えること**。"
+            % (_name, _bad))
 
 
 def rows_to_bytes(rows):
@@ -312,6 +328,7 @@ def emit_header():
     lines.append("")
     lines.append("\t// **使える文言の一覧**（分鏡別ではない）。どれをいつ出すかは C++ 側が決める。")
     lines.append("\tinline constexpr int32 SeiIndex = %d;" % IDX["sei"])
+    lines.append("\tinline constexpr int32 NumTexts = %d;" % len(CAPTIONS))
     lines.append("\tenum { %s };" % ", ".join(
         "Txt_%s = %d" % (n[0].upper() + n[1:], i)
         for i, (n, _) in enumerate(CAPTIONS)))
