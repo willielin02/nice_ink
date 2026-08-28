@@ -97,9 +97,12 @@ void ANiceInkTvSet::Tick(float DeltaSeconds)
 	ScreenOn01 = WantOn;
 	Collapse01 = WantCollapse;
 
-	// 12Hz 更新（映像管的年代感本來就不是 60fps；黑屏後不再重畫）
+	// 重畫率＝NiceInkTvFilm::RedrawHz（黑屏後不再重畫）。
+	// **12Hz 本身就是一個「膠片」的選擇**（電影 24p 的頓挫）；08-29 改判為新聞畫面之後
+	// 提到 24——電視是 60i，動態比膠片滑順，頓挫會把它讀回老電影。成本＝12,288 個
+	// 像素的純 CPU 光柵翻倍（微不足道）。
 	const double Now = GetWorld()->GetTimeSeconds();
-	const bool bDue = (Now - LastDrawTime) > (1.0 / 12.0);
+	const bool bDue = (Now - LastDrawTime) > (1.0 / NiceInkTvFilm::RedrawHz);
 	if ((ScreenOn01 > 0.0f && bDue) || bChanged)
 	{
 		LastDrawTime = Now;
@@ -109,7 +112,7 @@ void ANiceInkTvSet::Tick(float DeltaSeconds)
 		// StepSeconds を渡すのは物理速度（拍・揺れ）を鏡長から切り離すため。
 		NiceInkTvFilm::ResolveShot(Step, GS->GetCeremonyAlpha(), GS->CeremonyStepDuration, Now,
 			FilmShot, FilmU, FilmSeconds);
-		FilmFrameNo = FMath::FloorToInt(Now * 12.0);
+		FilmFrameNo = FMath::FloorToInt(Now * NiceInkTvFilm::RedrawHz);
 		ScreenRT->UpdateResource(); // 觸發 OnCanvasRenderTargetUpdate → DrawScreen
 	}
 }
@@ -365,8 +368,8 @@ void ANiceInkTvSet::DumpFilmFrames(const FString& OutDir, int32 UpScale, int32 P
 		{
 			const float U = static_cast<float>(k) / (PerShot - 1);
 			const float Seconds = U * ShotSeconds;
-			// FrameNo＝12Hz の実影格番号 ⇒ 粒子とハムバーも実際に出るものと同じ
-			const int32 FrameNo = FMath::RoundToInt(Seconds * 12.0f);
+			// FrameNo＝実影格番号（RedrawHz）⇒ 粒子・ハムバー・時刻も実演と同じ
+			const int32 FrameNo = FMath::RoundToInt(Seconds * NiceInkTvFilm::RedrawHz);
 			RenderFrame(ShotIdx, U, Seconds, FrameNo, Frame.GetData());
 
 			for (int32 Y = 0; Y < OutH; ++Y)

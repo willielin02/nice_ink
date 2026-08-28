@@ -23,6 +23,11 @@ namespace NiceInkTvFilm
 	inline constexpr int32 FilmH = 96;
 	inline constexpr int32 FilmPx = FilmW * FilmH;
 
+	// 重畫率。**12Hz 本身就是一個「膠片」的選擇**（電影 24p 的頓挫感）；改判為新聞畫面
+	// 之後改成 24（電視是 60i、動態比膠片滑順）。成本＝12,288 個像素的純 CPU 運算翻倍
+	//（微不足道）。TvSet 的節流與影格序號、以及時刻表示的秒，全部讀這一個常數。
+	inline constexpr float RedrawHz = 24.0f;
+
 	// 分鏡編號（節目自己的鏡頭，與遊戲鏡頭無關）
 	enum EShot : int32
 	{

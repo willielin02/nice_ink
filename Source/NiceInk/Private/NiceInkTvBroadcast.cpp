@@ -332,40 +332,145 @@ void DrawCrowd(FCan& C, float TopY, int32 Seed, float Phase, const FColor& Col)
 	}
 }
 
-// 台標（右上）：舊放送的常駐識別記號。真文字在 128px 上必成豆腐，改用記號。
-void DrawStationBug(FCan& C, int32 FrameNo)
+// ═══════════════════════════════════════════════════════════════════════════
+// 放送 chrome（2026-08-29：user 判讀「這要營造的是新聞畫面比較合理」——同意，而且
+// 理由更強：劇情片的帥是虛構的，力士羨慕的會變成明星；**新聞裡的男人是真的存在的**，
+// 那個錯誤推論才站得住腳。以下這一組是「這是電視在播，不是電影」的承重訊號。）
+//
+// **chrome 不屬於任何一個分鏡**：它是播出鏈路加上去的，所以畫在**手持晃動之後**
+// ——攝影機在晃，字幕不會跟著晃。這條分界是它讀起來像廣播而不像貼圖的關鍵。
+// ═══════════════════════════════════════════════════════════════════════════
+
+// 3×5 點陣數字。**數字是這個解析度上唯一真的能讀的字**（漢字要 11×11 才認得出來，
+// 而數字 3×5 就夠）⇒ 時刻表示是全片唯一「真的有意義的文字」，也是最省的廣播訊號。
+const uint8 GDigit3x5[11][5] = {
+	{ 0b111, 0b101, 0b101, 0b101, 0b111 }, // 0
+	{ 0b010, 0b110, 0b010, 0b010, 0b111 }, // 1
+	{ 0b111, 0b001, 0b111, 0b100, 0b111 }, // 2
+	{ 0b111, 0b001, 0b111, 0b001, 0b111 }, // 3
+	{ 0b101, 0b101, 0b111, 0b001, 0b001 }, // 4
+	{ 0b111, 0b100, 0b111, 0b001, 0b111 }, // 5
+	{ 0b111, 0b100, 0b111, 0b101, 0b111 }, // 6
+	{ 0b111, 0b001, 0b001, 0b001, 0b001 }, // 7
+	{ 0b111, 0b101, 0b111, 0b101, 0b111 }, // 8
+	{ 0b111, 0b101, 0b111, 0b001, 0b111 }, // 9
+	{ 0b000, 0b010, 0b000, 0b010, 0b000 }, // 10 = ':'
+};
+
+void DrawDigits(FCan& C, float X, float Y, const int32* Glyphs, int32 Count, const FColor& Col)
 {
-	const float A = 0.55f + 0.08f * FMath::Sin(FrameNo * 0.5f);
-	C.Rect(110, 7, 121, 18, Pal::CapBg, 0.45f);
-	C.Ellipse(115.5f, 12.5f, 4.2f, 4.2f, Pal::CapInk, A);
-	C.Ellipse(115.5f, 12.5f, 2.0f, 2.0f, Pal::CapBg, A);
-	C.Rect(114.5f, 8.5f, 116.5f, 16.5f, Pal::CapBg, A);
+	for (int32 g = 0; g < Count; ++g)
+	{
+		const int32 Idx = FMath::Clamp(Glyphs[g], 0, 10);
+		for (int32 R = 0; R < 5; ++R)
+			for (int32 Cx = 0; Cx < 3; ++Cx)
+			{
+				if (GDigit3x5[Idx][R] & (1 << (2 - Cx)))
+				{
+					C.Put(FMath::FloorToInt(X) + g * 4 + Cx, FMath::FloorToInt(Y) + R, Col);
+				}
+			}
+	}
 }
 
-// 字幕帶：抽象「字」塊。128px 寬上真的日文字會糊成噪點，
-// 而 2~4 條橫劃＋1~2 條豎劃的塊在低解析下正是漢字的讀感（舊影片字幕的正確抽象）。
-void DrawCaption(FCan& C, float Y, int32 GlyphCount, int32 Seed, float Reveal)
+// 假字塊：2~4 條橫劃＋1~2 條豎劃。漢字在 5×7 上必成噪點，但「這裡有日文字」的
+// 讀感靠的是橫劃堆疊被豎劃穿過的統計紋理，不是字本身。
+void DrawGlyphBlock(FCan& C, float Gx, float Gy, float W, float H, uint32 Hash, const FColor& Ink)
 {
-	const float X0 = 10.0f, GW = 7.0f;
-	C.Rect(X0 - 3.0f, Y - 2.0f, X0 + GlyphCount * GW + 3.0f, Y + 11.0f, Pal::CapBg, 0.72f);
-	const int32 Shown = FMath::Clamp(FMath::CeilToInt(GlyphCount * Reveal), 0, GlyphCount);
-	for (int32 g = 0; g < Shown; ++g)
+	const int32 Bars = 2 + int32(Hash % 3u);
+	for (int32 b = 0; b < Bars; ++b)
 	{
-		const float Gx = X0 + g * GW;
-		const uint32 H = Hash3(g, Seed, 31);
-		const int32 Bars = 2 + int32(H % 3u);
-		for (int32 b = 0; b < Bars; ++b)
-		{
-			const float By = Y + 1.0f + b * (7.0f / FMath::Max(Bars - 1, 1));
-			C.Rect(Gx, By, Gx + 5.0f, By + 1.0f, Pal::CapInk, 0.95f);
-		}
-		const int32 Verts = 1 + int32((H >> 5) % 2u);
-		for (int32 v = 0; v < Verts; ++v)
-		{
-			const float Vx = Gx + 1.0f + v * 2.5f;
-			C.Rect(Vx, Y + 1.0f, Vx + 1.0f, Y + 8.0f, Pal::CapInk, 0.95f);
-		}
+		const float By = Gy + b * (H - 1.0f) / FMath::Max(Bars - 1, 1);
+		C.Rect(Gx, By, Gx + W, By + 1.0f, Ink, 0.95f);
 	}
+	const int32 Verts = 1 + int32((Hash >> 5) % 2u);
+	for (int32 v = 0; v < Verts; ++v)
+	{
+		const float Vx = Gx + 1.0f + v * (W * 0.45f);
+		C.Rect(Vx, Gy, Vx + 1.0f, Gy + H, Ink, 0.95f);
+	}
+}
+
+// 台標（右上）＋時刻。舊放送的常駐識別。
+void DrawStationBug(FCan& C, int32 FrameNo, float FilmClockSec)
+{
+	const float A = 0.62f + 0.06f * FMath::Sin(FrameNo * 0.5f);
+	C.Rect(110, 5, 122, 17, Pal::CapBg, 0.5f);
+	C.Ellipse(116.0f, 11.0f, 4.2f, 4.2f, Pal::CapInk, A);
+	C.Ellipse(116.0f, 11.0f, 2.0f, 2.0f, Pal::CapBg, A);
+	C.Rect(115.0f, 7.0f, 117.0f, 15.0f, Pal::CapBg, A);
+	// 時刻 20:3x：秒が進む＝「今、放送されている」。数字は実際に読める。
+	const int32 Sec = FMath::Clamp(FMath::FloorToInt(FilmClockSec), 0, 59);
+	const int32 D[5] = { 2, 0, 10, 3, Sec % 10 };
+	C.Rect(101, 19, 122, 26, Pal::CapBg, 0.62f);
+	DrawDigits(C, 102.0f, 20.0f, D, 5, Pal::CapInk);
+}
+
+// 生中継バッジ（左上）：赤地に一文字。世界共通で「今まさに出ている」の記号。
+void DrawLiveBadge(FCan& C, int32 FrameNo)
+{
+	const bool bBlink = ((FrameNo / 8) % 2) == 0; // ゆっくり明滅＝生きている信号
+	C.Rect(6, 5, 17, 16, Rgb(176, 44, 36), bBlink ? 1.0f : 0.82f);
+	C.Rect(6, 5, 17, 6, Rgb(228, 96, 78), 1.0f);
+	DrawGlyphBlock(C, 8.0f, 7.0f, 6.0f, 7.0f, 0x5A17u, Pal::White);
+}
+
+// 下三分之一（テロップ）：**新聞感の八割はこれ一枚**。
+// 08-28 版は左下の小さい灰色帯＝字卡の作法。放送のそれは画面幅の 7~9 割、
+// 色の付いた見出しブロック＋二段、そして**ワイプで出入りする**（フェードではない）。
+// 彫物を隠さないよう、主役の二拍だけ早めに引く（実際の報道もそうする＝被写体を潰さない）。
+void DrawLowerThird(FCan& C, int32 GlyphCount, int32 Seed, float Wipe)
+{
+	if (Wipe <= 0.01f) { return; }
+	const float X0 = 6.0f, BandW = 116.0f;
+	const float W = BandW * Sat(Wipe);
+	const float TopY = 74.0f, MidY = 81.0f, BotY = 93.0f;
+
+	// 上段＝番組名（細い橙帯）
+	C.Rect(X0, TopY, X0 + W, MidY - 1.0f, Rgb(196, 92, 34), 0.95f);
+	for (int32 g = 0; g < 5; ++g)
+	{
+		const float Gx = X0 + 3.0f + g * 6.0f;
+		if (Gx + 5.0f > X0 + W) { break; }
+		DrawGlyphBlock(C, Gx, TopY + 1.0f, 4.0f, 4.0f, Hash3(g, Seed + 7, 11), Pal::White);
+	}
+	// 下段＝本文（濃紺帯）＋左の赤い見出しブロック
+	C.Rect(X0, MidY, X0 + W, BotY, Rgb(18, 22, 44), 0.94f);
+	C.Rect(X0, MidY, X0 + W, MidY + 1.0f, Rgb(96, 116, 168), 0.9f); // 上縁のハイライト
+	const float HeadW = 17.0f;
+	if (W > HeadW)
+	{
+		C.Rect(X0, MidY, X0 + HeadW, BotY, Rgb(176, 44, 36), 1.0f);
+		DrawGlyphBlock(C, X0 + 2.0f, MidY + 2.0f, 5.0f, 8.0f, Hash3(0, Seed + 31, 3), Pal::White);
+		DrawGlyphBlock(C, X0 + 9.0f, MidY + 2.0f, 5.0f, 8.0f, Hash3(1, Seed + 31, 3), Pal::White);
+	}
+	for (int32 g = 0; g < GlyphCount; ++g)
+	{
+		const float Gx = X0 + HeadW + 3.0f + g * 8.0f;
+		if (Gx + 6.0f > X0 + W) { break; }
+		DrawGlyphBlock(C, Gx, MidY + 2.0f, 6.0f, 8.0f, Hash3(g, Seed, 31), Pal::CapInk);
+	}
+}
+
+// 手持ちの揺れ：低周波の和で 1~2px 漂う＋ゆっくり流れる。
+// 08-28 版は五拍とも固定機位＋滑らかな ease＝映画の作法。**報道は人が担いでいる。**
+// 画そのものをずらす（chrome より前に掛ける）＝カメラが揺れて字幕は揺れない。
+void ApplyHandheld(FCan& C, float Seconds, int32 Shot)
+{
+	const float T = Seconds + Shot * 3.7f; // 分鏡ごとに位相をずらす＝同じ揺れの繰り返しに見えない
+	const int32 Dx = FMath::RoundToInt(FMath::Sin(T * 0.9f) * 1.15f + FMath::Sin(T * 2.3f + 1.7f) * 0.6f);
+	const int32 Dy = FMath::RoundToInt(FMath::Sin(T * 0.7f + 2.1f) * 0.95f + FMath::Sin(T * 1.9f + 0.4f) * 0.5f);
+	if (Dx == 0 && Dy == 0) { return; }
+	TArray<FColor> Src;
+	Src.SetNumUninitialized(FilmPx);
+	FMemory::Memcpy(Src.GetData(), C.P, FilmPx * sizeof(FColor));
+	for (int32 Y = 0; Y < FilmH; ++Y)
+		for (int32 X = 0; X < FilmW; ++X)
+		{
+			const int32 Sx = FMath::Clamp(X - Dx, 0, FilmW - 1); // 端はクランプ＝黒縁を出さない
+			const int32 Sy = FMath::Clamp(Y - Dy, 0, FilmH - 1);
+			C.P[Y * FilmW + X] = Src[Sy * FilmW + Sx];
+		}
 }
 
 // 祭りの男（太鼓・担ぎ手の量産体）：頭＋なで肩＋胴。
@@ -729,8 +834,10 @@ void ShotYomatsuri(FCan& C, float U, float Seconds, int32 FrameNo)
 	DrawLanternString(C, FVector2f(Bx + 14, TopY + 2), FVector2f(FilmW + 6, 26), 6.0f, 7, 11, Ph);
 	DrawLanternString(C, FVector2f(-6, 46), FVector2f(FilmW + 6, 44), 5.0f, 11, 23, Ph * 0.8f);
 
-	DrawCrowd(C, 74.0f, 5, Ph, Pal::CrowdLit);
-	DrawCrowd(C, 84.0f, 17, Ph * 1.2f, Pal::Crowd);
+	// テロップ（y74~93）に頭を食われないよう人群を上げる。
+	// **報道のカメラマンは下三分之一があることを知って構図を切る**——これはその作法。
+	DrawCrowd(C, 65.0f, 5, Ph, Pal::CrowdLit);
+	DrawCrowd(C, 75.0f, 17, Ph * 1.2f, Pal::Crowd);
 
 	for (int32 i = 0; i < 14; ++i) // 火の粉
 	{
@@ -739,8 +846,6 @@ void ShotYomatsuri(FCan& C, float U, float Seconds, int32 FrameNo)
 		C.DPut(FMath::FloorToInt(Sx), FMath::FloorToInt(Sy), Pal::LampCore, 0.8f);
 	}
 
-	DrawCaption(C, 80.0f, 6, 101, Seg01(U, 0.10f, 0.45f) * (1.0f - Seg01(U, 0.80f, 0.95f)));
-	DrawStationBug(C, FrameNo);
 }
 
 // ② 太鼓：裸上身の男二人。祭＝身體と汗；「刺青が祭の中にある」の伏線。
@@ -762,19 +867,19 @@ void ShotTaiko(FCan& C, float U, float Seconds, int32 FrameNo)
 		C.Glow(Bx, By, 9.0f, Pal::LampGlow, 0.40f);
 		C.Ellipse(Bx, By, 3.0f, 3.4f, Pal::LampCore, 0.85f);
 	}
-	DrawCrowd(C, 62.0f, 29, Ph, Rgb(58, 48, 76));
+	DrawCrowd(C, 56.0f, 29, Ph, Rgb(58, 48, 76)); // テロップ分だけ上げる
 
 	// 打ち手二名（太鼓より先に＝後ろに立つ）
 	for (int32 S = -1; S <= 1; S += 2)
 	{
 		const float Mx = 64.0f + S * 33.0f;
-		DrawFestivalMan(C, Mx, 36.0f, 6.5f, 13.0f, 96.0f, Pal::SkinDark, true);
-		C.Ellipse(Mx + S * 7.0f, 52.0f, 5.0f, 7.0f, Pal::InkField, 0.85f); // 肩の彫物＝伏線
-		C.Ellipse(Mx + S * 7.0f, 50.0f, 2.2f, 3.0f, Pal::InkMid, 0.8f);
+		DrawFestivalMan(C, Mx, 32.0f, 6.5f, 13.0f, 96.0f, Pal::SkinDark, true);
+		C.Ellipse(Mx + S * 7.0f, 48.0f, 5.0f, 7.0f, Pal::InkField, 0.85f); // 肩の彫物＝伏線
+		C.Ellipse(Mx + S * 7.0f, 46.0f, 2.2f, 3.0f, Pal::InkMid, 0.8f);
 	}
 
 	// 太鼓（正面）：胴＋革面＋鋲
-	const float Dx = 64.0f, Dy = 66.0f, Rx = 25.0f + Hit * 1.2f, Ry = 21.0f + Hit * 1.0f;
+	const float Dx = 64.0f, Dy = 61.0f, Rx = 25.0f + Hit * 1.2f, Ry = 21.0f + Hit * 1.0f;
 	C.Ellipse(Dx, Dy, Rx + 3.0f, Ry + 3.0f, Pal::GoldLo);
 	C.Ellipse(Dx, Dy, Rx, Ry, Mix(Rgb(196, 158, 118), Pal::GoldHi, Hit * 0.5f));
 	C.Ellipse(Dx, Dy, Rx * 0.86f, Ry * 0.86f, Rgb(214, 178, 134));
@@ -791,15 +896,13 @@ void ShotTaiko(FCan& C, float U, float Seconds, int32 FrameNo)
 	{
 		const float Mx = 64.0f + S * 33.0f;
 		const float Swing = (S < 0) ? Beat : -Beat;
-		const float Hy = 48.0f - Swing * 12.0f;
+		const float Hy = 44.0f - Swing * 12.0f;
 		const float HxIn = Mx - S * 15.0f;
-		C.Line(FVector2f(Mx - S * 8.0f, 52.0f), FVector2f(HxIn, Hy), 5.0f, Pal::SkinMid);
-		C.Line(FVector2f(Mx - S * 8.0f, 52.0f), FVector2f(HxIn, Hy), 1.5f, Pal::SkinRim, 0.55f);
+		C.Line(FVector2f(Mx - S * 8.0f, 48.0f), FVector2f(HxIn, Hy), 5.0f, Pal::SkinMid);
+		C.Line(FVector2f(Mx - S * 8.0f, 48.0f), FVector2f(HxIn, Hy), 1.5f, Pal::SkinRim, 0.55f);
 		C.Line(FVector2f(HxIn, Hy), FVector2f(HxIn - S * 9.0f, Hy + 11.0f), 2.0f, Pal::Cloth, 0.95f);
 	}
 
-	DrawCaption(C, 80.0f, 5, 202, Seg01(U, 0.05f, 0.35f));
-	DrawStationBug(C, FrameNo);
 }
 
 // ③ 神輿渡御：横搖（pan）。担ぎ手の腕に彫物＝「刺青と祭は同じ場所にある」。
@@ -830,7 +933,9 @@ void ShotMikoshi(FCan& C, float U, float Seconds, int32 FrameNo)
 	for (int32 i = -5; i <= 5; ++i)
 	{
 		const float Hx = Mx + i * 11.0f + FMath::Sin(Ph * 2.0f + i) * 0.8f;
-		const float Hy = My + 30.0f + FMath::Sin(Ph * 2.2f + i * 0.7f) * 1.2f;
+		// +30 だとテロップ（y74~）に頭と肩が丸ごと埋まり、上がった腕だけが残って
+		// **柵に読める**（08-29 contact sheet 実証）。頭が帯の上に出る高さへ。
+		const float Hy = My + 19.0f + FMath::Sin(Ph * 2.2f + i * 0.7f) * 1.2f;
 		const bool bInk = (i == -3 || i == 1 || i == 4);
 		DrawFestivalMan(C, Hx, Hy, 4.6f, 9.5f, 96.0f, bInk ? Pal::InkField : Pal::SkinDark, false);
 		for (int32 S = -1; S <= 1; S += 2)
@@ -847,8 +952,26 @@ void ShotMikoshi(FCan& C, float U, float Seconds, int32 FrameNo)
 		}
 	}
 
-	DrawCaption(C, 80.0f, 7, 303, Seg01(U, 0.08f, 0.40f) * (1.0f - Seg01(U, 0.85f, 1.0f)));
-	DrawStationBug(C, FrameNo);
+	// 記者（前景・左端、最後に描いて手前に被せる）：**「これは報道である」を一枚で
+	// 言い切る唯一の絵**。この拍に置くのは、神輿が論証上いちばん弱い連接組織だから
+	// ——その役を担わせれば尺が無駄にならない。後頭部＋差し出したマイク、逆光の縁だけ。
+	{
+		const FColor Fg = Rgb(26, 24, 42); // 前景＝ほぼ黒（被写体より手前＝光が回らない）
+		const float Rx = 10.0f + FMath::Sin(Ph * 0.8f) * 0.7f; // 人の重心移動（手持ち揺れとは別物）
+		TArray<FVector2f> Body;
+		Body.Add(FVector2f(Rx - 20, 96)); Body.Add(FVector2f(Rx - 16, 58));
+		Body.Add(FVector2f(Rx - 8, 52));  Body.Add(FVector2f(Rx + 8, 52));
+		Body.Add(FVector2f(Rx + 16, 58)); Body.Add(FVector2f(Rx + 19, 96));
+		C.Poly(Body, Fg);
+		C.Ellipse(Rx, 42, 9.0f, 10.0f, Fg);
+		C.Line(FVector2f(Rx + 16, 58), FVector2f(Rx + 19, 96), 1.0f, Pal::SkinRim, 0.5f);
+		C.Line(FVector2f(Rx + 6, 34), FVector2f(Rx + 9, 50), 1.0f, Pal::SkinRim, 0.45f);
+		C.Line(FVector2f(Rx + 12, 62), FVector2f(Rx + 26, 48), 5.0f, Fg);   // 腕
+		C.Line(FVector2f(Rx + 26, 48), FVector2f(Rx + 33, 41), 2.0f, Fg);   // マイクの柄
+		C.Ellipse(Rx + 35, 39, 3.4f, 3.4f, Fg);                             // ウインドスクリーン
+		C.Line(FVector2f(Rx + 33, 37), FVector2f(Rx + 37, 36), 1.0f, Pal::SkinRim, 0.45f);
+	}
+
 }
 
 // 主役の背景（ぼけた祭＋背後の火）：Reveal / Turn 共用
@@ -899,14 +1022,13 @@ void ShotReveal(FCan& C, float U, float Seconds, int32 FrameNo)
 	PaintBackpiece(C, Mask.GetData(), T, T.ShoulderY + 4.0f, CoatY - 2.0f);
 	DrawHappi(C, Mask.GetData(), T, CoatY, Ph);
 
-	DrawCaption(C, 82.0f, 8, 404, Seg01(U, 0.30f, 0.60f));
-	DrawStationBug(C, FrameNo);
 }
 
 // ⑤ 振り返り：ここが交付点。被写体は**男そのもの**なので寄る（顔を大きく）。
 //    低解析度で「帥」を運ぶのは顔の造作ではなく、輪郭光・顎を上げた側面・
 //    サングラスの反射・咥え煙草・風になびく半纏。
-//    user 指定「甚至有點誇張、典型的帥哥刻板印象」⇒ キラッ（星の煌めき）を入れる。
+//    user 指定「甚至有點誇張、典型的帥哥刻板印象」⇒ 誇張は捨てないが、記号は
+//    漫画の「キラッ」ではなく**レンズフレア**で出す（08-29 新聞画面へ改判）。
 void ShotTurn(FCan& C, float U, float Seconds, int32 FrameNo)
 {
 	const float Ph = Seconds * 3.0f; // 物理速度＝実秒（鏡長を変えても揺れ／拍は変わらない）
@@ -971,22 +1093,41 @@ void ShotTurn(FCan& C, float U, float Seconds, int32 FrameNo)
 			}
 		}
 
-		// キラッ：user 指定の「誇張された帥哥刻板印象」の記号。約 0.15 秒だけレンズ端で光る。
-		const float Sp = Seg01(U, 0.58f, 0.66f) * (1.0f - Seg01(U, 0.68f, 0.80f));
-		if (Sp > 0.01f)
+		// **レンズフレア**（2026-08-29）：キラッ＝四芒星は漫画／偶像の語法で、報道映像とは
+		// 衝突する。user 指定の「誇張された帥哥刻板印象」は捨てない——背後の燈籠の光が
+		// サングラスからレンズに入った、という**カメラに実際に起こること**に置き換える。
+		// 横に伸びる筋＋核＋画面中心へ向かうゴースト＋一瞬のベーリンググレア。
+		const float Fl = Seg01(U, 0.56f, 0.64f) * (1.0f - Seg01(U, 0.66f, 0.80f));
+		if (Fl > 0.01f)
 		{
 			const FVector2f G(BrowX - FaceDir * 2.0f, Eyy - HeadRy * 0.10f);
-			const float L = 9.0f * Sp;
-			C.Line(G - FVector2f(L, 0), G + FVector2f(L, 0), 1.0f, Pal::White, 1.0f);
-			C.Line(G - FVector2f(0, L), G + FVector2f(0, L), 1.0f, Pal::White, 1.0f);
-			C.Line(G - FVector2f(L, L) * 0.42f, G + FVector2f(L, L) * 0.42f, 1.0f, Pal::White, 0.85f);
-			C.Line(G - FVector2f(-L, L) * 0.42f, G + FVector2f(-L, L) * 0.42f, 1.0f, Pal::White, 0.85f);
-			C.Ellipse(G.X, G.Y, 1.8f, 1.8f, Pal::White, 1.0f);
+			const float Len = 22.0f * Fl;
+			const int32 Gx = FMath::FloorToInt(G.X), Gy = FMath::FloorToInt(G.Y);
+			for (int32 dx = -FMath::CeilToInt(Len); dx <= FMath::CeilToInt(Len); ++dx)
+			{
+				// 外側の K（振り返りの進捗）を隠さないよう別名（unity build 下の C4456）
+				const float Fall = 1.0f - FMath::Abs(dx) / FMath::Max(Len, 0.01f);
+				C.Blend(Gx + dx, Gy, Pal::White, Fall * Fall * Fl);
+				if (Fall > 0.55f) // 芯は三段の厚み＝アナモルフィックな横筋の読み
+				{
+					C.Blend(Gx + dx, Gy - 1, Pal::White, Fall * 0.5f * Fl);
+					C.Blend(Gx + dx, Gy + 1, Pal::White, Fall * 0.5f * Fl);
+				}
+			}
+			C.Ellipse(G.X, G.Y, 2.2f * Fl, 1.6f * Fl, Pal::White, 1.0f);
+			// 画面中心へ向かうゴースト（絞りの反射）＝レンズの中で起きている証拠
+			const FVector2f Ctr(64.0f, 48.0f);
+			for (int32 g = 1; g <= 2; ++g)
+			{
+				const FVector2f P = G + (Ctr - G) * (0.38f * g);
+				C.Ellipse(P.X, P.Y, 3.0f - g * 0.6f, 3.0f - g * 0.6f,
+					(g == 1) ? Pal::LampCore : Pal::LampGlow, 0.30f * Fl);
+			}
+			// ベーリンググレア：強い光が入ると画面全体のコントラストが一瞬落ちる
+			for (int32 i = 0; i < FilmPx; ++i) { C.P[i] = Mix(C.P[i], Pal::LampCore, 0.09f * Fl); }
 		}
 	}
 
-	DrawCaption(C, 82.0f, 6, 505, Seg01(U, 0.05f, 0.30f) * (1.0f - Seg01(U, 0.88f, 1.0f)));
-	DrawStationBug(C, FrameNo);
 
 	// 最後の一瞬：カメラが追いつかず僅かに露出オーバー（＝決めの一枚）
 	const float Over = Seg01(U, 0.90f, 1.0f) * 0.07f;
@@ -996,9 +1137,37 @@ void ShotTurn(FCan& C, float U, float Seconds, int32 FrameNo)
 	}
 }
 
+// 放送 chrome を一括で乗せる。**手持ち揺れの後**に呼ぶこと（カメラは揺れるが
+// 字幕は揺れない＝それが「放送されている映像」の読み）。
+void DrawBroadcastChrome(FCan& C, int32 Shot, float U, int32 FrameNo)
+{
+	// テロップの出入り（ワイプ）。主役の二拍だけ早く引く＝彫物を字幕で潰さない
+	//（実際の報道も被写体が来たら引く）。
+	struct FChrome { int32 Glyphs; int32 Seed; float In0, In1, Out0, Out1; };
+	static const FChrome Tab[Shot_Num] = {
+		{ 6, 101, 0.06f, 0.18f, 0.78f, 0.92f }, // 夜祭遠景
+		{ 5, 202, 0.05f, 0.17f, 0.80f, 0.94f }, // 太鼓
+		{ 7, 303, 0.06f, 0.18f, 0.78f, 0.92f }, // 神輿渡御
+		// 主役の二拍は**さらに早く引く**：彫物がフレーム下半分に来るので、
+		// 帯が生きているうちに payload を潰してしまう（08-29 実測して詰めた）。
+		{ 8, 404, 0.04f, 0.15f, 0.26f, 0.36f }, // 主役登場
+		{ 6, 505, 0.03f, 0.13f, 0.17f, 0.27f }, // 振り返り
+	};
+	const FChrome& Ch = Tab[FMath::Clamp(Shot, 0, Shot_Num - 1)];
+	const float Wipe = Seg01(U, Ch.In0, Ch.In1) * (1.0f - Seg01(U, Ch.Out0, Ch.Out1));
+	DrawLowerThird(C, Ch.Glyphs, Ch.Seed, Wipe);
+	DrawLiveBadge(C, FrameNo);
+	DrawStationBug(C, FrameNo, FMath::Fmod(FrameNo / RedrawHz, 60.0f));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
-// 後段：アナログの汚れ。これを乗せて初めて「本物の古いテレビ」になる。
-// （画は 128×96 の側で汚す；走査線と暗角は 512 の側＝二つの解像度が要る）
+// 後段：受像機と電波の汚れ。
+//
+// **2026-08-29 の訂正：ここは全部「膠片」の假影だった**——粒子・剪接白閃・横ずれ。
+// 剪接白閃はフィルムプリントの繋ぎ目の露出であって、**新聞映像には原理的に存在しない**。
+// 電視上放的是電影，然後說它是新聞——媒介を間違えていた。
+// 映像（video）の汚れに入れ替える：ドロップアウト／インターレースのちらつき／
+// 受信ノイズ（暗部に沈む、色度寄り）／カット直後のスイッチャの一瞬の裂け。
 // ═══════════════════════════════════════════════════════════════════════════
 void PostAnalog(FCan& C, int32 FrameNo, float U)
 {
@@ -1007,7 +1176,10 @@ void PostAnalog(FCan& C, int32 FrameNo, float U)
 	FMemory::Memcpy(Src.GetData(), C.P, FilmPx * sizeof(FColor));
 
 	// ハムバー（電源同期のずれ）：ゆっくり上へ流れる明るい帯
-	const float BarY = FMath::Fmod(FrameNo * 1.7f, float(FilmH + 40)) - 20.0f;
+	const float BarY = FMath::Fmod(FrameNo * 0.85f, float(FilmH + 40)) - 20.0f;
+	// インターレースのちらつき（interline twitter）：奇偶の行が交互に僅かに沈む。
+	// 60i の「映像らしさ」で 12Hz では再現できない部分を、この一点で代替する。
+	const int32 TwitterPhase = FrameNo & 1;
 
 	for (int32 Y = 0; Y < FilmH; ++Y)
 	{
@@ -1027,29 +1199,50 @@ void PostAnalog(FCan& C, int32 FrameNo, float U)
 			const float Bd = FMath::Abs(Y - BarY);
 			if (Bd < 14.0f)
 			{
-				const float K = (1.0f - Bd / 14.0f) * 0.10f;
+				const float K = (1.0f - Bd / 14.0f) * 0.09f;
 				Rr = FMath::RoundToInt(Rr * (1.0f + K)); Gg = FMath::RoundToInt(Gg * (1.0f + K));
 				Bb = FMath::RoundToInt(Bb * (1.0f + K));
 			}
-			const int32 N = int32(Rand01(X, Y, FrameNo) * 15.0f) - 7; // フィルム粒子
-			C.P[Y * FilmW + X] = Rgb(Rr + N, Gg + N, Bb + N);
+			if ((Y & 1) == TwitterPhase) { Rr -= 4; Gg -= 4; Bb -= 4; }
+			// 受信ノイズ：フィルム粒子（全域に均一）ではなく**暗部に沈む・色度寄り**。
+			// 粒子を弱め、代わりに青にだけ強く乗せる＝ビデオのノイズの見え方。
+			const float Lum = (Rr + Gg + Bb) / 765.0f;
+			const float NGain = 1.0f - 0.55f * Sat(Lum);
+			const int32 N = FMath::RoundToInt((Rand01(X, Y, FrameNo) * 9.0f - 4.5f) * NGain);
+			const int32 NB = FMath::RoundToInt((Rand01(X, Y, FrameNo + 991) * 7.0f - 3.5f) * NGain);
+			C.P[Y * FilmW + X] = Rgb(Rr + N, Gg + N, Bb + N + NB);
 		}
 	}
 
-	// カット直後の一瞬：スプライス（白飛び＋横ずれ）
-	const float Splice = 1.0f - Seg01(U, 0.0f, 0.055f);
-	if (Splice > 0.02f)
+	// ドロップアウト：短い横の白ダッシュが数本。テープ／電波の代表的な傷。
+	for (int32 i = 0; i < 3; ++i)
 	{
-		const int32 Shift = FMath::RoundToInt(Splice * 4.0f);
+		const uint32 H = Hash3(FrameNo, i, 77);
+		if ((H & 7u) != 0) { continue; } // 常時ではなく時々（毎フレーム出ると汚いだけ）
+		const int32 Dy = int32((H >> 3) % uint32(FilmH));
+		const int32 Dx = int32((H >> 11) % uint32(FilmW - 12));
+		const int32 Len = 4 + int32((H >> 19) % 9u);
+		for (int32 k = 0; k < Len; ++k)
+		{
+			const FColor& O = C.P[Dy * FilmW + Dx + k];
+			C.P[Dy * FilmW + Dx + k] = Mix(O, Pal::White, 0.75f);
+		}
+	}
+
+	// カット直後：フィルムの繋ぎ目（白飛び）ではなく、**スイッチャの一瞬の同期の乱れ**。
+	// 数行だけ横にずれて、次のフレームには消える。白閃は出さない。
+	const float Glitch = 1.0f - Seg01(U, 0.0f, 0.030f);
+	if (Glitch > 0.02f)
+	{
+		const int32 Shift = FMath::RoundToInt(Glitch * 5.0f);
 		for (int32 Y = 0; Y < FilmH; ++Y)
 		{
-			if (((Y + FrameNo) % 7) != 0) { continue; }
+			if (((Y * 5 + FrameNo) % 9) > 2) { continue; }
 			for (int32 X = FilmW - 1; X >= 0; --X)
 			{
 				C.P[Y * FilmW + X] = Src[Y * FilmW + FMath::Clamp(X - Shift, 0, FilmW - 1)];
 			}
 		}
-		for (int32 i = 0; i < FilmPx; ++i) { C.P[i] = Mix(C.P[i], Pal::White, Splice * 0.35f); }
 	}
 }
 
@@ -1125,6 +1318,10 @@ void RenderFrame(int32 Shot, float U, float Seconds, int32 FrameNo, FColor* OutP
 	case Shot_Turn:    Detail::ShotTurn(C, U, Seconds, FrameNo); break;
 	default:           Detail::ShotYomatsuri(C, U, Seconds, FrameNo); break;
 	}
+	// 順序が意味を持つ三段：撮られた画 → **カメラの揺れ** → **放送が乗せる chrome**
+	// → **電波／受像機の汚れ**。chrome が揺れたら貼り紙、汚れが chrome を避けたら合成。
+	Detail::ApplyHandheld(C, Seconds, Shot);
+	Detail::DrawBroadcastChrome(C, Shot, U, FrameNo);
 	Detail::PostAnalog(C, FrameNo, U);
 }
 
