@@ -424,12 +424,12 @@ void DrawLiveBadge(FCan& C, int32 FrameNo)
 //   ③ 假字塊（等幅・横劃が全格を貫く）は**条码に読める**。真の点陣片假名に置き換え
 //      （Tools/AssetPrep/telop_glyphs.py が焼く）。片假名を選ぶ理由＝直線構成だから
 //      8×9 で成立する唯一の日本語文字（平假名の曲線も漢字の劃密度もこの尺では潰れる）。
-void DrawLowerThird(FCan& C, int32 Shot, float Wipe)
+void DrawLowerThird(FCan& C, int32 TextIdx, float Wipe)
 {
 	using namespace NiceInkTvTelop;
 	if (Wipe <= 0.01f) { return; }
-	Shot = FMath::Clamp(Shot, 0, 4);
-	const int32 N = CaptionLen[Shot];
+	TextIdx = FMath::Clamp(TextIdx, 0, 4);
+	const int32 N = TextLen[TextIdx];
 	const float X0 = 6.0f, HeadW = 12.0f, Adv = 9.0f;
 	const float FullW = HeadW + 2.0f + N * Adv + 2.0f;
 	const float W = FullW * Sat(Wipe);
@@ -444,7 +444,7 @@ void DrawLowerThird(FCan& C, int32 Shot, float Wipe)
 	}
 	for (int32 g = 0; g < N; ++g)
 	{
-		DrawTelopGlyph(C, Caption[Shot][g], X0 + HeadW + 2.0f + g * Adv, Y0 + 2.0f,
+		DrawTelopGlyph(C, Text[TextIdx][g], X0 + HeadW + 2.0f + g * Adv, Y0 + 2.0f,
 			Pal::CapInk, X0 + W);
 	}
 }
@@ -1138,21 +1138,34 @@ void ShotTurn(FCan& C, float U, float Seconds, int32 FrameNo)
 // 字幕は揺れない＝それが「放送されている映像」の読み）。
 void DrawBroadcastChrome(FCan& C, int32 Shot, float U, int32 FrameNo)
 {
-	// テロップの出入り（ワイプ）。主役の二拍だけ早く引く＝彫物を字幕で潰さない
-	//（実際の報道も被写体が来たら引く）。
-	struct FChrome { float In0, In1, Out0, Out1; };
-	static const FChrome Tab[Shot_Num] = {
-		{ 0.06f, 0.18f, 0.78f, 0.92f }, // 夜祭遠景
-		{ 0.05f, 0.17f, 0.80f, 0.94f }, // 太鼓
-		{ 0.06f, 0.18f, 0.78f, 0.92f }, // 神輿渡御
-		// 主役の二拍は**さらに早く引く**：彫物がフレーム下半分に来るので、
-		// 帯が生きているうちに payload を潰してしまう（08-29 実測して詰めた）。
-		{ 0.04f, 0.15f, 0.26f, 0.36f }, // 主役登場
-		{ 0.03f, 0.13f, 0.17f, 0.27f }, // 振り返り
+	// **テロップは「この報道」に属する。鏡頭には属さない。**（2026-08-29 三修）
+	// 二修までは (Shot, U) で出し入れしていた——この関数が手にしていたのが鏡頭だけ
+	// だったから。だが分鏡は 1.5~2.5 秒しかないので、「一拍一本」は構造的に**二秒に
+	// 一度点滅する**ことを保証してしまう（10.4 秒で五回。user 判決「一直出現又消失」）。
+	// 実物のテロップは 3~5 秒居座り、十秒の項目に一本か二本しか出ない。
+	// ⇒ 比率表から**段全体の進捗**を復元し、その時間軸に二本だけ置く。両方とも
+	//    カットをまたぐ＝「鏡頭のものではない」ことが画面上で見える。
+	static const float Lo[Shot_Num] = { 0.00f, 0.14f, 0.34f, 0.55f, 0.79f };
+	static const float Hi[Shot_Num] = { 0.14f, 0.34f, 0.55f, 0.79f, 1.00f };
+	const int32 S = FMath::Clamp(Shot, 0, Shot_Num - 1);
+	const float A = Lo[S] + Sat(U) * (Hi[S] - Lo[S]); // IntroNotice 全体での位置 0..1
+
+	// **彫物には一度も字幕を当てない**（user 判決「為什麼新聞標題會出現刺青？感覺有點
+	// 生硬」——正しい）。この報道が存在する理由は祭を報じることで、彫物はたまたま
+	// 画面にいるだけ——**たまたまであることが羨ましさの根拠**（誰も売り込んでいないのに
+	// あの男たちには在る）。指させば広告になるし、力士の代わりに結論を言ってしまう。
+	// ⇒ 主役の二拍（A>0.55、約 4.9 秒）は chrome を一切載せない。
+	struct FTelop { int32 Text; float In0, In1, Out0, Out1; };
+	static const FTelop Telops[2] = {
+		{ NiceInkTvTelop::Txt_Natsumatsuri, 0.02f, 0.05f, 0.29f, 0.32f }, // 0.2~3.3s（夜祭→太鼓）
+		{ NiceInkTvTelop::Txt_Mikoshi,      0.35f, 0.38f, 0.50f, 0.53f }, // 3.6~5.5s（神輿）
 	};
-	const FChrome& Ch = Tab[FMath::Clamp(Shot, 0, Shot_Num - 1)];
-	const float Wipe = Seg01(U, Ch.In0, Ch.In1) * (1.0f - Seg01(U, Ch.Out0, Ch.Out1));
-	DrawLowerThird(C, Shot, Wipe); // 本文は NiceInkTvTelopData.h の分鏡別テーブル
+	for (const FTelop& T : Telops)
+	{
+		const float Wipe = Seg01(A, T.In0, T.In1) * (1.0f - Seg01(A, T.Out0, T.Out1));
+		if (Wipe > 0.01f) { DrawLowerThird(C, T.Text, Wipe); }
+	}
+
 	DrawLiveBadge(C, FrameNo);
 	DrawStationBug(C, FrameNo, FMath::Fmod(FrameNo / RedrawHz, 60.0f));
 }

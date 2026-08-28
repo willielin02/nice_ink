@@ -223,6 +223,12 @@ canvas 做不到毛玻璃半透明）**。
   python(encoding='utf-8')。**要改一個檔的一行，先看 repo 裡別人怎麼改同一個檔。**
   同族：python 讀 stdin 走系統 codepage（cp950）會把 UTF-8 中文解成含反斜線的亂碼
   ⇒ heredoc 餵 python 一律 `python -X utf8 -`。
+- **Bash heredoc 會把「兩個反斜線」收縮成「一個反斜線」**（2026-08-29）：在 heredoc 裡
+  餵 python 時，寫「跳脫過的反斜線＋t」會變成一個**真正的 tab 字元**，而要比對的原始碼
+  裡是「反斜線、t」兩個字元 ⇒ 比對永遠失敗（連兩次 AssertionError 才查出來，而且**這條
+  記錄本身也被同一個坑吃掉兩次**）。要比對含反斜線的原始碼，一律用 raw string（`r'...'`）
+  或 `chr(92)` 組；再不行就改成**依行號替換**（`split('
+')` 後切片），完全繞開字串比對。
 - **headless `-ExecutePythonScript` 用 PowerShell 管線接 Select-String 會在啟動後即死**（log 停在
   Total Editor Startup Time、exit 255）→ `Start-Process -Wait` 不接管線、事後 grep log。
 - **Canvas SE_BLEND_Translucent 不寫 dest alpha** → 墨水章用 SE_BLEND_AlphaComposite＋預乘紋理。

@@ -192,14 +192,24 @@ GLYPHS = {
 ORDER = list(GLYPHS.keys())
 IDX = {k: i for i, k in enumerate(ORDER)}
 
-# ── テロップ本文（分鏡ごと）──────────────────────────────────────────
-# 見出しブロック＝「生」。本文＝片假名（古い文字発生器の読み＋この尺で読める唯一の選択）。
+# ── テロップ本文 ────────────────────────────────────────────────────
+# **分鏡ごとではない**（2026-08-29 三修）：テロップは「この報道」に属するもので、
+# 一つ一つの鏡頭に属するものではない。ここは**使える文言の一覧**であって、
+# どれをいつ出すかは C++ 側（DrawBroadcastChrome）が段全体の時間軸で決める。
+#
+# 見出しブロック＝「生」。本文＝片假名（この尺で読める唯一の日本語文字）。
+#
+# **「ホリモノ」は現行の編成では出さない**（user 判決「為什麼新聞標題會出現刺青？
+# 感覺有點生硬」——正しい）：この報道が存在する理由は祭を報じることで、彫物は
+# たまたま画面にいるだけ。**たまたま画面にいることが、羨ましさの根拠そのもの**
+# ——誰も売り込んでいないのに、あの男たちには在る。字幕が指させば広告になるし、
+# 力士の代わりに結論を言ってしまう。文言自体は残す（いつか要るかもしれない）。
 CAPTIONS = [
-    ("yomatsuri", ["na", "tsu", "ma", "tsu", "ri"]),        # ナツマツリ
-    ("taiko",     ["ta", "i", "ko"]),                       # タイコ
-    ("mikoshi",   ["mi", "ko", "shi"]),                     # ミコシ
-    ("reveal",    ["ho", "ri", "mo", "no"]),                # ホリモノ
-    ("turn",      ["ma", "tsu", "ri", "no", "o", "to", "ko"]),  # マツリノオトコ
+    ("natsumatsuri", ["na", "tsu", "ma", "tsu", "ri"]),              # ナツマツリ（夏祭り）
+    ("taiko",        ["ta", "i", "ko"]),                             # タイコ（太鼓）
+    ("mikoshi",      ["mi", "ko", "shi"]),                           # ミコシ（神輿）
+    ("horimono",     ["ho", "ri", "mo", "no"]),                      # ホリモノ ※未使用
+    ("matsurinootoko", ["ma", "tsu", "ri", "no", "o", "to", "ko"]),  # マツリノオトコ ※未使用
 ]
 
 ROOT = r"C:\games\Unreal Engine\nice_ink"
@@ -243,13 +253,16 @@ def emit_header():
         lines.append("\t\t{ %s }, // %s" % (", ".join("0x%02X" % v for v in b), k))
     lines.append("\t};")
     lines.append("")
-    lines.append("\t// 分鏡ごとの本文（字の索引列）。見出しブロックは「生」固定。")
+    lines.append("\t// **使える文言の一覧**（分鏡別ではない）。どれをいつ出すかは C++ 側が決める。")
     lines.append("\tinline constexpr int32 SeiIndex = %d;" % IDX["sei"])
-    lines.append("\tinline constexpr int32 MaxCaption = %d;"
+    lines.append("\tenum { %s };" % ", ".join(
+        "Txt_%s = %d" % (n[0].upper() + n[1:], i)
+        for i, (n, _) in enumerate(CAPTIONS)))
+    lines.append("\tinline constexpr int32 MaxText = %d;"
                  % max(len(c[1]) for c in CAPTIONS))
-    lines.append("\tinline constexpr int32 CaptionLen[%d] = { %s };"
+    lines.append("\tinline constexpr int32 TextLen[%d] = { %s };"
                  % (len(CAPTIONS), ", ".join(str(len(c[1])) for c in CAPTIONS)))
-    lines.append("\tinline constexpr int32 Caption[%d][MaxCaption] = {" % len(CAPTIONS))
+    lines.append("\tinline constexpr int32 Text[%d][MaxText] = {" % len(CAPTIONS))
     for name, seq in CAPTIONS:
         pad = list(seq) + ["sei"] * (max(len(c[1]) for c in CAPTIONS) - len(seq))
         lines.append("\t\t{ %s }, // %s：%s" % (", ".join(str(IDX[g]) for g in pad),

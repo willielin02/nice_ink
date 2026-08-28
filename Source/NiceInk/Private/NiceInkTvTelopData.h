@@ -31,15 +31,16 @@ namespace NiceInkTvTelop
 		{ 0x00, 0x08, 0x3E, 0x28, 0x7E, 0x08, 0x08, 0x7E, 0x00 }, // sei
 	};
 
-	// 分鏡ごとの本文（字の索引列）。見出しブロックは「生」固定。
+	// **使える文言の一覧**（分鏡別ではない）。どれをいつ出すかは C++ 側が決める。
 	inline constexpr int32 SeiIndex = 14;
-	inline constexpr int32 MaxCaption = 7;
-	inline constexpr int32 CaptionLen[5] = { 5, 3, 3, 4, 7 };
-	inline constexpr int32 Caption[5][MaxCaption] = {
-		{ 0, 1, 2, 1, 3, 14, 14 }, // yomatsuri：na tsu ma tsu ri
+	enum { Txt_Natsumatsuri = 0, Txt_Taiko = 1, Txt_Mikoshi = 2, Txt_Horimono = 3, Txt_Matsurinootoko = 4 };
+	inline constexpr int32 MaxText = 7;
+	inline constexpr int32 TextLen[5] = { 5, 3, 3, 4, 7 };
+	inline constexpr int32 Text[5][MaxText] = {
+		{ 0, 1, 2, 1, 3, 14, 14 }, // natsumatsuri：na tsu ma tsu ri
 		{ 4, 5, 6, 14, 14, 14, 14 }, // taiko：ta i ko
 		{ 7, 6, 8, 14, 14, 14, 14 }, // mikoshi：mi ko shi
-		{ 9, 3, 10, 11, 14, 14, 14 }, // reveal：ho ri mo no
-		{ 2, 1, 3, 11, 12, 13, 6 }, // turn：ma tsu ri no o to ko
+		{ 9, 3, 10, 11, 14, 14, 14 }, // horimono：ho ri mo no
+		{ 2, 1, 3, 11, 12, 13, 6 }, // matsurinootoko：ma tsu ri no o to ko
 	};
 }
