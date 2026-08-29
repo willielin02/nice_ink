@@ -148,7 +148,10 @@ public:
 	// 分鏡の割りは NiceInkTvFilm::ResolveShot の比率表が持つので、**長さはこの一つの
 	// 旋鈕だけ**で決まる（比率は自動で等比伸縮、動画の物理速度は別経路で保たれる）。
 	// 開場全長への影響＝BeginOpeningIntro の Total が自動で吸収（相位計時器も伸びる）。
-	float IntroNoticeSeconds = 10.4f;  // 電視特寫：夜祭1.5/太鼓2.1/神輿2.2/登場2.5/振り返り2.2
+	// 08-29 user 要求 +50%（10.4→15.6）。分鏡の割りは比率表なので自動で等比に伸び、
+	// 動画の物理速度（太鼓の拍・提燈の揺れ・煙）は Seconds 側が持つので変わらない
+	// ——**尺はこの一つの旋鈕だけ**、というのはこのために作った構造。
+	float IntroNoticeSeconds = 15.6f;  // 夜祭2.2/太鼓3.1/神輿3.3/登場3.7/振り返り3.3
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
 	float IntroTvOffSeconds = 1.5f;    // 白線收掉

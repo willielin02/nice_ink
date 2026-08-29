@@ -11,6 +11,7 @@
 #include "Materials/MaterialInterface.h"
 #include "HAL/FileManager.h"
 #include "Misc/FileHelper.h"
+#include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkTvBroadcast.h"
 #include "NiceInkTypes.h"
@@ -350,6 +351,11 @@ void ANiceInkTvSet::DumpFilmFrames(const FString& OutDir, int32 UpScale, int32 P
 	static const TCHAR* Name[Shot_Num] = { TEXT("1_yomatsuri"), TEXT("2_taiko"),
 		TEXT("3_mikoshi"), TEXT("4_reveal"), TEXT("5_turn") };
 
+	if (NoticeSeconds <= 0.0f) // 尺は GameMode が持つ。ここで写しを持つと必ず古くなる
+	{
+		const ANiceInkGameMode* GM = GetDefault<ANiceInkGameMode>();
+		NoticeSeconds = GM ? GM->IntroNoticeSeconds : 15.6f;
+	}
 	UpScale = FMath::Clamp(UpScale, 1, 10);
 	PerShot = FMath::Clamp(PerShot, 2, 32);
 	IFileManager::Get().MakeDirectory(*OutDir, true);

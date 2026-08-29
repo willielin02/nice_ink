@@ -65,7 +65,7 @@ class Sheet:
             else:
                 log("FAIL: no sheet written")
             # 逐格傾印（細看用）：每分鏡 9 張、6× 最近鄰放大、秒數＝真實鏡長
-            unreal.NiceInkTvSet.dump_film_frames(FRAME_DIR, 6, 9, 10.4)
+            unreal.NiceInkTvSet.dump_film_frames(FRAME_DIR, 6, 9, -1.0)  # -1＝尺は GameMode から読む
             n = len([f for f in os.listdir(FRAME_DIR) if f.endswith(".png")]) if os.path.isdir(FRAME_DIR) else 0
             log("FRAMES %d -> %s" % (n, FRAME_DIR))
             log("DONE" if n > 0 else "FAIL: no frames written")

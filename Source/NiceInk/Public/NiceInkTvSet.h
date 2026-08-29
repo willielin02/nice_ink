@@ -37,8 +37,10 @@ public:
 	// 秒數用**真實鏡長**（IntroNotice 的比率表 × NoticeSeconds），所以傾印出來的
 	// 就是實際會播的那一格，不是另一套時間軸的近似。
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Tv")
+	// NoticeSeconds <= 0 ⇒ **GameMode の CDO から読む**（尺の唯一の出所）。
+	// ここに数字を書き写すと、尺を伸ばした瞬間に傾印だけ古い時間軸で焼かれる。
 	static void DumpFilmFrames(const FString& OutDir, int32 UpScale = 6, int32 PerShot = 9,
-		float NoticeSeconds = 10.4f);
+		float NoticeSeconds = -1.0f);
 
 protected:
 	virtual void BeginPlay() override;
