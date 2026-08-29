@@ -41,7 +41,8 @@ namespace InkEvidence
 
 // 針型（2026-07-23 雙針制；07-25 打稿制加 Stencil，user 定案）：真實刺青工作流——
 // Stencil 麥克筆打稿（龍膽紫稿線、手速自由、甦醒時全洗＝從不進巡禮）→
-// Liner 液線針（3.9mm 實線，勾輪廓；壓在稿線上＝機器沿稿自動走）＋
+// Liner 液線針（實線勾輪廓，寬度＝MarkerUvRadius 導出的 3.0mm；08-02 前為 3.9mm；
+//   壓在稿線上＝機器沿稿自動走）＋
 // Shader 打霧針（填色）。渲染半徑/點距/節拍逐針查表；SPEC 對齊由 user 統一處理。
 // Stencil 排第三＝Liner/Shader 線上值與舊存檔零遷移。
 UENUM(BlueprintType)

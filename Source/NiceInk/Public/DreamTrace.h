@@ -8,7 +8,8 @@
 // 十六式日式標的，經 Tools/AssetPrep/TraceMotifs 管線（剪影聯集＋內輪廓接駁＋
 // 三道可描性閘）烘焙為 DreamTraceMotifData.h；手雕模板全數退役（程式雕美學
 // =鐵則違規的實錘）。設計程序＝先定「不受干擾平均完成時間」（統一 60s）→
-// 依針速 v_max 導出線長；帶寬＝筆寬×2（user 定案；帶半寬=筆寬、從筆寬導出）。
+// 依針速 v_max 導出線長；帶寬＝筆寬×**2.4**（08-15 使用者定值；此註原寫 ×2＝2026-08-15
+// 前的舊值，08-29 全文對帳時去腐。帶全寬=筆寬×倍數、從筆寬導出）。
 USTRUCT(BlueprintType)
 struct NICEINK_API FDreamTraceParams
 {
