@@ -151,7 +151,9 @@ public:
 	// 08-29 user 要求 +50%（10.4→15.6）。分鏡の割りは比率表なので自動で等比に伸び、
 	// 動画の物理速度（太鼓の拍・提燈の揺れ・煙）は Seconds 側が持つので変わらない
 	// ——**尺はこの一つの旋鈕だけ**、というのはこのために作った構造。
-	float IntroNoticeSeconds = 15.6f;  // 夜祭2.2/太鼓3.1/神輿3.3/登場3.7/振り返り3.3
+	// 分鏡の秒は**この値の従属変数**（比率表 ResolveShot::Lo/Hi で決まる）。下の内訳は
+	// 15.6s のときの値＝**この行の数字を変えたら内訳も書き直すこと**（さもなくば腐る）。
+	float IntroNoticeSeconds = 15.6f;  // ＠15.6s：夜祭2.18/太鼓3.12/神輿3.28/登場3.74/振り返り3.28
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Intro")
 	float IntroTvOffSeconds = 1.5f;    // 白線收掉
