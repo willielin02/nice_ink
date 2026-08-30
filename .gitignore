@@ -131,3 +131,12 @@ SourceAssets/**/*.blend1
 SourceAssets/Television_Sirenko/Radiola_from_Matrix.usdz
 SourceAssets/Television_Sirenko/radiola_from_matrix (1).glb
 SourceAssets/Television_Sirenko/radiola-from-matrix.zip
+
+# 解剖島 UV0 搬家（2026-08-31 追記90~93）的本地備份與遷移金鑰。
+# 全部可從 git 歷史重建（原始貼圖／master.blend 都是 tracked）：
+#   舊 UV = git show <搬家前的 commit>:SourceAssets/sumo_character_master.blend
+#   舊貼圖 = 同上取 SourceAssets/*.png
+# 所以不進版控（master 備份 20MB、對應表 13MB）。
+*_pre_anatuv.png
+*_pre_anatuv.blend
+SourceAssets/anat_uv_correspondence.npz

@@ -253,7 +253,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UTextureRenderTarget2D> ScratchRT;
 
-	// 程序生成的圓形麥克筆頭（實心核心＋約 2px 抗鋸齒邊緣），無資產依賴。
+	// 程序生成的圓形麥克筆頭（實心核心＋線性覆蓋斜坡），無資產依賴。
+	// 羽化帶寬以「**畫布紋素**」為單位訂定（08-29：舊版寫的是筆頭貼圖的 2px，
+	// 被 17.3× 縮小後只剩 0.12 紋素＝等於沒有羽化）——常數住 .cpp 檔頭。
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> NibTexture;
 

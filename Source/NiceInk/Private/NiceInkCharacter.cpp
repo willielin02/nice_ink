@@ -2865,9 +2865,29 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		return;
 	}
 
-	// 接觸點＝筆軸與皮膚表面的交點：沿筆軸壓入 trace（筆尾側 2.5cm→筆尖前 3cm，
-	// 涵蓋解算殘差 1.5＋寫入誤差 0.5）→ 表面命中點→UV（容差 1.5mm＝打在褌上
-	// 不落墨的物理遮擋語義原樣保留）；PrevUV 鏈＝縫區兩島搶點的連續性偏好。
+	// 接觸點＝**視線**與皮膚表面的交點（08-30 改，原為筆軸）：沿視線壓入 trace
+	// （後 2.5cm→前 3cm，涵蓋解算殘差 1.5＋寫入誤差 0.5）→ 表面命中點→UV
+	// （容差 1.5mm＝打在褌上不落墨的物理遮擋語義原樣保留）；PrevUV 鏈＝縫區
+	// 兩島搶點的連續性偏好。
+	//
+	// **為什麼不是筆軸**：筆軸從手側斜入，凸起（乳頭/肚臍/皺摺）會先攔截它
+	// ⇒ 墨落在準星以外。離線量測（Tools/AssetPrep/ink_emit_probe.py，掃描線
+	// 過乳頭、零手速零掉幀）：筆軸 30° p90 偏移 1.63cm／max 1.64cm、50° max
+	// 2.21cm——而墨寬只有 0.28cm ⇒ 線在那裡斷一截、同時 1.6cm 外多出一塊墨
+	// （user 回報的「斷墨」與「墨跑到別的地方」是同一個事件的兩面）。改視線後
+	// max 0.0001cm、丟棄恆 0。
+	// 這正是 07-27 已經裁決過的同一件事（見下方 PenTipWorld 處註解「墨鏈真相
+	// ＝準星命中點」）：當時修了筆的視覺與 PenTipWorld，**沒修到 emitter**，
+	// 於是 emitter 又沿筆軸把 P 轉了回去。
+	//
+	// 恆等性靠的是「同一顆眼睛」：EyeW 必須是算出 P 的那一個原點
+	// （GetAimRayOrigin），端點的首命中才會依定義就是 P 本身。讀別的眼位＝
+	// 恆等性沒了，這條就只是換了一個會偏的方向。
+	// 記帳（平滑皮膚回歸）：針距離散 ±2%→±13%（透視的等步長≠等弧長）；標稱
+	// 0.15cm、可見門檻＝墨寬 0.28cm，離線實測落在 0.137~0.169＝遠低於門檻。
+	// **未修**：弦切過凸起造成的斷墨（跳幅 ≥2cm 時最大針距 1.68cm）——那是另
+	// 一隻蟲，本刀量過但修不掉（改視線後仍 1.29~1.38cm），需要沿皮膚步進。
+	const FVector TipTraceEyeW = GetAimRayOrigin();
 	FCollisionQueryParams TipQP(SCENE_QUERY_STAT(NiceInkTipTrace), /*bInTraceComplex=*/true);
 	for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
 	{
@@ -2879,8 +2899,14 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	auto TipToSurfaceUV = [&](const FVector& TipP, const FVector2D* Prev, FVector2D& OutUV) -> bool
 	{
 		FHitResult Hit;
-		const FVector A = TipP + PenShaftDirWorld * 2.5f;
-		const FVector B = TipP - PenShaftDirWorld * 3.0f;
+		// 視線方向（眼→筆尖）；退化（筆尖與眼重合）才退回筆軸
+		FVector Back = TipTraceEyeW - TipP;
+		if (!Back.Normalize())
+		{
+			Back = PenShaftDirWorld;
+		}
+		const FVector A = TipP + Back * 2.5f;
+		const FVector B = TipP - Back * 3.0f;
 		if (!GetWorld()->LineTraceSingleByChannel(Hit, A, B, ECC_Visibility, TipQP) ||
 			Hit.GetActor() != Target)
 		{

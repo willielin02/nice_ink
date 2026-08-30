@@ -19,6 +19,31 @@ namespace
 	constexpr int32 NibTextureSize = 64;
 	// stamp 間距（相對筆寬半徑）；0.45 在快速揮動時仍是連續實線
 	constexpr float StampSpacingFactor = 0.45f;
+
+	// --- 筆頭的兩個歸一化形狀常數（2026-08-29 羽化修）---
+	// 病史：舊版把「羽化 2px」寫在**筆頭貼圖域**，而這張 64px 的圖被畫成
+	// 3.70 個畫布紋素＝縮小 17.3 倍 ⇒ 羽化帶到了畫布上只剩 **0.116 紋素**＝
+	// alpha 實質二值（實測只有 4~6% 的墨紋素帶部分覆蓋，正確面積抗鋸齒是 ~36%）。
+	// 而材質的 MarkerSharpen（Valve alpha-tested magnification）**假設來源是距離場**：
+	// 餵它二值覆蓋 ⇒ 銳化不修抖動，只是把糊掉的鋸齒變成清晰的鋸齒
+	//（量測：銳化把 0.1→0.9 過渡從 11.1px 壓到 2.6px，但邊緣位置偏差 std 前後
+	// 完全相同 1.97px）。同型的坑十四版在霧層的排針條帶上修過了（烘在目的地
+	// 解析度＋積分下取樣），線層的筆頭當時沒被一起掃到。
+	//
+	// 現制＝羽化帶在**畫布上**恰好 1 個紋素（＝面積覆蓋的正確過渡寬度）。
+	// 羽化要有地方放 ⇒ tile 必須比墨大：α=0.5 等值面只佔紋理半徑的
+	// NibHalfAlphaFrac，剩下的半徑放羽化。兩顆常數的比 0.426/0.74 就是
+	// 「麥克筆尺寸（α=0.5 半徑 1.736 紋素）下羽化帶＝1.00 紋素」解出來的。
+	// 離線受控 A/B（同一條點鏈只換光柵器）：邊緣抖動 0.190 → 0.082 紋素，
+	// 而**逐點做精確面積覆蓋的理論值是 0.080**＝這一刀吃滿。
+	constexpr float NibHalfAlphaFrac = 0.74f;  // α=0.5 半徑 / 紋理半徑
+	constexpr float NibRampFrac = 0.426f;      // 羽化帶寬 / 紋理半徑
+	// 舊版的 α=0.5 半徑＝(CoreRadius 29 + Falloff 2 / 2) / 32 = 0.9375 個 tile 半徑。
+	// 新版放大 tile 時乘回這個係數 ⇒ **實際線寬逐位不變**（2.81mm）。
+	// 註：2.81mm 是墨真正的寬度；`TattooNibDiameterCm=0.30`（v_max 守恆式與 HUD
+	// 圈的錨）說的是 3.00mm，兩者差 6.3%——**已知偏差，本刀不動**（改它會動到
+	// 線寬與針速，屬 user 口味域）。
+	constexpr float NibLegacyHalfAlphaFrac = 0.9375f;
 }
 
 UInkCanvasComponent::UInkCanvasComponent()
@@ -224,15 +249,21 @@ UTexture2D* UInkCanvasComponent::GetOrCreateNibTexture()
 	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
 
 	const float Center = (NibTextureSize - 1) * 0.5f;
-	const float CoreRadius = NibTextureSize * 0.5f - 3.0f;
-	const float FalloffWidth = 2.0f; // 抗鋸齒緣，麥克筆＝硬邊圓頭
+	const float TexHalf = NibTextureSize * 0.5f;
+	// α=0.5 等值面（＝玩家看到的墨緣，銳化的閾值就落在這裡）與羽化帶寬，
+	// 兩者都以紋理半徑為單位＝與 StampDot 的 tile 尺寸同一組常數（見檔頭）
+	const float HalfAlphaRadius = NibHalfAlphaFrac * TexHalf;
+	const float FalloffWidth = FMath::Max(NibRampFrac * TexHalf, 1.0f);
 
 	for (int32 Y = 0; Y < NibTextureSize; ++Y)
 	{
 		for (int32 X = 0; X < NibTextureSize; ++X)
 		{
 			const float Dist = FMath::Sqrt(FMath::Square(X - Center) + FMath::Square(Y - Center));
-			const float Alpha01 = FMath::Clamp((CoreRadius + FalloffWidth - Dist) / FalloffWidth, 0.0f, 1.0f);
+			// 線性覆蓋斜坡：α=1 在 HalfAlphaRadius−W/2、α=0 在 +W/2（0 落在紋理
+			// 邊界內＝tile 邊緣不會被切出硬方角）
+			const float Alpha01 = FMath::Clamp(
+				(HalfAlphaRadius + FalloffWidth * 0.5f - Dist) / FalloffWidth, 0.0f, 1.0f);
 			const uint8 Alpha = static_cast<uint8>(FMath::RoundToInt(Alpha01 * 255.0f));
 			// 預乘 alpha（白×A）：搭配 SE_BLEND_AlphaComposite，讓 RT 的 alpha 通道
 			// 也正確累積（SE_BLEND_Translucent 不寫目的地 alpha，墨水遮罩會全空）
@@ -1244,7 +1275,10 @@ void UInkCanvasComponent::StampDot(UCanvas* Canvas, const FVector2D& CanvasSize,
 		return;
 	}
 
-	const float Diameter = FMath::Max(2.0f, UvRadius * 2.0f * CanvasSize.X);
+	// 墨的直徑（α=0.5 等值面）＝舊制原樣；tile 再放大到足以裝下羽化帶——
+	// 兩者的比值由筆頭的形狀常數決定，所以**線寬不隨這一刀改變**（見檔頭註）
+	const float InkDiameter = FMath::Max(2.0f, UvRadius * 2.0f * CanvasSize.X);
+	const float Diameter = InkDiameter * (NibLegacyHalfAlphaFrac / NibHalfAlphaFrac);
 	const FVector2D TopLeft(UV.X * CanvasSize.X - Diameter * 0.5f, UV.Y * CanvasSize.Y - Diameter * 0.5f);
 
 	FCanvasTileItem TileItem(TopLeft, Nib->GetResource(), FVector2D(Diameter, Diameter), Color);

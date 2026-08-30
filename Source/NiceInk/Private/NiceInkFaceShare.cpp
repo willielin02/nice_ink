@@ -136,9 +136,27 @@ UNiceInkFaceShare* UNiceInkFaceShare::Get(const UObject* WorldContext)
 
 bool UNiceInkFaceShare::BuildBlobFromDir(const FString& Dir, TArray<uint8>& OutBlob)
 {
-	// 打包快取：library 資料夾按時間戳不可變＝算一次用到底（省每次進房 ~300ms 轉碼）
+	// 打包快取（省每次進房 ~300ms 轉碼）。
+	// **2026-08-31：原本的前提「library 資料夾按時間戳不可變」已經不成立。**
+	// 解剖島 UV0 搬家時要重寫每一份 eye_mask_ink.png（追記92），而這支只驗 magic、
+	// 不驗新舊 ⇒ 08-14 烤的 blob 一路蓋過 08-31 修好的遮罩，**四輪修全部隱形**
+	// （user 連看四張一模一樣的截圖）。凡「衍生快取」都要能自己發現上游變了：
+	// 任何來源檔比 blob 新就重算。
 	const FString CachePath = Dir / TEXT("blob_nif2.bin");
-	if (FFileHelper::LoadFileToArray(OutBlob, *CachePath) && OutBlob.Num() > 32)
+	IFileManager& FM = IFileManager::Get();
+	const FDateTime CacheTime = FM.GetTimeStamp(*CachePath);
+	bool bCacheStale = false;
+	for (const TCHAR* Src : { TEXT("face_open.png"), TEXT("face_closed.png"),
+		TEXT("eye_mask_ink.png"), TEXT("skin_color.json") })
+	{
+		const FDateTime SrcTime = FM.GetTimeStamp(*(Dir / Src));
+		if (SrcTime != FDateTime::MinValue() && SrcTime > CacheTime)
+		{
+			bCacheStale = true;
+			break;
+		}
+	}
+	if (!bCacheStale && FFileHelper::LoadFileToArray(OutBlob, *CachePath) && OutBlob.Num() > 32)
 	{
 		uint32 Magic = 0;
 		FMemory::Memcpy(&Magic, OutBlob.GetData(), sizeof(Magic));
@@ -146,6 +164,11 @@ bool UNiceInkFaceShare::BuildBlobFromDir(const FString& Dir, TArray<uint8>& OutB
 		{
 			return true;
 		}
+	}
+	if (bCacheStale)
+	{
+		UE_LOG(LogTemp, Warning,
+			TEXT("NiFaceShare: blob cache stale (source newer) -> rebuild: %s"), *CachePath);
 	}
 	OutBlob.Reset();
 
