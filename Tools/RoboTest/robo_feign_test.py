@@ -167,8 +167,9 @@ class Test:
                 unreal.Vector2D(0.45, 0.45), unreal.Vector2D(0.50, 0.47), 2)
             self.rest_head = head_w(self.victim_local)
             self.rest_head_srv = head_w(self.server_victim())
-            trace = self.victim_local.get_editor_property("DreamTrace")
-            trace.debug_force_complete()  # v4.0 描圖取代迷宮：等同舊 debug_trigger_exit
+            # P0-3（2026-08-31）：甦醒時間下限會拒收早到的 ServerTraceComplete——
+            # robo 喚醒改走 server 端 hook（合法繞過；帳本=Docs/ANTICHEAT_PLAN.md）
+            self.server_gm().debug_robo_wake()
             self.advance("verify_wake")
         elif s == "verify_wake":
             if self.elapsed() < 1.5:

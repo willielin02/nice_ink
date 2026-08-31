@@ -112,7 +112,8 @@ class Probe:
             self.victim_local = find_char(w, self.victim_pid)
             log(f"ASLEEP fov={fov_of(self.victim_local):.1f} "
                 f"eyes={int(self.victim_local.get_editor_property('bEyesOpen'))}")
-            self.victim_local.get_editor_property("DreamTrace").debug_force_complete()
+            # P0-3（2026-08-31）：喚醒改走 server hook（時間下限拒收早到的 Complete）
+            unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).debug_robo_wake()
             self.advance("awake_read")
         elif s == "awake_read":
             if self.elapsed() < 3.0:

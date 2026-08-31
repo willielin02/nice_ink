@@ -302,6 +302,38 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Debug")
 	int32 DebugForcedTraceSeed = 0;
 
+	// --- 防作弊 P0（2026-08-31；帳本=Docs/ANTICHEAT_PLAN.md §3）---
+
+	// P0-1 作者槽位：每回合洗牌的不透明分組鍵——落墨多播線上只走 slot，
+	// slot→真名對照只活在 server（受害者的改裝客戶端讀不到作者）。
+	// 惰性指派（首針當下）＋回合換代即重洗；同時把 slot 寫進角色的 DrawSlotId
+	//（COND_OwnerOnly 複製給本人＝本地預測分組鍵同源）。
+	int32 GetOrAssignDrawSlot(class ANiceInkCharacter* Artist);
+	// 未知 id（負值證據鍵、跨場 RestoreWork 真名）原值回還
+	int32 ResolveDrawSlot(int32 WireId) const;
+
+	// P0-3 甦醒時間下限：發夢當下算好「最早合法甦醒時刻」（線長/針速上限×係數）；
+	// 早於它的 ServerTraceComplete/ServerMazeExited＝改裝客戶端，拒收。
+	bool CanVictimWakeNow() const;
+
+	// 下限係數（誠實最短≈線長/v_max；0.5＝失敗重來/搖晃/網路抖動全不誤殺的保守裕量）
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Trace")
+	float TraceWakeFloorFactor = 0.5f;
+
+	// robo 專用喚醒（timer-deferred 同其他 hooks）：server 端直設睜眼＝合法繞過下限
+	//（下限管的是客戶端宣稱；server 自己決定不受限）。取代舊的 DreamTrace
+	// DebugForceComplete 捷徑——那條現在會被 P0-3 的閘擋掉。
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboWake();
+
+	// P0-1 對照表（server 秘密；round 換代即重洗）
+	TMap<int32, int32> DrawSlotByAuthor;
+	TMap<int32, int32> AuthorByDrawSlot;
+	int32 DrawSlotRound = INDEX_NONE;
+
+	// P0-3：最早合法甦醒時刻（world seconds；0＝無夢進行中）
+	float TraceWakeEarliestTime = 0.0f;
+
 	// 雲端隨身上行終點（Character::ServerPersonaEnd 驗收後轉入；B3）：
 	// bytes＝UNiceInkSaveGame 序列化；驗證→套用（錢包＋逐幅 MulticastRestoreWork）
 	void ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);

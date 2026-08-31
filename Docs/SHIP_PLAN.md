@@ -3624,3 +3624,40 @@ blob 贏。四個沙箱各一份（`Saved` / `Saved_P2/P3/P4`），全都是 08-
 - **「robo 綠、user 紅」的排查順序要加一層**：不只問「受測物是否相同」，
   還要問「他那邊有沒有一層我這邊沒有的快取」。robo 用預設臉＝根本不走 blob 路徑。
 
+## 2026-08-31 追記94：防作弊 Phase 0 三刀＋公證後端骨架（BUILT-自驗，待 viewport）
+
+**帳本與規格單一出處＝`Docs/ANTICHEAT_PLAN.md`**（user 同日定案全架構：兩需求＝
+絕對防作弊＋TikTok 影片自動化重置；分層＝Steam 身分/庫存＋EOS 傳輸/儲存＋自建薄公證
+後端；前文逐字稿＝專案根「新增 文字文件 (4).txt」）。本追記只記落地與驗證：
+
+1. **P0-1 作者身分 slot 化**：`MulticastPaint*` 線上識別改每回合洗牌的不透明
+   `DrawSlotId`（1000~8999、COND_OwnerOnly 只發本人服務本地預測對消）；server 端
+   `ResolveDrawSlot` 換回真名寫自己畫布＝判定/揭曉/存檔零改動。受害者的改裝客戶端
+   從此讀不到「這筆是誰畫的」。
+2. **P0-2 沉睡期複製凍結**：`ANiceInkCharacter::IsReplicationPausedForConnection`
+   ——閉眼沉睡受害者的連線上其他角色凍結複製（channel 不關＝作品/臉貼圖不毀、
+   醒來屬性自動收斂；不能用 relevancy＝channel 關閉會把他端畫布 Works 全毀且無
+   全量補發）。睜眼/醒來當幀全角色 `ForceNetUpdate()`。
+3. **P0-3 甦醒時間下限**：`BeginVictimSleep` 存「最早合法甦醒時刻」（線長/v_max×0.5，
+   全 server 端量）；`ServerTraceComplete`＋`ServerMazeExited`（退役迷宮的第二扇門）
+   同閘拒收早到＝秒醒外掛關閉。robo 喚醒捷徑 `DebugForceComplete` 因此失效——
+   新 server hook `DebugRoboWake`、7 支腳本換血（RoboTest README 已記）。
+4. **公證後端骨架 `Backend/`**（Phase 1 本地版）：Ed25519 簽發＋序號防回滾、
+   escrow、attest quorum、Steam 驗票（dev 模式旁路）；`test_local.py` 14/14。
+   金鑰 gitignored；正式部署待 §7 外部依賴（hosting/網域/TikTok 審核/Steamworks）。
+
+**驗證**：編譯綠；robo_trace **21/1**（唯一 FAIL＝t3 observer 需第三個 PIE 世界＝
+2-client 降級後結構性不可跑、非本批——**記帳：robo 模式現為 PlayNumberOfClients=2，
+所有 observer 類檢查失去解析度**）；robo_directdraw **59/6**（失敗名＝ghosts/shader
+row-metered/palette/far×3＝既有失敗集逐字子集、零新增）；robo_feign **23/0**；
+**新儀器 `robo_sleepfreeze_probe` 6/6**＝凍結的活體定罪（server 作畫者走 466.3cm、
+沉睡受害者世界複本位移 **0.0cm**；睜眼後 d=0.0）——寫它的理由＝凍結若沒生效
+全部既有測試照樣綠（閘門要能看見它要擋的失敗）。
+
+**SPEC 待回寫**（累積在 ANTICHEAT_PLAN §9）：防作弊資訊模型（slot/凍結/時間下限）、
+簽章制信任架構、TikTok 重置券制、平台分層定案。
+
+**待 user**：ANTICHEAT_PLAN §7 外部依賴清單（hosting＋網域、TikTok developer 送審
+＝最長外部等待、Steamworks $100、AI key）；沉睡凍結的視覺（偷看第一眼、醒來 snap）
+待 viewport。
+

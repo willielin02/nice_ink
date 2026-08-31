@@ -1733,6 +1733,14 @@ void ANiceInkGameMode::BeginVictimSleep(bool bAlreadyLying)
 		// 帶全寬＝筆寬×倍數（user 定案 08-02：2.0/1.8/1.6 隨杯數）——筆寬旋鈕改動夢自動跟
 		TraceParams.BandHalfWidthCm = Victim->TattooNibDiameterCm * TraceParams.BandWidthNibMult * 0.5f;
 
+		// P0-3 甦醒時間下限（帳本=Docs/ANTICHEAT_PLAN.md §3）：理論最短完成時間的兩個
+		// 因子（線長、v_max）都是 server 這裡算的——用 server 端 Victim 屬性＝客戶端改
+		// 自己的旋鈕不影響判決；失敗重來/搖晃只會更久＝下限恆保守。
+		const float VMax = Victim->TattooMaxSpeedCmPerSec();
+		TraceWakeEarliestTime = (VMax > KINDA_SMALL_NUMBER && TraceParams.PerimeterCm > 0.0f)
+			? GetWorld()->GetTimeSeconds() + TraceParams.PerimeterCm / VMax * TraceWakeFloorFactor
+			: 0.0f;
+
 		const int32 TraceSeed = DebugForcedTraceSeed > 0
 			? DebugForcedTraceSeed
 			: FMath::RandRange(1, MAX_int32 - 1);
@@ -2031,18 +2039,19 @@ void ANiceInkGameMode::DebugRoboStroke(FVector2D FromUV, FVector2D ToUV, int32 C
 			return;
 		}
 		const FLinearColor Color = FNiceInkPalette::Get(ColorIndex);
-		const int32 AuthorId = Artist->GetInkAuthorId();
+		// P0-1：robo 線畫也走 slot（線上識別統一不露真名；server 畫布由 ResolveDrawSlot 換回）
+		const int32 WireId = GetOrAssignDrawSlot(Artist);
 		// robo 線畫維持折線語義（bDotStroke=false）＋液線針＋滿流量（空陣列）；
 		// StrokeSeq=0＝server 發起、無任何端預畫＝回播對消永不觸發
-		Victim->MulticastPaintBegin(AuthorId, Color, FromUV, /*bDotStroke=*/false,
+		Victim->MulticastPaintBegin(WireId, Color, FromUV, /*bDotStroke=*/false,
 			EInkNeedle::Liner, /*Flow=*/255, /*StrokeSeq=*/0);
 		TArray<FVector2D> Points;
 		for (int32 Step = 1; Step <= 10; ++Step)
 		{
 			Points.Add(FMath::Lerp(FromUV, ToUV, Step / 10.0f));
 		}
-		Victim->MulticastPaintPoints(AuthorId, Points, TArray<uint8>());
-		Victim->MulticastPaintEnd(AuthorId);
+		Victim->MulticastPaintPoints(WireId, Points, TArray<uint8>());
+		Victim->MulticastPaintEnd(WireId);
 	}), 0.1f, false);
 }
 
@@ -2053,6 +2062,68 @@ void ANiceInkGameMode::DebugRoboEmerge()
 	{
 		HandleEmergeRequest(GetVictimCharacter(), /*bForce=*/true);
 	}), 0.1f, false);
+}
+
+void ANiceInkGameMode::DebugRoboWake()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkCharacter* Victim = GetVictimCharacter())
+		{
+			Victim->ServerOpenEyesNow();
+		}
+	}), 0.1f, false);
+}
+
+// --- 防作弊 P0（2026-08-31；帳本=Docs/ANTICHEAT_PLAN.md §3）---
+
+int32 ANiceInkGameMode::GetOrAssignDrawSlot(ANiceInkCharacter* Artist)
+{
+	const int32 AuthorId = Artist ? Artist->GetInkAuthorId() : INDEX_NONE;
+	if (AuthorId == INDEX_NONE)
+	{
+		return INDEX_NONE;
+	}
+	const ANiceInkGameState* GS = NIState();
+	const int32 Round = GS ? GS->CurrentRound : 0;
+	if (Round != DrawSlotRound)
+	{
+		// 回合換代即重洗：受害者跨回合對 slot 做風格對賬也拼不回身分
+		DrawSlotByAuthor.Reset();
+		AuthorByDrawSlot.Reset();
+		DrawSlotRound = Round;
+	}
+	if (const int32* Found = DrawSlotByAuthor.Find(AuthorId))
+	{
+		Artist->DrawSlotId = *Found;
+		return *Found;
+	}
+	// slot 域 1000~8999：與負值證據鍵、小整數 PlayerId（跨場 RestoreWork 真名）天然分區
+	int32 Slot = INDEX_NONE;
+	do
+	{
+		Slot = FMath::RandRange(1000, 8999);
+	} while (AuthorByDrawSlot.Contains(Slot));
+	DrawSlotByAuthor.Add(AuthorId, Slot);
+	AuthorByDrawSlot.Add(Slot, AuthorId);
+	Artist->DrawSlotId = Slot;
+	return Slot;
+}
+
+int32 ANiceInkGameMode::ResolveDrawSlot(int32 WireId) const
+{
+	if (const int32* Found = AuthorByDrawSlot.Find(WireId))
+	{
+		return *Found;
+	}
+	return WireId;
+}
+
+bool ANiceInkGameMode::CanVictimWakeNow() const
+{
+	return TraceWakeEarliestTime <= 0.0f ||
+		(GetWorld() && GetWorld()->GetTimeSeconds() >= TraceWakeEarliestTime);
 }
 
 void ANiceInkGameMode::DebugRoboAccuse(bool bCorrect)

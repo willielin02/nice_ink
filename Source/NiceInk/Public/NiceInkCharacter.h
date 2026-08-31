@@ -18,6 +18,7 @@ class UMaterialInterface;
 class UNeckStretchComponent;
 class UPoseableMeshComponent;
 class USkeletalMesh;
+struct FNetViewer;
 struct FReferenceSkeleton;
 
 // 玩家角色：第一人稱走動的光頭黑道老大。
@@ -41,6 +42,12 @@ public:
 	virtual void BeginPlay() override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
+	// 防作弊 P0-2（2026-08-31；帳本=Docs/ANTICHEAT_PLAN.md §3）：受害者閉眼沉睡期間，
+	// 其他角色對他的連線凍結複製——channel 不關（作品/貼圖不毀、醒來屬性自動收斂），
+	// 只斷屬性流。誠實客戶端本來就黑屏；這裡斷的是改裝客戶端看穿黑屏能讀到的
+	// 位置/aim/lean（「誰站在我身邊」＝作者推理直送）。
+	virtual bool IsReplicationPausedForConnection(const FNetViewer& ConnectionOwnerNetViewer) override;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Nice Ink")
 	TObjectPtr<UCameraComponent> FirstPersonCamera;
@@ -517,6 +524,13 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
+	// 作者槽位（2026-08-31 防作弊 P0-1；帳本=Docs/ANTICHEAT_PLAN.md §3）：每回合洗牌的
+	// 不透明分組鍵——落墨多播的線上識別只走 slot，slot→真名對照只活在 server
+	//（受害者的改裝客戶端從此讀不到「這筆是誰畫的」）。COND_OwnerOnly＝只發本人：
+	// 本地預測的分組鍵必須與回播同源，別人的 slot 沒有任何客戶端需要知道對應誰。
+	UPROPERTY(Replicated)
+	int32 DrawSlotId = INDEX_NONE;
+
 	// 沉睡中（受害者入座～現身之間）。移動鎖定；閉眼與否看 bEyesOpen。
 	UPROPERTY(BlueprintReadOnly, ReplicatedUsing = OnRep_Asleep, Category = "Nice Ink")
 	bool bAsleep = false;
@@ -667,6 +681,15 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "Nice Ink")
 	int32 GetInkAuthorId() const;
+
+	// server-only 睜眼（P0-3）：兩條甦醒 RPC 驗過時間下限後、以及 robo 的
+	// DebugRoboWake（server 決定＝合法繞過下限）都走這一個入口。
+	// 睜眼當幀強制全角色 net update——P0-2 的凍結不能等 relevancy 節拍自然回流。
+	void ServerOpenEyesNow();
+
+	// P0-1：multicast 落地時的畫布分組鍵——server 端把線上 slot 換回真名
+	//（判定/持久化讀 server 畫布），客戶端原樣用 slot。
+	int32 ResolveCanvasAuthorKey(int32 WireId) const;
 
 	// --- 伺服器端流程控制（GameMode 呼叫） ---
 

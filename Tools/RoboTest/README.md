@@ -49,6 +49,10 @@
   wait（迷宮永不啟動）。**活套件的喚醒鉤子已全數換血**：
   `DreamMaze.debug_trigger_exit()` → `DreamTrace.debug_force_complete()`
   （feign/orbit/neck_observer/neck_probe/seat1_sync/drawpose_shots 已改）。
+  **2026-08-31 二次換血（防作弊 P0-3）**：`ServerTraceComplete` 有甦醒時間下限，
+  `debug_force_complete()` 的早到 Complete 會被 server 拒收 ⇒ robo 喚醒一律改
+  `GameMode.debug_robo_wake()`（server 端直設睜眼＝合法繞過下限；上列 7 支已改，
+  wakefov 含在內）。帳本＝`Docs/ANTICHEAT_PLAN.md`。
 - 沉睡者夢內回饋音＝UiClick（音效層沉睡靜音唯一豁免）；robo 攻擊者＝
   `GameMode.DebugRoboShake()`（timer-deferred、第一位非受害者、走真 Handle 路徑）。
 

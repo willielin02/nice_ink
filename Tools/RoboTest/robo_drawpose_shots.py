@@ -236,7 +236,8 @@ class Test:
                 return
             w1 = get_world("UEDPIE_1")
             v1 = find_char(w1, self.victim_pid)
-            v1.get_editor_property("DreamTrace").call_method("DebugForceComplete", ())  # v4.0
+            # P0-3（2026-08-31）：喚醒改走 server hook（時間下限拒收早到的 Complete）
+            unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).call_method("DebugRoboWake", ())
             self.advance("victim_look")
         elif s == "victim_look":
             if self.elapsed() < 1.5:

@@ -96,7 +96,8 @@ class Probe:
             if self.elapsed() < 1.5:
                 return
             self.victim = find_char(get_world("UEDPIE_0"), self.victim_pid)
-            self.victim.get_editor_property("DreamTrace").debug_force_complete()  # v4.0
+            # P0-3（2026-08-31）：喚醒改走 server hook（時間下限拒收早到的 Complete）
+            unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).debug_robo_wake()
             self.advance("rest_dump")
         elif s == "rest_dump":
             if self.elapsed() < 1.5:

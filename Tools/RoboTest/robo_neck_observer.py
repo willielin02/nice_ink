@@ -158,8 +158,8 @@ class Test:
                 self.finish()
                 return
             self.victim_local = find_char(w, self.victim_pid)
-            trace = self.victim_local.get_editor_property("DreamTrace")
-            trace.debug_force_complete()  # 睜眼＝軌道啟用（v4.0 描圖取代迷宮）
+            # P0-3（2026-08-31）：喚醒改走 server hook（時間下限拒收早到的 Complete）
+            unreal.GameplayStatics.get_game_mode(get_world("UEDPIE_0")).debug_robo_wake()
             focus_editor()
             self.advance("shots")
         elif s == "shots":

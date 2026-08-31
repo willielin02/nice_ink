@@ -20,6 +20,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/ProjectileMovementComponent.h"
+#include "GameFramework/WorldSettings.h" // FNetViewer（P0-2 沉睡期複製過濾）
 #include "DrawPoseData.h"
 #include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
@@ -447,6 +448,9 @@ void ANiceInkCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	// 技能庫存只給本人：作畫者不該從網路層讀到「受害者拿到技能／進度」
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, SprayCharges, COND_OwnerOnly);
 	DOREPLIFETIME_CONDITION(ANiceInkCharacter, KickCharges, COND_OwnerOnly);
+	// 作者槽位（P0-1）：只發本人——本地預測的分組鍵要與回播同源；別人的 slot 對應誰
+	// 是 server 的秘密
+	DOREPLIFETIME_CONDITION(ANiceInkCharacter, DrawSlotId, COND_OwnerOnly);
 	DOREPLIFETIME(ANiceInkCharacter, bBlinded);
 	DOREPLIFETIME(ANiceInkCharacter, BlindType);
 	DOREPLIFETIME(ANiceInkCharacter, bLeanLocked);
@@ -3096,7 +3100,9 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 本地預測（07-26）：客戶端自己的墨當幀上屏——舊制連本人的墨都等完整來回
 	//（批次 50ms＋RTT＋server tick）＝筆到墨不到的遲鈍主因。與回播嚴格同構
 	//（同 BeginStroke/AddStrokePoint 鏈），回播端以 StrokeSeq 對消防重複蓋章。
-	const bool bLocalEcho = !HasAuthority(); // listen 主機 multicast 同幀本地執行＝已零延遲
+	// P0-1 起本地預測的畫布鍵＝DrawSlotId（與回播的線上鍵同源）；slot 尚未複製到手
+	//（首回合首針的極端競態）就跳過預測——墨照樣經回播抵達，只多一個來回的延遲
+	const bool bLocalEcho = !HasAuthority() && DrawSlotId != INDEX_NONE; // listen 主機 multicast 同幀本地執行＝已零延遲
 	if (!bStrokeOpen)
 	{
 		StopPaintingLocal();
@@ -3111,7 +3117,7 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 			// 開筆預測：Stencil 強制紫與 server 端同式（稿不吃調色盤）
 			const FLinearColor EchoColor = (SelectedNeedle == EInkNeedle::Stencil)
 				? NiceInkStencil::Color() : FNiceInkPalette::Get(SelectedColorIndex);
-			Target->InkCanvas->BeginStroke(GetInkAuthorId(), EchoColor, DotUVs[0],
+			Target->InkCanvas->BeginStroke(DrawSlotId, EchoColor, DotUVs[0],
 				/*bDotStroke=*/true, SelectedNeedle, FlowByte);
 		}
 		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte, LocalStrokeSeq);
@@ -3132,10 +3138,10 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	if (bLocalEcho && DotUVs.Num() > 0 && Target->InkCanvas)
 	{
 		// 落墨預測：與 MulticastPaintPoints 重播同構（整批一次 RT context）
-		Target->InkCanvas->BeginStampBatchFor(GetInkAuthorId());
+		Target->InkCanvas->BeginStampBatchFor(DrawSlotId);
 		for (const FVector2D& EchoUv : DotUVs)
 		{
-			Target->InkCanvas->AddStrokePoint(GetInkAuthorId(), EchoUv,
+			Target->InkCanvas->AddStrokePoint(DrawSlotId, EchoUv,
 				SelectedNeedle == EInkNeedle::Shader ? FlowByte : 255);
 		}
 		Target->InkCanvas->EndStampBatch();
@@ -3221,7 +3227,7 @@ void ANiceInkCharacter::StopPaintingLocal()
 		{
 			if (EchoTarget->InkCanvas)
 			{
-				EchoTarget->InkCanvas->EndStroke(GetInkAuthorId());
+				EchoTarget->InkCanvas->EndStroke(DrawSlotId);
 			}
 		}
 	}
@@ -3239,6 +3245,46 @@ int32 ANiceInkCharacter::GetInkAuthorId() const
 {
 	const APlayerState* PS = GetPlayerState();
 	return PS ? PS->GetPlayerId() : INDEX_NONE;
+}
+
+void ANiceInkCharacter::ServerOpenEyesNow()
+{
+	if (!HasAuthority() || !bAsleep || bEyesOpen)
+	{
+		return;
+	}
+	bEyesOpen = true;
+	ApplySleepVisual();
+	// P0-2：睜眼當幀把全角色踢一次 net update——凍結連線的恢復不能等下一個複製節拍
+	//（偷看的第一眼要看得到人）
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+		{
+			It->ForceNetUpdate();
+		}
+	}
+}
+
+bool ANiceInkCharacter::IsReplicationPausedForConnection(const FNetViewer& ConnectionOwnerNetViewer)
+{
+	// P0-2 沉睡期複製過濾（帳本=Docs/ANTICHEAT_PLAN.md §3）：這條連線的玩家若正閉眼
+	// 沉睡，其他角色對他凍結複製——channel 不關（畫布作品/臉貼圖不毀、醒來屬性自動
+	// 收斂到現值），只斷屬性流。動機：黑屏只是受害者 HUD 自己畫的，位置/aim/lean 照常
+	// 抵達＝改裝客戶端讀得到「誰站在我身邊」＝作者推理直送（新增 文字文件 (4).txt #3）。
+	// 邊界：受害者自己的 pawn 恆不凍（this==ViewerPawn 跳過）；裝睡（bFeignSleep）不
+	// 觸發——只有真受害者 bAsleep 立起。listen 主機本人無連線＝不經此路（host 天花板記帳）。
+	const APlayerController* ViewerPC = Cast<APlayerController>(ConnectionOwnerNetViewer.InViewer.Get());
+	const ANiceInkCharacter* ViewerPawn = ViewerPC ? Cast<ANiceInkCharacter>(ViewerPC->GetPawn()) : nullptr;
+	if (!ViewerPawn)
+	{
+		ViewerPawn = Cast<ANiceInkCharacter>(ConnectionOwnerNetViewer.ViewTarget.Get());
+	}
+	if (ViewerPawn && ViewerPawn != this && ViewerPawn->bAsleep && !ViewerPawn->bEyesOpen)
+	{
+		return true;
+	}
+	return Super::IsReplicationPausedForConnection(ConnectionOwnerNetViewer);
 }
 
 // --- 伺服器端流程控制 ---
@@ -3307,6 +3353,15 @@ void ANiceInkCharacter::ServerSetAsleep(bool bNewAsleep, const FTransform& LieTr
 		SetActorTransform(SeatTransform, false, nullptr, ETeleportType::TeleportPhysics);
 		GetCharacterMovement()->SetMovementMode(MOVE_Walking);
 		ClientSyncPoseTransform(SeatTransform); // 回座同樣要本端落地
+		// P0-2：醒來（含 robo 強制現身＝閉眼直醒）當幀踢全角色 net update——
+		// 凍結連線的恢復不等下一個複製節拍
+		if (UWorld* World = GetWorld())
+		{
+			for (TActorIterator<ANiceInkCharacter> It(World); It; ++It)
+			{
+				It->ForceNetUpdate();
+			}
+		}
 	}
 
 	ApplySleepVisual();
@@ -3433,8 +3488,14 @@ void ANiceInkCharacter::ServerMazeExited_Implementation()
 	{
 		return;
 	}
-	bEyesOpen = true;
-	ApplySleepVisual();
+	// P0-3：迷宮已退役但 RPC 保留（SPEC #51 封存）＝改裝客戶端的第二扇門，同一道閘看住
+	const ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>();
+	if (GM && !GM->CanVictimWakeNow())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: ServerMazeExited 早於甦醒下限被拒（player %d）"), GetInkAuthorId());
+		return;
+	}
+	ServerOpenEyesNow();
 }
 
 // --- 醉夢描圖（SPEC v4.0 定案 #49/#50）---
@@ -3454,8 +3515,16 @@ void ANiceInkCharacter::ServerTraceComplete_Implementation()
 	{
 		return;
 	}
-	bEyesOpen = true;
-	ApplySleepVisual();
+	// P0-3 甦醒時間下限（帳本=Docs/ANTICHEAT_PLAN.md §3）：理論最短＝線長/針速上限×
+	// 係數，發夢當下由 server 算好——早於它的 Complete 只可能是改裝客戶端，拒收。
+	// 誠實客戶端（含 robo autopilot）針速被 v_max 鉗住，構造上到不了下限之前。
+	const ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>();
+	if (GM && !GM->CanVictimWakeNow())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: ServerTraceComplete 早於甦醒下限被拒（player %d）"), GetInkAuthorId());
+		return;
+	}
+	ServerOpenEyesNow();
 }
 
 void ANiceInkCharacter::ServerAttackShake_Implementation()
@@ -6573,7 +6642,9 @@ void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Targe
 	// 也塞不進彩色稿）
 	const FLinearColor InkColor = (Needle == EInkNeedle::Stencil)
 		? NiceInkStencil::Color() : FNiceInkPalette::Get(ColorIndex);
-	Target->MulticastPaintBegin(GetInkAuthorId(), InkColor, UV,
+	// P0-1：線上識別＝每回合洗牌的 slot——受害者端讀不到真作者；slot→真名只活在
+	// server（multicast 落地時由 ResolveDrawSlot 換回真名寫 server 畫布＝判定/存檔不變）
+	Target->MulticastPaintBegin(GM->GetOrAssignDrawSlot(this), InkColor, UV,
 		/*bDotStroke=*/true, Needle, Flow, StrokeSeq);
 }
 
@@ -6608,7 +6679,7 @@ void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>
 	if (UVs.Num() <= Allowed)
 	{
 		ServerPaintDotBudget -= UVs.Num();
-		Target->MulticastPaintPoints(GetInkAuthorId(), UVs, Flows);
+		Target->MulticastPaintPoints(GM->GetOrAssignDrawSlot(this), UVs, Flows);
 		return;
 	}
 	TArray<FVector2D> Accepted(UVs.GetData(), Allowed); // 超額針裁掉（順序保留）
@@ -6618,14 +6689,17 @@ void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>
 		AcceptedFlows.Append(Flows.GetData(), Allowed); // 與點列同裁＝索引恆對齊
 	}
 	ServerPaintDotBudget -= Accepted.Num();
-	Target->MulticastPaintPoints(GetInkAuthorId(), Accepted, AcceptedFlows);
+	Target->MulticastPaintPoints(GM->GetOrAssignDrawSlot(this), Accepted, AcceptedFlows);
 }
 
 void ANiceInkCharacter::ServerPaintEnd_Implementation()
 {
 	if (ANiceInkCharacter* Target = ServerPaintTarget.Get())
 	{
-		Target->MulticastPaintEnd(GetInkAuthorId());
+		if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+		{
+			Target->MulticastPaintEnd(GM->GetOrAssignDrawSlot(this));
+		}
 	}
 	ServerPaintTarget = nullptr;
 }
@@ -6639,11 +6713,15 @@ void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLine
 	//（listen 主機）恆重播；robo/GameMode 直呼恆傳 0＝永不對消（server 發起的
 	// 筆劃沒有任何端預畫過）。reliable multicast 同 actor channel 有序＝集合
 	// 進出與封包順序一致。
+	// P0-1 起 AuthorId 參數在線上載的是不透明 slot（帳本=Docs/ANTICHEAT_PLAN.md）：
+	// 客戶端畫布以 slot 分組（分組鍵職責不需要身分）；server 端把 slot 換回真名寫
+	// 自己的畫布——判定（PickedWork.AuthorId）與存檔格式零改動。
 	if (StrokeSeq != 0 && !HasAuthority())
 	{
 		APlayerController* LocalPC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
 		ANiceInkCharacter* LocalChar = LocalPC ? Cast<ANiceInkCharacter>(LocalPC->GetPawn()) : nullptr;
-		if (LocalChar && LocalChar->IsLocallyControlled() && LocalChar->GetInkAuthorId() == AuthorId)
+		if (LocalChar && LocalChar->IsLocallyControlled() &&
+			LocalChar->DrawSlotId != INDEX_NONE && LocalChar->DrawSlotId == AuthorId)
 		{
 			ReplaySkipAuthors.Add(AuthorId);
 			return;
@@ -6652,7 +6730,7 @@ void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLine
 	ReplaySkipAuthors.Remove(AuthorId);
 	if (InkCanvas)
 	{
-		InkCanvas->BeginStroke(AuthorId, Color, UV, bDotStroke, Needle, Flow);
+		InkCanvas->BeginStroke(ResolveCanvasAuthorKey(AuthorId), Color, UV, bDotStroke, Needle, Flow);
 	}
 }
 
@@ -6667,10 +6745,11 @@ void ANiceInkCharacter::MulticastPaintPoints_Implementation(int32 AuthorId, cons
 		// 批次蓋章：整批只開關一次 RT context（細針點排每點 20 tile、逐點開關
 		// 4096 霧層 context 會拖垮幀率——robo superfast 實錘）
 		const bool bHasFlows = Flows.Num() == UVs.Num();
-		InkCanvas->BeginStampBatchFor(AuthorId);
+		const int32 CanvasKey = ResolveCanvasAuthorKey(AuthorId);
+		InkCanvas->BeginStampBatchFor(CanvasKey);
 		for (int32 i = 0; i < UVs.Num(); ++i)
 		{
-			InkCanvas->AddStrokePoint(AuthorId, UVs[i], bHasFlows ? Flows[i] : 255);
+			InkCanvas->AddStrokePoint(CanvasKey, UVs[i], bHasFlows ? Flows[i] : 255);
 		}
 		InkCanvas->EndStampBatch();
 	}
@@ -6684,8 +6763,22 @@ void ANiceInkCharacter::MulticastPaintEnd_Implementation(int32 AuthorId)
 	}
 	if (InkCanvas)
 	{
-		InkCanvas->EndStroke(AuthorId);
+		InkCanvas->EndStroke(ResolveCanvasAuthorKey(AuthorId));
 	}
+}
+
+int32 ANiceInkCharacter::ResolveCanvasAuthorKey(int32 WireId) const
+{
+	// P0-1：server 端把線上 slot 換回真名寫自己的畫布（判定/持久化讀 server 畫布）；
+	// 客戶端原樣用 slot 當分組鍵。未知 id（負值證據鍵、跨場 RestoreWork 真名）原值回還。
+	if (HasAuthority())
+	{
+		if (const ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+		{
+			return GM->ResolveDrawSlot(WireId);
+		}
+	}
+	return WireId;
 }
 
 // --- 規則操作重播 ---
