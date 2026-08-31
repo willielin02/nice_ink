@@ -138,6 +138,27 @@
 - 殘留記帳：多數共謀（3+ 小號自嗨房）＝用真規則刷，限速不可消滅；後端私鑰外洩＝信任歸零
   （營運安全：金鑰不進 repo 不進客戶端、定期輪替）。
 
+**Phase 2 接線實作定案（2026-08-31 施工中裁定，已落碼）**：
+- **quorum digest 的正準來源＝GameState 複製屬性**（`BuildRoundAttestCanon`：
+  NIAT1|房鍵|回合|受害者|被指認作品|揭曉作者|判定|甦醒分秒|各玩家(id:現金:罰杯) 依
+  PlayerId 排序）——host 用權威值當幀算、client 在 Resolution +0.6s 複製裕量後算，
+  同一組複製屬性＝逐位相同。roster=PlayerArray.Num()、門檻 ⅔。
+- **host token 輪詢**：quorum 由別的見證人補齊時 token 落在對方的回應裡 ⇒ host 輪詢
+  `GET /settlement/{room}/{round}`（1s×8）。token 本身不含權力——`/sign-persona` 另驗
+  「簽發者必須是該回合見證人」（新 puid 首簽免單不在此規之列）。
+- **escrow**：作畫者拿到 slot 當幀直接登記後端（host 也是玩家同走此路）；揭示閘＝
+  「該回合已結算」（結算恆在指認判定後 ⇒ 沉睡中偷跑不可能；原 accusation_locked 信
+  呼叫端的洞已拆）＋**只揭被指認那一顆 slot**（未指認作品的作者保密到底＝巡禮設計）。
+- **栽贓偵測（detection-only）**：Resolution +3s 各端對賬「揭曉作者的 puid ＝ escrow
+  登記的作者」，不符＝`NiAnticheat: ESCROW MISMATCH` Error 案底。經濟結果 quorum 已擋；
+  把不符寫進 digest 使回合直接不結算＝Phase 3 強化。
+- **甦醒耗時**＝睜眼當幀寫 `GS.LastWakeSeconds`（複製）→ 進 digest（秒醒案底全員可見）。
+- **digest 一致性的競態記帳**：client 若在 Cash/罰杯複製抵達前算 digest ⇒ 意見分歧 ⇒
+  該輪不結算不落雲（安全側失敗）；0.6s 裕量 ≫ PlayerState 複製節拍，實測待雙機。
+- **commit-reveal 受害者抽選＝延後**：其價值完全依賴「承諾/揭示複製全客戶端供驗證」，
+  沒有驗證的版本是安全劇場。且遊戲規則下隨機抽選只發生在開局第一抽（其後受害者由
+  指認結果決定）＝暴露面小。排 Phase 3。
+
 ### 4.4 端點一覽
 | 端點 | 職責 |
 |---|---|

@@ -42,6 +42,37 @@ void ANiceInkGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 	DOREPLIFETIME(ANiceInkGameState, CeremonySlotOffsetDeg);
 	DOREPLIFETIME(ANiceInkGameState, BottleStartYaw);
 	DOREPLIFETIME(ANiceInkGameState, BottleEndYaw);
+	DOREPLIFETIME(ANiceInkGameState, NotaryRoomId);
+	DOREPLIFETIME(ANiceInkGameState, LastWakeSeconds);
+}
+
+FString ANiceInkGameState::BuildRoundAttestCanon() const
+{
+	// 正準字串（P2 digest 素材）：全部取自複製屬性＝各端逐位相同的前提是「已複製到」
+	// ——呼叫端負責在 Resolution 相位進入後留足複製裕量再算。
+	// 浮點（LastWakeSeconds）取分秒整數＝避開字串化格式差異。
+	FString Canon = FString::Printf(TEXT("NIAT1|%s|%d|%d|%d|%d|%d|%d"),
+		*NotaryRoomId, CurrentRound, VictimPlayerId, ResolutionWorkId, RevealedAuthorId,
+		static_cast<int32>(LastAccusationResult),
+		FMath::RoundToInt(LastWakeSeconds * 10.0f));
+	TArray<const ANiceInkPlayerState*> Sorted;
+	for (const APlayerState* PS : PlayerArray)
+	{
+		if (const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
+		{
+			Sorted.Add(NIPS);
+		}
+	}
+	Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
+	{
+		return A.GetPlayerId() < B.GetPlayerId();
+	});
+	for (const ANiceInkPlayerState* NIPS : Sorted)
+	{
+		Canon += FString::Printf(TEXT("|%d:%d:%d"),
+			NIPS->GetPlayerId(), NIPS->Cash, NIPS->PenaltyCups);
+	}
+	return Canon;
 }
 
 float ANiceInkGameState::GetCeremonyAlpha() const

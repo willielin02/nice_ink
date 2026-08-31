@@ -48,4 +48,17 @@ struct NICEINK_API FNiceInkNotary
 	static void RequestAttest(const FString& Puid, const FString& Room, int32 Round,
 		const FString& DigestHex, int32 RosterSize,
 		TFunction<void(bool bSettled, FString Token)> Done);
+
+	// --- P2（Docs/ANTICHEAT_PLAN.md §4.2/4.3）---
+	// POST /escrow/register：作畫者直接登記「本回合 slot X＝我」（不經 host）
+	static void RequestEscrowRegister(const FString& Puid, const FString& Room, int32 Round,
+		int32 Slot, TFunction<void(bool bOk)> Done);
+	// POST /escrow/reveal：單 slot 揭示（後端閘＝該回合已結算才放；只回被指認那顆
+	// slot 的作者＝未指認作品的作者保密到底）
+	static void RequestEscrowReveal(const FString& Puid, const FString& Room, int32 Round,
+		int32 Slot, TFunction<void(bool bOk, FString AuthorPuid)> Done);
+	// GET /settlement/{room}/{round}：host 輪詢結算單（quorum 由其他見證人補齊時
+	// token 落在別人的回應裡）
+	static void RequestSettlement(const FString& Room, int32 Round,
+		TFunction<void(bool bOk, FString Token)> Done);
 };

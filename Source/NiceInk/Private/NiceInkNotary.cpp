@@ -271,6 +271,68 @@ void FNiceInkNotary::RequestLatestSeq(const FString& Puid, TFunction<void(bool, 
 	Req->ProcessRequest();
 }
 
+void FNiceInkNotary::RequestEscrowRegister(const FString& Puid, const FString& Room, int32 Round,
+	int32 Slot, TFunction<void(bool)> Done)
+{
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("dev_puid"), Puid);
+	Body->SetStringField(TEXT("room"), Room);
+	Body->SetNumberField(TEXT("round"), Round);
+	Body->SetNumberField(TEXT("slot"), Slot);
+	PostJson(TEXT("/escrow/register"), Body,
+		[Done](bool bOk, TSharedPtr<FJsonObject>)
+		{
+			Done(bOk);
+		});
+}
+
+void FNiceInkNotary::RequestEscrowReveal(const FString& Puid, const FString& Room, int32 Round,
+	int32 Slot, TFunction<void(bool, FString)> Done)
+{
+	const TSharedRef<FJsonObject> Body = MakeShared<FJsonObject>();
+	Body->SetStringField(TEXT("dev_puid"), Puid);
+	Body->SetStringField(TEXT("room"), Room);
+	Body->SetNumberField(TEXT("round"), Round);
+	Body->SetNumberField(TEXT("slot"), Slot);
+	PostJson(TEXT("/escrow/reveal"), Body,
+		[Done](bool bOk, TSharedPtr<FJsonObject> Json)
+		{
+			FString Author;
+			if (bOk && Json.IsValid())
+			{
+				Author = Json->GetStringField(TEXT("author_puid"));
+			}
+			Done(bOk && !Author.IsEmpty(), Author);
+		});
+}
+
+void FNiceInkNotary::RequestSettlement(const FString& Room, int32 Round,
+	TFunction<void(bool, FString)> Done)
+{
+	const TSharedRef<IHttpRequest, ESPMode::ThreadSafe> Req = FHttpModule::Get().CreateRequest();
+	Req->SetURL(JoinUrl(GetBaseUrl(),
+		FString::Printf(TEXT("/settlement/%s/%d"), *Room, Round)));
+	Req->SetVerb(TEXT("GET"));
+	Req->SetTimeout(NotaryHttpTimeoutS);
+	Req->OnProcessRequestComplete().BindLambda(
+		[Done](FHttpRequestPtr, FHttpResponsePtr Resp, bool bConnected)
+		{
+			FString Token;
+			if (bConnected && Resp.IsValid() && Resp->GetResponseCode() == 200)
+			{
+				TSharedPtr<FJsonObject> Json;
+				const TSharedRef<TJsonReader<>> Reader =
+					TJsonReaderFactory<>::Create(Resp->GetContentAsString());
+				if (FJsonSerializer::Deserialize(Reader, Json) && Json.IsValid())
+				{
+					Json->TryGetStringField(TEXT("settlement_token"), Token);
+				}
+			}
+			Done(!Token.IsEmpty(), Token);
+		});
+	Req->ProcessRequest();
+}
+
 void FNiceInkNotary::RequestAttest(const FString& Puid, const FString& Room, int32 Round,
 	const FString& DigestHex, int32 RosterSize, TFunction<void(bool, FString)> Done)
 {

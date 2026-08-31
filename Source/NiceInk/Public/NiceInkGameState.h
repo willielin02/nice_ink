@@ -69,6 +69,21 @@ public:
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 LoserPlayerId = INDEX_NONE;
 
+	// --- 防作弊 P2（2026-08-31；Docs/ANTICHEAT_PLAN.md §4.2/4.3）---
+	// 公證房鍵：首次入睡時 server 生成後複製——escrow 登記與 quorum 見證都以它定址；
+	// 未配置後端時恆空（零消費者）
+	UPROPERTY(Replicated)
+	FString NotaryRoomId;
+
+	// 本回合受害者從入睡到睜眼的耗時（秒；server 於睜眼當幀寫入）——進 quorum digest
+	// ＝異常快的甦醒（秒醒外掛）成為全員可見、有簽名的案底
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	float LastWakeSeconds = 0.0f;
+
+	// 回合結果的正準摘要字串（P2 quorum digest 的素材）：只讀複製屬性＝host 與
+	// 每個 client 各自算都逐位相同。欄位序固定、玩家依 PlayerId 排序。
+	FString BuildRoundAttestCanon() const;
+
 	// 計時相位的結束時間（server world time）；非計時相位為 0
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	float PhaseEndServerTime = 0.0f;

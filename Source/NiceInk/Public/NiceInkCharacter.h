@@ -1221,6 +1221,19 @@ private:
 	int32 PersonaDownExpected = -1;
 	int32 PersonaDownReceived = 0;
 	FString PersonaDownToken;    // P1：下行攜帶的結算單（憑它向後端換簽章）
+
+	// --- 防作弊 P2 公證接線（本人端；Docs/ANTICHEAT_PLAN.md §4.2/4.3）---
+	// escrow 登記（拿到 slot 直接告訴後端、不經 host）＋quorum 見證（Resolution
+	// +0.6s 複製裕量後各端自算 digest 上報）＋栽贓偵測（結算後對賬揭曉作者 vs
+	// escrow 登記）。未配置後端＝首行早退零成本。
+	void MaybeNotarizeTick();
+	int32 NotaryEscrowSlot = INDEX_NONE;
+	int32 NotaryAttestedRound = INDEX_NONE;
+	int32 NotaryVerifiedRound = INDEX_NONE;
+	int32 NotaryArmedRound = INDEX_NONE;
+	float NotaryAttestAtTime = 0.0f;
+	float NotaryVerifyAtTime = 0.0f;
+	uint8 NotaryPrevPhase = 0;
 	// client 端進房上行：等 Persona 雲端拉取完成再發車（0.5s 輪詢、10s 放棄）
 	FTimerHandle PersonaUploadTimer;
 	int32 PersonaUploadTicksLeft = 0;

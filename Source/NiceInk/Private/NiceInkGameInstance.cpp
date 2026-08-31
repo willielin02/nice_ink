@@ -284,12 +284,29 @@ void UNiceInkGameInstance::NiNotaryTest()
 						return;
 					}
 					FNiceInkNotary::RequestSignPersona(Puid, Sha, Token,
-						[Check, Finish, Puid, Sha](bool bOk4, int32 Seq4, FString Sig4)
+						[Check, Finish, Puid, Sha, Token](bool bOk4, int32 Seq4, FString Sig4)
 					{
 						Check(TEXT("憑單簽發 seq=2"), bOk4 && Seq4 == 2);
 						Check(TEXT("seq=2 簽章驗過"), bOk4 &&
 							FNiceInkNotary::VerifyPersonaSig(Puid, Seq4, Sha, Sig4));
-						Finish();
+						// P2：escrow 登記→（已結算）單 slot 揭示→settlement 查詢
+						const FString Room = TEXT("testroom_") + Puid;
+						FNiceInkNotary::RequestEscrowRegister(Puid, Room, 1, 77,
+							[Check, Finish, Puid, Room, Token](bool bReg)
+						{
+							Check(TEXT("escrow 登記"), bReg);
+							FNiceInkNotary::RequestEscrowReveal(Puid, Room, 1, 77,
+								[Check, Finish, Puid, Room, Token](bool bRev, FString Author)
+							{
+								Check(TEXT("escrow 已結算單 slot 揭示=本人"), bRev && Author == Puid);
+								FNiceInkNotary::RequestSettlement(Room, 1,
+									[Check, Finish, Token](bool bTok, FString Tok2)
+								{
+									Check(TEXT("settlement 查詢=token"), bTok && Tok2 == Token);
+									Finish();
+								});
+							});
+						});
 					});
 				});
 			});

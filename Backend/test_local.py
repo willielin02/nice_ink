@@ -65,10 +65,24 @@ r = c.post("/attest", json={"dev_puid": "P4", "room": "R", "round": 2,
                             "digest": hashlib.sha256(b"liar").hexdigest(), "roster_size": 4})
 check("c6 異見不結算", r.json()["settled"] is False)
 
-# 6. 有結算單＝簽發放行，序號 +1
+# 6. 有結算單＝簽發放行，序號 +1（P1 是該回合見證人）
 r = c.post("/sign-persona", json={"dev_puid": "P1", "blob_sha256": H2,
                                   "settlement_token": token})
 check("c7 憑單簽發 seq=2", r.status_code == 200 and r.json()["seq"] == 2)
+
+# 6b. P2 新規：**有帳本的**非見證人拿別人的 token 簽＝拒（token 在房內流通不含權力；
+#     新 puid 首簽本來就免單＝不在此規之列）
+r = c.post("/sign-persona", json={"dev_puid": "P9", "blob_sha256": H1})
+check("c7b0 P9 首簽建帳本", r.status_code == 200 and r.json()["seq"] == 1)
+r = c.post("/sign-persona", json={"dev_puid": "P9", "blob_sha256": H2,
+                                  "settlement_token": token})
+check("c7b 非見證人憑單簽發 403", r.status_code == 403)
+
+# 6c. settlement 查詢（host 輪詢路）
+r = c.get("/settlement/R/1")
+check("c7c settlement 查詢=token", r.json()["settlement_token"] == token)
+r = c.get("/settlement/R/9")
+check("c7d 未結算回合查詢=null", r.json()["settlement_token"] is None)
 
 # 7. 防回滾：latest-seq 永遠指向最新
 r = c.get("/latest-seq/P1")
@@ -79,17 +93,20 @@ r = c.post("/sign-persona", json={"dev_puid": "P1", "blob_sha256": H1,
                                   "settlement_token": "f" * 64})
 check("c9 假單 403", r.status_code == 403)
 
-# 9. escrow：登記→指認前拒釋出→指認後釋出；slot 衝突拒
+# 9. escrow（P2 制）：登記；slot 衝突拒；未結算回合拒釋出；已結算＝單 slot 釋出；
+#    未登記 slot 404（未指認作品的作者保密到底）
 r = c.post("/escrow/register", json={"dev_puid": "P2", "room": "R", "round": 1, "slot": 7})
 check("c10 escrow 登記", r.status_code == 200)
 r = c.post("/escrow/register", json={"dev_puid": "P3", "room": "R", "round": 1, "slot": 7})
 check("c11 slot 衝突 409", r.status_code == 409)
-r = c.post("/escrow/reveal", json={"dev_puid": "P1", "room": "R", "round": 1,
-                                   "accusation_locked": False})
-check("c12 指認前拒釋出", r.status_code == 403)
-r = c.post("/escrow/reveal", json={"dev_puid": "P1", "room": "R", "round": 1,
-                                   "accusation_locked": True})
-check("c13 指認後釋出對照", r.status_code == 200 and r.json()["mapping"].get("7") == "P2")
+r = c.post("/escrow/register", json={"dev_puid": "P3", "room": "R", "round": 2, "slot": 9})
+check("c11b 次回合登記", r.status_code == 200)
+r = c.post("/escrow/reveal", json={"dev_puid": "P1", "room": "R", "round": 2, "slot": 9})
+check("c12 未結算回合拒釋出", r.status_code == 403)
+r = c.post("/escrow/reveal", json={"dev_puid": "P1", "room": "R", "round": 1, "slot": 7})
+check("c13 已結算單 slot 釋出", r.status_code == 200 and r.json()["author_puid"] == "P2")
+r = c.post("/escrow/reveal", json={"dev_puid": "P1", "room": "R", "round": 1, "slot": 42})
+check("c13b 未登記 slot 404", r.status_code == 404)
 
 # 10. dev 模式邊界：無身分 401
 r = c.post("/sign-persona", json={"blob_sha256": H1})
@@ -99,4 +116,4 @@ print()
 if FAILS:
     print("RESULT: FAIL", FAILS)
     raise SystemExit(1)
-print("RESULT: DONE 14/14")
+print("RESULT: DONE all pass")

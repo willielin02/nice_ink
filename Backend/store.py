@@ -94,16 +94,19 @@ def escrow_register(room: str, rnd: int, slot: int, author_puid: str) -> bool:
     return True
 
 
-def escrow_reveal(room: str, rnd: int):
-    """釋出並標記；回 {slot: author_puid}。呼叫端負責時序閘（指認已提交）。"""
+def escrow_get(room: str, rnd: int, slot: int):
+    """單 slot 查作者（P2：只揭被指認那顆——未指認作品的作者保密到底）。"""
     with _lock, _conn() as c:
-        rows = c.execute(
-            "SELECT slot, author_puid FROM escrow WHERE room=? AND round=?", (room, rnd)
-        ).fetchall()
-        c.execute(
-            "UPDATE escrow SET revealed=1 WHERE room=? AND round=?", (room, rnd)
-        )
-    return {slot: author for slot, author in rows}
+        row = c.execute(
+            "SELECT author_puid FROM escrow WHERE room=? AND round=? AND slot=?",
+            (room, rnd, slot),
+        ).fetchone()
+        if row is not None:
+            c.execute(
+                "UPDATE escrow SET revealed=1 WHERE room=? AND round=? AND slot=?",
+                (room, rnd, slot),
+            )
+    return row[0] if row else None
 
 
 def attest_put(room: str, rnd: int, puid: str, digest: str, self_works: str) -> None:
@@ -137,3 +140,21 @@ def settlement_get_by_token(token: str):
         return c.execute(
             "SELECT room, round, digest FROM settlement WHERE token=?", (token,)
         ).fetchone()
+
+
+def settlement_get(room: str, rnd: int):
+    with _lock, _conn() as c:
+        return c.execute(
+            "SELECT token, digest FROM settlement WHERE room=? AND round=?", (room, rnd)
+        ).fetchone()
+
+
+def attest_has(room: str, rnd: int, puid: str) -> bool:
+    with _lock, _conn() as c:
+        return (
+            c.execute(
+                "SELECT 1 FROM attest WHERE room=? AND round=? AND puid=?",
+                (room, rnd, puid),
+            ).fetchone()
+            is not None
+        )

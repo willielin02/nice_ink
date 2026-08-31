@@ -345,10 +345,16 @@ public:
 	// 舊本體（反序列化＋鉗位＋套用＋熱備）：未配置後端時行為與 P1 之前逐位相同
 	void ApplyPersonaBytesNow(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);
 
-	// P1 結算見證：指認判定當幀向後端 /attest 換 settlement token（host 單見證＝
-	// 過渡語意，Phase 2 升 quorum 同一介面）；token 由其後的 Persist 點消費。
+	// P2 結算見證（quorum）：指認判定當幀 host 以自己的 digest 上報 /attest；
+	// 其餘見證人由各 client 的 MaybeNotarizeTick 自行上報（不經 host）——
+	// ⅔ 一致才結算。host 的 token 可能落在別人的回應裡＝輪詢 /settlement 補拿。
 	// 1.2s 上墨儀式窗天然吸收 HTTP 往返。
 	void RequestRoundAttest();
+	void PollSettlementToken(int32 TriesLeft);
+
+	// P0-3/P2：本回合入睡起點（world seconds）——甦醒耗時＝睜眼當幀寫進
+	// GameState.LastWakeSeconds 進 quorum digest（秒醒案底全員可見）
+	float TraceSleepStartTime = 0.0f;
 
 	// P1：玩家宣稱「我沒有雲端資產」（新玩家/空身）——對後端帳本驗：seq=0＝真新人
 	//（verified 乾淨開局）；seq>0＝有簽發史卻宣稱沒有＝洗白攻擊（unverified＝本場不落雲）

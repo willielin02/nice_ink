@@ -48,10 +48,15 @@ def sign_persona(req: SignPersonaReq):
         # 同一個 token 介面）。沒有這條，客戶端自送「清空版」照樣拿真簽章＝自行消除復活。
         if not req.settlement_token:
             raise HTTPException(status_code=403, detail="已有帳本，簽發需附 settlement_token")
-        if store.settlement_get_by_token(req.settlement_token) is None:
+        row = store.settlement_get_by_token(req.settlement_token)
+        if row is None:
             raise HTTPException(status_code=403, detail="settlement_token 無效")
-        # TODO(Phase 2)：digest 格式定案後，驗 token 的 digest 內含此 puid 的預期 blob 雜湊
-        # ——把「結算過」升級成「結算出的就是這一份」。
+        # P2：簽發者必須是該回合的見證人——token 在房內流通（下行 RPC/settlement
+        # 查詢都拿得到），少這條＝任何拿到 token 的人都能簽任意 blob
+        if not store.attest_has(row[0], row[1], puid):
+            raise HTTPException(status_code=403, detail="簽發者不是該回合的見證人")
+        # TODO(Phase 3)：digest 綁 per-player blob 雜湊——把「結算過」升級成
+        # 「結算出的就是這一份」。
     seq = store.bump_seq(puid, req.blob_sha256.lower())
     sig = signing.sign_persona(puid, seq, req.blob_sha256)
     return {"puid": puid, "seq": seq, "sig_hex": sig}
@@ -89,17 +94,29 @@ class EscrowRevealReq(BaseModel):
     steam_ticket: str | None = None
     room: str
     round: int
-    accusation_locked: bool = False  # 時序鐵則：指認提交後才准釋出
+    slot: int
 
 
 @app.post("/escrow/reveal")
 def escrow_reveal(req: EscrowRevealReq):
     _auth(req.model_dump())
-    if not req.accusation_locked:
-        raise HTTPException(status_code=403, detail="指認未提交，不釋出")
-    # TODO(Phase 2)：accusation_locked 不能只信呼叫端宣稱——改為驗「指認事件已進 attest
-    # digest」或要求受害者本人的簽名請求。v1 記疤。
-    return {"mapping": store.escrow_reveal(req.room, req.round)}
+    # P2 時序閘：該回合已結算（quorum 過）才釋出——結算恆在指認判定之後 ⇒
+    # 沉睡中的改裝受害者拿不到對照（原 accusation_locked 旗標信呼叫端＝可提前偷看，已拆）。
+    # 且只揭「被指認那一顆 slot」：未指認作品的作者保密到底（設計：巡禮只揭被選那幅）。
+    if store.settlement_get(req.room, req.round) is None:
+        raise HTTPException(status_code=403, detail="該回合未結算，不釋出")
+    author = store.escrow_get(req.room, req.round, req.slot)
+    if author is None:
+        raise HTTPException(status_code=404, detail="slot 未登記")
+    return {"author_puid": author}
+
+
+@app.get("/settlement/{room}/{round_no}")
+def get_settlement(room: str, round_no: int):
+    # host 輪詢用：quorum 由其他見證人補齊時，token 落在別人的 /attest 回應裡。
+    # token 本身不含權力（/sign-persona 另驗「簽發者=見證人」）＝公開查詢無害。
+    row = store.settlement_get(room, round_no)
+    return {"settlement_token": row[0] if row else None}
 
 
 # ---------- attest：回合結算見證（Phase1 host 單見證／Phase2 quorum 同介面） ----------

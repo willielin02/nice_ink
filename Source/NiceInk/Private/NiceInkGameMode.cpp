@@ -876,32 +876,29 @@ void ANiceInkGameMode::RequestRoundAttest()
 		UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: host 無 PUID — 本輪無結算單（不落雲）"));
 		return;
 	}
-	if (NotaryRoomId.IsEmpty())
+	ANiceInkGameState* GS = NIState();
+	if (!GS)
 	{
-		NotaryRoomId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+		return;
 	}
-	const ANiceInkGameState* GS = NIState();
-	const int32 Round = GS ? GS->CurrentRound : 0;
+	if (GS->NotaryRoomId.IsEmpty())
+	{
+		GS->NotaryRoomId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	}
+	NotaryRoomId = GS->NotaryRoomId;
+	const int32 Round = GS->CurrentRound;
 
-	// digest＝回合結果的正準字串（P1 後端不驗語意、host 單見證＝過渡；Phase 2 這裡
-	// 換 quorum digest 規格：全員各自簽、含自我作品雜湊）
-	FString Canon = FString::Printf(TEXT("R|%s|%d|%d|%d"), *NotaryRoomId, Round,
-		GS ? GS->VictimPlayerId : INDEX_NONE, GS ? GS->RevealedAuthorId : INDEX_NONE);
-	if (GS)
-	{
-		for (const APlayerState* P : GS->PlayerArray)
-		{
-			const ANiceInkPlayerState* NiPS = Cast<ANiceInkPlayerState>(P);
-			Canon += FString::Printf(TEXT("|%d:%d"), P ? P->GetPlayerId() : -1, NiPS ? NiPS->Cash : 0);
-		}
-	}
-	const FTCHARToUTF8 Utf8(*Canon);
+	// P2 quorum digest：正準字串住 GameState（host 與各 client 從同一組複製屬性各自算
+	// ＝逐位相同）；host 端＝權威值當幀即定，立即上報。其餘見證人各自從
+	// MaybeNotarizeTick 上報（Resolution +0.6s 複製裕量）。
+	const FTCHARToUTF8 Utf8(*GS->BuildRoundAttestCanon());
 	TArray<uint8> CanonBytes;
 	CanonBytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
 	const FString Digest = FNiceInkNotary::Sha256Hex(CanonBytes);
+	const int32 RosterSize = GS->PlayerArray.Num();
 
 	TWeakObjectPtr<ANiceInkGameMode> WeakThis = this;
-	FNiceInkNotary::RequestAttest(HostPuid, NotaryRoomId, Round, Digest, /*RosterSize=*/1,
+	FNiceInkNotary::RequestAttest(HostPuid, NotaryRoomId, Round, Digest, RosterSize,
 		[WeakThis](bool bSettled, FString Token)
 		{
 			ANiceInkGameMode* GM = WeakThis.Get();
@@ -915,9 +912,57 @@ void ANiceInkGameMode::RequestRoundAttest()
 			}
 			else
 			{
-				UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: /attest 未結算 — 本輪 Persist 不落雲"));
+				// quorum 未齊（其餘見證人還在路上）：輪詢補拿——token 會落在
+				// 跨過門檻那個見證人的回應裡
+				GM->PollSettlementToken(8);
 			}
 		});
+}
+
+void ANiceInkGameMode::PollSettlementToken(int32 TriesLeft)
+{
+	if (!RoundSettlementToken.IsEmpty())
+	{
+		return;
+	}
+	FTimerHandle Unused;
+	TWeakObjectPtr<ANiceInkGameMode> WeakThis = this;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this,
+		[WeakThis, TriesLeft]()
+	{
+		ANiceInkGameMode* GM = WeakThis.Get();
+		if (!GM || !GM->RoundSettlementToken.IsEmpty())
+		{
+			return;
+		}
+		const ANiceInkGameState* GS = GM->NIState();
+		if (!GS)
+		{
+			return;
+		}
+		FNiceInkNotary::RequestSettlement(GM->NotaryRoomId, GS->CurrentRound,
+			[WeakThis, TriesLeft](bool bOk, FString Token)
+			{
+				ANiceInkGameMode* GM2 = WeakThis.Get();
+				if (!GM2)
+				{
+					return;
+				}
+				if (bOk)
+				{
+					GM2->RoundSettlementToken = Token;
+				}
+				else if (TriesLeft > 1)
+				{
+					GM2->PollSettlementToken(TriesLeft - 1);
+				}
+				else
+				{
+					UE_LOG(LogTemp, Warning,
+						TEXT("NiAnticheat: quorum 未齊（見證人不足/意見分歧）— 本輪 Persist 不落雲"));
+				}
+			});
+	}), 1.0f, false);
 }
 
 void ANiceInkGameMode::PersistAllCharacters()
@@ -1962,6 +2007,13 @@ void ANiceInkGameMode::BeginVictimSleep(bool bAlreadyLying)
 		TraceWakeEarliestTime = (VMax > KINDA_SMALL_NUMBER && TraceParams.PerimeterCm > 0.0f)
 			? GetWorld()->GetTimeSeconds() + TraceParams.PerimeterCm / VMax * TraceWakeFloorFactor
 			: 0.0f;
+		// P2：甦醒耗時的量測起點＋公證房鍵（首夢生成後複製——escrow 登記與 quorum
+		// 見證都以它定址；未配置後端恆空）
+		TraceSleepStartTime = GetWorld()->GetTimeSeconds();
+		if (FNiceInkNotary::IsConfigured() && GS->NotaryRoomId.IsEmpty())
+		{
+			GS->NotaryRoomId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+		}
 
 		const int32 TraceSeed = DebugForcedTraceSeed > 0
 			? DebugForcedTraceSeed

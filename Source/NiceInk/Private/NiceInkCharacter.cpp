@@ -474,6 +474,7 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	Super::Tick(DeltaSeconds);
 
 	EnsureAvatarApplied();
+	MaybeNotarizeTick(); // P2 公證接線（未配置後端＝首行早退零成本）
 
 	APlayerController* PC = Cast<APlayerController>(GetController());
 	const bool bLocal = PC && IsLocallyControlled();
@@ -3255,6 +3256,17 @@ void ANiceInkCharacter::ServerOpenEyesNow()
 		return;
 	}
 	bEyesOpen = true;
+	// P2：甦醒耗時寫進 GameState（複製）＝進 quorum digest 的全員可見案底
+	if (ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr)
+	{
+		if (const ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
+		{
+			if (GM->TraceSleepStartTime > 0.0f)
+			{
+				GS->LastWakeSeconds = GetWorld()->GetTimeSeconds() - GM->TraceSleepStartTime;
+			}
+		}
+	}
 	ApplySleepVisual();
 	// P0-2：睜眼當幀把全角色踢一次 net update——凍結連線的恢復不能等下一個複製節拍
 	//（偷看的第一眼要看得到人）
@@ -3707,6 +3719,125 @@ namespace
 {
 	constexpr int32 PersonaChunkSize = 16 * 1024;
 	constexpr int32 PersonaMaxBytes = 4 * 1024 * 1024; // 資產＝向量筆劃，KB 級；4MB＝瘋值上限
+}
+
+void ANiceInkCharacter::MaybeNotarizeTick()
+{
+	// P2 公證接線（Docs/ANTICHEAT_PLAN.md §4.2/4.3）；未配置後端＝首行早退零成本
+	if (!FNiceInkNotary::IsConfigured() || !IsLocallyControlled())
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World || World->WorldType != EWorldType::Game)
+	{
+		return;
+	}
+	ANiceInkGameState* GS = World->GetGameState<ANiceInkGameState>();
+	if (!GS || GS->NotaryRoomId.IsEmpty())
+	{
+		return;
+	}
+	UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this);
+	const FString Puid = Persona ? Persona->GetLocalPuid() : FString();
+	if (Puid.IsEmpty())
+	{
+		return;
+	}
+	const float Now = World->GetTimeSeconds();
+
+	// ① escrow 登記：拿到本回合 slot 直接告訴後端「slot X＝我」——不經 host
+	//（host 自己是玩家也走這條＝對照完整；改裝 host 想栽贓要先過真作畫者的登記）
+	if (DrawSlotId != INDEX_NONE && DrawSlotId != NotaryEscrowSlot)
+	{
+		NotaryEscrowSlot = DrawSlotId;
+		FNiceInkNotary::RequestEscrowRegister(Puid, GS->NotaryRoomId, GS->CurrentRound, DrawSlotId,
+			[](bool bOk)
+			{
+				if (!bOk)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: escrow 登記失敗"));
+				}
+			});
+	}
+
+	// Resolution 進場偵測：武裝本回合的見證（+0.6s 複製裕量）與對賬（+3.0s＝結算後）時點
+	const uint8 PhaseNow = static_cast<uint8>(GS->CurrentPhase);
+	if (PhaseNow != NotaryPrevPhase)
+	{
+		NotaryPrevPhase = PhaseNow;
+		if (GS->CurrentPhase == ENiceInkPhase::Resolution && GS->CurrentRound != NotaryArmedRound)
+		{
+			NotaryArmedRound = GS->CurrentRound;
+			NotaryAttestAtTime = Now + 0.6f;
+			NotaryVerifyAtTime = Now + 3.0f;
+		}
+	}
+
+	// ② quorum 見證（host 的那一份由 GameMode::RequestRoundAttest 上報；client 在這裡）
+	if (!HasAuthority() && NotaryArmedRound != INDEX_NONE &&
+		NotaryArmedRound != NotaryAttestedRound && Now >= NotaryAttestAtTime)
+	{
+		NotaryAttestedRound = NotaryArmedRound;
+		const FTCHARToUTF8 Utf8(*GS->BuildRoundAttestCanon());
+		TArray<uint8> CanonBytes;
+		CanonBytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+		FNiceInkNotary::RequestAttest(Puid, GS->NotaryRoomId, NotaryArmedRound,
+			FNiceInkNotary::Sha256Hex(CanonBytes), GS->PlayerArray.Num(),
+			[](bool, FString) {}); // token 只有 host 的 Persist 需要（它自己輪詢）
+	}
+
+	// ③ 栽贓偵測（結算後、detection-only）：揭曉的作者必須＝escrow 登記的作者。
+	// 對不上＝host 在身分上說謊——log 留案底（經濟結果 quorum 已擋；併進 digest
+	// 屬 Phase 3 強化）。escrow 揭示被後端閘在「該回合已結算」之後＝偷跑不可能。
+	if (NotaryArmedRound != INDEX_NONE && NotaryArmedRound != NotaryVerifiedRound &&
+		Now >= NotaryVerifyAtTime &&
+		GS->ResolutionWorkId != INDEX_NONE && GS->RevealedAuthorId != INDEX_NONE)
+	{
+		NotaryVerifiedRound = NotaryArmedRound;
+		// 被指認那幅的 slot：client 畫布鍵＝slot；host 畫布鍵＝真名→查 GameMode 對照
+		int32 AccusedSlot = INDEX_NONE;
+		if (ANiceInkCharacter* Victim = FindByPlayerId(World, GS->VictimPlayerId))
+		{
+			FInkWork W;
+			if (Victim->InkCanvas && Victim->InkCanvas->GetWork(GS->ResolutionWorkId, W))
+			{
+				AccusedSlot = W.AuthorId;
+				if (HasAuthority())
+				{
+					if (const ANiceInkGameMode* GM = World->GetAuthGameMode<ANiceInkGameMode>())
+					{
+						if (const int32* Found = GM->DrawSlotByAuthor.Find(W.AuthorId))
+						{
+							AccusedSlot = *Found;
+						}
+					}
+				}
+			}
+		}
+		const APlayerState* AuthorPS = GS->FindPlayerStateById(GS->RevealedAuthorId);
+		const FString ExpectedPuid = AuthorPS
+			? UNiceInkPersonaSubsystem::PuidFromNetIdString(AuthorPS->GetUniqueId().ToString())
+			: FString();
+		if (AccusedSlot != INDEX_NONE && !ExpectedPuid.IsEmpty())
+		{
+			const int32 CheckedRound = NotaryArmedRound;
+			FNiceInkNotary::RequestEscrowReveal(Puid, GS->NotaryRoomId, CheckedRound, AccusedSlot,
+				[ExpectedPuid, CheckedRound](bool bOk, FString AuthorPuid)
+				{
+					if (!bOk)
+					{
+						return; // 未結算/未登記＝無從對賬（quorum 失敗那一輪本來就不落盤）
+					}
+					if (!AuthorPuid.Equals(ExpectedPuid, ESearchCase::IgnoreCase))
+					{
+						UE_LOG(LogTemp, Error,
+							TEXT("NiAnticheat: ESCROW MISMATCH round=%d — 揭曉作者與 escrow 登記不符（host 竄改身分？）"),
+							CheckedRound);
+					}
+				});
+		}
+	}
 }
 
 void ANiceInkCharacter::MaybeUploadPersona()
