@@ -3675,3 +3675,23 @@ robo_trace 迴歸 **21/1**＝失敗名與當日基線逐字相同（環境性 t3
 ——斷線會丟該段現金變動；②B5 Steam 票證的身分軸（SteamID64 vs EOS PUID）接 B5 前必裁。
 **未動工**：escrow 遊戲端接線（slot 登記不經 host）＝併 Phase 2；正式部署＝§7 外部依賴。
 
+## 2026-08-31 追記96：防作弊 Phase 2＝quorum 見證＋escrow 接線＋甦醒案底（BUILT-自驗）
+
+commit a296149；實作定案全文＝`Docs/ANTICHEAT_PLAN.md` §4.2/4.3「Phase 2 接線實作定案」。
+一句話：**host 對持久結果（刺青/現金）的作弊從此要說服 ⅔ 的獨立機器一起說謊。**
+
+- **quorum**：digest 正準來源＝GameState 複製屬性（`BuildRoundAttestCanon`）——host 與
+  各 client 從同一組複製屬性各自算＝逐位相同；client 在 Resolution +0.6s 上報；
+  host token 輪詢 `GET /settlement`。`/sign-persona` 加「簽發者＝該回合見證人」。
+- **escrow**：作畫者拿到 slot 當幀直接登記後端（不經 host）；揭示閘＝該回合已結算＋
+  **只揭被指認那顆 slot**（未指認作品作者保密到底；原 accusation_locked 洞已拆）；
+  Resolution +3s 全端栽贓對賬（不符＝ESCROW MISMATCH Error 案底、detection-only）。
+- **甦醒耗時**＝`GS.LastWakeSeconds` 進 digest＝秒醒案底全員可見。
+- **commit-reveal 延後**（無客戶端驗證＝安全劇場；隨機抽選只在開局第一抽）。
+
+**驗證**：後端 test_local **21/21**；NiNotaryTest 真 HTTP **15/15**；robo_trace 迴歸
+**21/1**＝基線逐字＝零迴歸。**誠實邊界**：quorum 的多端真連線行為（digest 複製競態、
+token 輪詢時序）PIE 迴路測不出（08-14「robo 綠但 PIE 測不出平滑」同族）＝**待雙機
+EOS 真線＋後端部署後實測**；栽贓偵測目前 detection-only（寫進 digest 使回合不結算
+＝Phase 3 強化）。
+

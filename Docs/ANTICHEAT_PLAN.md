@@ -240,7 +240,7 @@ API 現實：TikTok Display API **不提供影片檔下載**（只有 id/描述/
 |---|---|---|
 | Phase 0 | P0-1 slot 化／P0-2 複製過濾／P0-3 描圖校驗 | **BUILT-自驗 2026-08-31**：編譯綠；robo_trace 21/1（唯一 FAIL＝t3 observer 需第三個 PIE 世界＝2-client 降級後結構性不可跑、非本批）；robo_directdraw 59/6（六失敗名＝ghosts/shader row-metered/palette/far×3＝既有失敗集逐字子集、零新增）；robo_feign 23/0；**新儀器 robo_sleepfreeze_probe 6/6**（server 作畫者走 466.3cm、沉睡受害者世界複本位移 0.0cm＝凍結實錘；睜眼後 d=0.0＝收斂即時）；喚醒鉤子 7 支腳本換 `DebugRoboWake`。**沉睡凍結的視覺（偷看第一眼、醒來 snap）待 user viewport** |
 | Phase 1 | 後端骨架＋/sign-persona＋/escrow＋遊戲端接線（本地可跑） | **BUILT-自驗 2026-08-31（commit 5c24d5d）**：後端 14/14＋NiNotaryTest 真 HTTP 12/12＋robo_trace 迴歸 21/1（基線逐字）；正式生效待 §7 部署（BaseUrl 現為空＝功能關閉）。escrow 的遊戲端接線（slot 登記不經 host）未動工＝併 Phase 2 |
-| Phase 2 | /attest quorum＋commit-reveal＋描圖耗時入 digest | 未動工 |
+| Phase 2 | /attest quorum＋escrow 接線＋甦醒耗時入 digest | **BUILT-自驗 2026-08-31（commit a296149）**：後端 21/21＋NiNotaryTest 15/15＋robo_trace 迴歸 21/1（基線逐字）。quorum 的多端真連線行為（digest 競態、token 輪詢時序）**待雙機/EOS 真線驗**（PIE 迴路測不出＝08-14 血價同族）。commit-reveal 延後（見 §4.3 定案） |
 | Phase 3 | TikTok adapter＋AI 審核＋Steam Inventory | 未動工（外部依賴 §7） |
 
 ## 9. SPEC 待回寫（累積，等 user 授權對齊時一次寫入）
