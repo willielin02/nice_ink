@@ -29,6 +29,12 @@ public:
 	// 防雙重還原（上行與逾時 fallback 是兩條並行路）
 	bool bAssetsRestored = false;
 
+	// server-only（P1 簽章制；Docs/ANTICHEAT_PLAN.md §4.1）：persona 經驗證進房
+	//（簽章＋序號過、或「空身宣稱」對過後端帳本）。false＝本場一律不落雲——
+	// 「假裝雲端故障進房洗白」的人打完整場，金庫原封不動；誠實玩家的暫時性
+	// 雲端故障也因此不會被結算回寫成永久抹除。未配置後端時此旗標不消費。
+	bool bPersonaVerified = false;
+
 	// 房主（listen server 本人；2026-08-13 大廳房主標示＋ESC 踢人 UI 的依據）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	bool bIsRoomHost = false;

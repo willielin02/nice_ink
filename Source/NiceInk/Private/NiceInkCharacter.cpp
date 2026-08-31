@@ -37,6 +37,7 @@
 #include "NiceInkGameMode.h"
 #include "NiceInkGameState.h"
 #include "NiceInkFaceShare.h"
+#include "NiceInkNotary.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSessionSubsystem.h"
@@ -3740,20 +3741,28 @@ void ANiceInkCharacter::MaybeUploadPersona()
 	const TArray<uint8>& Bytes = Persona->GetCachedAssets();
 	if (!Persona->HasCloudAssets() || Bytes.Num() <= 0 || Bytes.Num() > PersonaMaxBytes)
 	{
-		return; // 新帳號無資產：不上行，server 逾時 fallback（多半也是空）＝乾淨新身
+		// 新帳號無資產：不上行。P1＝明講「我是空身」讓 host 對後端帳本驗真偽
+		//（沉默＝unverified＝本場不落雲；真新人要拿到 verified 才能正常開始累積）
+		if (FNiceInkNotary::IsConfigured())
+		{
+			ServerPersonaNone();
+		}
+		return; // 未配置後端：server 逾時 fallback（多半也是空）＝乾淨新身，同舊制
 	}
 
-	ServerPersonaBegin(Bytes.Num());
+	// P1：簽章走 Begin 欄位（bytes 恆為裸 payload——host 驗簽對 payload 算 sha）
+	ServerPersonaBegin(Bytes.Num(), Persona->GetCachedSeq(), Persona->GetCachedSigHex());
 	for (int32 Off = 0; Off < Bytes.Num(); Off += PersonaChunkSize)
 	{
 		TArray<uint8> Chunk(Bytes.GetData() + Off, FMath::Min(PersonaChunkSize, Bytes.Num() - Off));
 		ServerPersonaChunk(Off, Chunk);
 	}
 	ServerPersonaEnd(FCrc::MemCrc32(Bytes.GetData(), Bytes.Num()));
-	UE_LOG(LogTemp, Log, TEXT("NiPersona: uploaded %d bytes to host"), Bytes.Num());
+	UE_LOG(LogTemp, Log, TEXT("NiPersona: uploaded %d bytes to host (seq=%d)"),
+		Bytes.Num(), Persona->GetCachedSeq());
 }
 
-void ANiceInkCharacter::ServerPersonaBegin_Implementation(int32 TotalBytes)
+void ANiceInkCharacter::ServerPersonaBegin_Implementation(int32 TotalBytes, int32 SigSeq, const FString& SigHex)
 {
 	const ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>();
 	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes || (PS && PS->bAssetsRestored))
@@ -3761,8 +3770,20 @@ void ANiceInkCharacter::ServerPersonaBegin_Implementation(int32 TotalBytes)
 		PersonaUpExpected = -1; // 拒收（已還原過＝重複列車；或瘋值）
 		return;
 	}
+	// P1：簽章格式明顯不合＝在 Begin 就拒（省整條列車頻寬）；SigSeq=0＝未簽章的
+	// 遷移路照收（真偽由 ApplyUploadedPersona 對後端帳本裁決）
+	if (FNiceInkNotary::IsConfigured() &&
+		(SigSeq < 0 || (SigSeq > 0 && SigHex.Len() != 128)))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: persona 列車簽章格式不合（seq=%d sigLen=%d）— 拒收"),
+			SigSeq, SigHex.Len());
+		PersonaUpExpected = -1;
+		return;
+	}
 	PersonaUpExpected = TotalBytes;
 	PersonaUpReceived = 0;
+	PersonaUpSeq = SigSeq;
+	PersonaUpSig = SigHex;
 	PersonaUpBuf.SetNumZeroed(TotalBytes);
 }
 
@@ -3777,6 +3798,14 @@ void ANiceInkCharacter::ServerPersonaChunk_Implementation(int32 Offset, const TA
 	PersonaUpReceived += Bytes.Num();
 }
 
+void ANiceInkCharacter::ServerPersonaNone_Implementation()
+{
+	if (ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr)
+	{
+		GM->ResolveNoPersonaClaim(this);
+	}
+}
+
 void ANiceInkCharacter::ServerPersonaEnd_Implementation(uint32 Crc)
 {
 	if (PersonaUpExpected < 0 || PersonaUpReceived != PersonaUpExpected ||
@@ -3787,20 +3816,22 @@ void ANiceInkCharacter::ServerPersonaEnd_Implementation(uint32 Crc)
 	}
 	else if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
 	{
-		GM->ApplyUploadedPersona(this, PersonaUpBuf);
+		GM->ApplyUploadedPersona(this, PersonaUpBuf, PersonaUpSeq, PersonaUpSig);
 	}
 	PersonaUpBuf.Empty();
 	PersonaUpExpected = -1;
 	PersonaUpReceived = 0;
+	PersonaUpSeq = 0;
+	PersonaUpSig.Reset();
 }
 
-void ANiceInkCharacter::SendPersonaToOwner(const TArray<uint8>& Bytes)
+void ANiceInkCharacter::SendPersonaToOwner(const TArray<uint8>& Bytes, const FString& SettlementToken)
 {
 	if (!HasAuthority() || Bytes.Num() <= 0 || Bytes.Num() > PersonaMaxBytes)
 	{
 		return;
 	}
-	ClientPersonaBegin(Bytes.Num());
+	ClientPersonaBegin(Bytes.Num(), SettlementToken);
 	for (int32 Off = 0; Off < Bytes.Num(); Off += PersonaChunkSize)
 	{
 		TArray<uint8> Chunk(Bytes.GetData() + Off, FMath::Min(PersonaChunkSize, Bytes.Num() - Off));
@@ -3809,7 +3840,7 @@ void ANiceInkCharacter::SendPersonaToOwner(const TArray<uint8>& Bytes)
 	ClientPersonaEnd(FCrc::MemCrc32(Bytes.GetData(), Bytes.Num()));
 }
 
-void ANiceInkCharacter::ClientPersonaBegin_Implementation(int32 TotalBytes)
+void ANiceInkCharacter::ClientPersonaBegin_Implementation(int32 TotalBytes, const FString& SettlementToken)
 {
 	if (TotalBytes <= 0 || TotalBytes > PersonaMaxBytes)
 	{
@@ -3818,6 +3849,7 @@ void ANiceInkCharacter::ClientPersonaBegin_Implementation(int32 TotalBytes)
 	}
 	PersonaDownExpected = TotalBytes;
 	PersonaDownReceived = 0;
+	PersonaDownToken = SettlementToken;
 	PersonaDownBuf.SetNumZeroed(TotalBytes);
 }
 
@@ -3840,12 +3872,41 @@ void ANiceInkCharacter::ClientPersonaEnd_Implementation(uint32 Crc)
 	{
 		if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
 		{
-			Persona->StoreAssets(PersonaDownBuf); // 快取＋寫自己的雲端保險箱
+			const FString Puid = Persona->GetLocalPuid();
+			if (FNiceInkNotary::IsConfigured() && !PersonaDownToken.IsEmpty() && !Puid.IsEmpty())
+			{
+				// P1：憑結算單向後端換簽章（序號 +1＝舊備份作廢），簽好才落雲。
+				// 簽發失敗＝落未簽版＋留 log（下一個結算點會再試；host 端對未簽 blob
+				// 的取捨見 ApplyUploadedPersona 的帳本規則）
+				const FString Sha = FNiceInkNotary::Sha256Hex(PersonaDownBuf);
+				TArray<uint8> Payload = PersonaDownBuf;
+				TWeakObjectPtr<UNiceInkPersonaSubsystem> WeakP = Persona;
+				FNiceInkNotary::RequestSignPersona(Puid, Sha, PersonaDownToken,
+					[WeakP, Payload](bool bSignOk, int32 Seq, FString Sig)
+					{
+						UNiceInkPersonaSubsystem* P = WeakP.Get();
+						if (!P)
+						{
+							return;
+						}
+						if (!bSignOk)
+						{
+							UE_LOG(LogTemp, Warning,
+								TEXT("NiAnticheat: /sign-persona 失敗 — 本輪落未簽版"));
+						}
+						P->StoreAssets(Payload, bSignOk ? Seq : 0, bSignOk ? Sig : FString());
+					});
+			}
+			else
+			{
+				Persona->StoreAssets(PersonaDownBuf); // 未配置後端：與簽章制之前逐位相同
+			}
 		}
 	}
 	PersonaDownBuf.Empty();
 	PersonaDownExpected = -1;
 	PersonaDownReceived = 0;
+	PersonaDownToken.Reset();
 }
 
 // --- 自訂臉房內分發（2026-08-10）---

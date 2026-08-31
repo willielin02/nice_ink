@@ -76,8 +76,14 @@ public:
 	bool HasCloudAssets() const { return bHasCloudAssets; }
 	const TArray<uint8>& GetCachedAssets() const { return CachedAssets; }
 
-	// 結算下行終點：快取＋寫雲端（未登入＝只快取；bytes＝UNiceInkSaveGame 序列化）
-	void StoreAssets(const TArray<uint8>& Bytes);
+	// 簽章隨身（防作弊 P1；Docs/ANTICHEAT_PLAN.md §4.1）：CachedAssets 語意恆＝裸
+	// payload；信封（NIP1）只存在於 PDS 檔與網路線上。Seq=0＝未簽章（舊資料/未配置後端）。
+	int32 GetCachedSeq() const { return CachedSeq; }
+	const FString& GetCachedSigHex() const { return CachedSigHex; }
+
+	// 結算下行終點：快取＋寫雲端（未登入＝只快取；PayloadBytes＝UNiceInkSaveGame 序列化）。
+	// Seq>0＝以 NIP1 信封落雲；Seq=0＝寫裸 payload（與簽章制之前逐位相同）。
+	void StoreAssets(const TArray<uint8>& PayloadBytes, int32 Seq = 0, const FString& SigHex = FString());
 
 	// 偏好推雲端（GameInstance::SaveSettings 呼叫；套用雲端偏好期間抑制回推）
 	void PushSettings();
@@ -111,6 +117,8 @@ private:
 	EPullState AssetsPull = EPullState::NotStarted;
 	bool bHasCloudAssets = false;
 	TArray<uint8> CachedAssets;
+	int32 CachedSeq = 0;      // 簽章序號（P1；0=未簽章）
+	FString CachedSigHex;     // Ed25519 簽章 hex（P1）
 
 	bool bApplyingCloudSettings = false;
 	bool bDelegatesBound = false;

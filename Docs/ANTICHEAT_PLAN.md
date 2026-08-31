@@ -94,6 +94,34 @@
   單（擋住一般玩家單方自改；host 作弊暫不擋）；Phase 2 升級成 quorum 見證（host 也擋）。
   兩階段的請求格式同構（見證欄位從 1 份簽名變 N 份），升級零遷移。
 
+**Phase 1 接線實作定案（2026-08-31 施工中裁定，全部已落碼）**：
+- **信封制 NIP1**：`'NIP1'|seq|siglen|sig|payloadlen|payload`——信封只存在於 PDS 檔與
+  網路線上；`CachedAssets` 語意恆＝裸 payload（兩處直引它的消費者零改動）。簽的是
+  payload 的 sha256＝零自我指涉、避開 USaveGame delta-vs-CDO 序列化漂移。非 NIP1 magic
+  ＝舊裸 blob 遷移路（seq=0）。
+- **上行掛 Begin**：`ServerPersonaBegin(TotalBytes, SigSeq, SigHex)`——Begin 本來就是
+  拒收判定點，壞簽章格式不必收完 4MB 列車。
+- **驗證點**＝`ApplyUploadedPersona`：Ed25519 同步驗（引擎 OpenSSL 1.1.1t、~µs）＋
+  `latest-seq` 非同步防回滾。**所有失敗路徑一律「封口＋乾淨新身」，絕不 fallback
+  主機本機槽**（那是回滾後門）；逾時同理。
+- **`bPersonaVerified` 閘（把原判「Phase 2 才能關」的洗白洞提前關掉）**：未經驗證
+  進房的玩家**本場一律不落雲**＝金庫原封。新玩家走 `ServerPersonaNone` 宣稱空身、
+  host 對帳本驗「seq=0 才是真新人」；帳本 seq>0 卻宣稱空身＝「假裝雲端故障洗白」
+  ＝unverified。結果：洗白攻擊打完整場也改不動自己的雲端。
+- **結算單**：`HandleAccusation` 判定當幀 `/attest`（host 單見證 roster=1）、token 存
+  GameMode；1.2s 上墨儀式窗天然吸收 HTTP 往返。**中途消費點（雷射/搖晃）與 Logout
+  無單＝只寫主機本機槽、上雲延後到下一結算點——記帳待 user 裁**：斷線會丟「上一結算
+  點之後」的雷射/搖晃現金變動（併入 digest 是 Phase 2 選項）。
+- **fail-open 政策**（後端無回應時）：簽章已驗過的 blob 照套用（只損失該次回滾防護）、
+  空身宣稱視為新人——可用性優先，全部留 `NiAnticheat:` log。後端正常時無此路。
+- **host 本人**與遠端同構：同樣憑單 `/sign-persona` 換簽章再落雲（`PersistCharacter`）。
+- **儀器**＝`NiNotaryTest`（GameInstance Exec）：信封往返／SHA256 標準向量／簽發／
+  C++ 驗簽／篡改必敗／無單拒簽／latest-seq／attest／憑單簽發 seq 遞增，對本地後端
+  真 HTTP 跑（用法寫在標頭註解）。
+- **⚠ B5 身分軸未爆彈**：簽章訊息的 puid＝EOS Connect PUID；後端 dev 模式收自報＝
+  自洽。B5 換 Steam 票證後 `AuthenticateUserTicket` 回的是 SteamID64——要嘛後端維護
+  SteamID↔PUID 對照、要嘛訊息換軸（舊簽章全失效＝要遷移）。**接 B5 前必先裁。**
+
 ### 4.2 escrow（作者保密連 host 都防）
 - 作畫者鎖定受害者開畫時，直接 HTTPS 告訴後端「房 R 回合 T 的 slot X＝我」，**不經 host**；
   指認提交後後端才釋出對照供揭曉。全房（含改裝 host、host 自己是受害者）整局只見不透明 slot。

@@ -1,5 +1,6 @@
 #include "NiceInkPersonaSubsystem.h"
 
+#include "NiceInkNotary.h"
 #include "NiceInkPortraitBooth.h"
 
 #include "Async/Async.h"
@@ -172,16 +173,27 @@ void UNiceInkPersonaSubsystem::OnReadUserFileComplete(bool bWasSuccessful, const
 
 	if (FileName == CloudAssetsFile)
 	{
-		CachedAssets.Reset();
+		TArray<uint8> Raw;
 		if (bWasSuccessful && Cloud.IsValid())
 		{
-			Cloud->GetFileContents(UserId, FileName, CachedAssets);
+			Cloud->GetFileContents(UserId, FileName, Raw);
+		}
+		// P1 簽章隨身：雲端檔可能是 NIP1 信封（簽過）或舊裸 blob（未簽＝seq 0）。
+		// CachedAssets 語意恆＝裸 payload——下游（上行列車/CloudSaveView）零改動。
+		CachedAssets.Reset();
+		CachedSeq = 0;
+		CachedSigHex.Reset();
+		if (Raw.Num() > 0 &&
+			!FNiceInkNotary::ParseEnvelope(Raw, CachedAssets, CachedSeq, CachedSigHex))
+		{
+			UE_LOG(LogTemp, Warning, TEXT("NiPersona: 雲端資產信封損壞 — 視為無檔"));
+			CachedAssets.Reset();
 		}
 		bHasCloudAssets = CachedAssets.Num() > 0;
 		bCloudViewDirty = true;
 		AssetsPull = EPullState::Done;
-		UE_LOG(LogTemp, Log, TEXT("NiPersona: assets pull done (%s, %d bytes)"),
-			bWasSuccessful ? TEXT("hit") : TEXT("none"), CachedAssets.Num());
+		UE_LOG(LogTemp, Log, TEXT("NiPersona: assets pull done (%s, %d bytes, seq=%d)"),
+			bWasSuccessful ? TEXT("hit") : TEXT("none"), CachedAssets.Num(), CachedSeq);
 		return;
 	}
 
@@ -278,13 +290,15 @@ void UNiceInkPersonaSubsystem::PushSettings()
 	}
 }
 
-void UNiceInkPersonaSubsystem::StoreAssets(const TArray<uint8>& Bytes)
+void UNiceInkPersonaSubsystem::StoreAssets(const TArray<uint8>& PayloadBytes, int32 Seq, const FString& SigHex)
 {
-	if (Bytes.Num() <= 0)
+	if (PayloadBytes.Num() <= 0)
 	{
 		return;
 	}
-	CachedAssets = Bytes;
+	CachedAssets = PayloadBytes;
+	CachedSeq = Seq;
+	CachedSigHex = (Seq > 0) ? SigHex : FString();
 	bHasCloudAssets = true;
 	bCloudViewDirty = true;
 
@@ -292,8 +306,17 @@ void UNiceInkPersonaSubsystem::StoreAssets(const TArray<uint8>& Bytes)
 	IOnlineUserCloudPtr Cloud = GetUserCloud();
 	if (Id.IsValid() && Cloud.IsValid())
 	{
-		TArray<uint8> Copy = Bytes; // WriteUserFile 要非 const
-		Cloud->WriteUserFile(*Id, CloudAssetsFile, Copy);
+		// P1：簽過章＝NIP1 信封落雲；未簽（Seq=0）＝裸 payload（與簽章制之前逐位相同）
+		TArray<uint8> Wire;
+		if (CachedSeq > 0)
+		{
+			FNiceInkNotary::BuildEnvelope(PayloadBytes, CachedSeq, CachedSigHex, Wire);
+		}
+		else
+		{
+			Wire = PayloadBytes; // WriteUserFile 要非 const
+		}
+		Cloud->WriteUserFile(*Id, CloudAssetsFile, Wire);
 	}
 	else
 	{

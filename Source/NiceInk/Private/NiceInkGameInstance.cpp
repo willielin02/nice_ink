@@ -11,6 +11,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "EngineUtils.h"
 #include "InkBodyComponent.h"
+#include "NiceInkNotary.h"
 #include "InkCanvasComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "NiceInkCharacter.h"
@@ -196,6 +197,104 @@ void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)
 		}
 		return false; // 一次性
 	}), FMath::Max(0.1f, DelaySeconds));
+}
+
+void UNiceInkGameInstance::NiNotaryTest()
+{
+	// P1 公證接線自查（用法見標頭註解）。共享計數器活過整條 HTTP 鏈。
+	struct FSt
+	{
+		int32 Pass = 0;
+		int32 Fail = 0;
+	};
+	TSharedRef<FSt> St = MakeShared<FSt>();
+	auto Check = [St](const FString& Name, bool bOk)
+	{
+		bOk ? ++St->Pass : ++St->Fail;
+		UE_LOG(LogTemp, Warning, TEXT("NiNotaryTest: %s %s"), bOk ? TEXT("PASS") : TEXT("FAIL"), *Name);
+	};
+	auto Finish = [St]()
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiNotaryTest: %s pass=%d fail=%d"),
+			St->Fail == 0 ? TEXT("DONE") : TEXT("RESULT-FAIL"), St->Pass, St->Fail);
+	};
+
+	if (!FNiceInkNotary::IsConfigured())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiNotaryTest: 後端未配置（-notary=<url> 或 ini BaseUrl）"));
+		return;
+	}
+
+	// --- 同步段 ---
+	// SHA256 標準向量："abc"
+	TArray<uint8> Abc = {'a', 'b', 'c'};
+	Check(TEXT("sha256(abc) 標準向量"), FNiceInkNotary::Sha256Hex(Abc) ==
+		TEXT("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+
+	// 信封往返＋舊裸 blob 相容
+	TArray<uint8> Payload;
+	for (int32 i = 0; i < 64; ++i)
+	{
+		Payload.Add(static_cast<uint8>(FMath::RandRange(0, 255)));
+	}
+	const FString FakeSig = FString::ChrN(128, TEXT('a'));
+	TArray<uint8> Env;
+	FNiceInkNotary::BuildEnvelope(Payload, 7, FakeSig, Env);
+	TArray<uint8> OutPayload;
+	int32 OutSeq = 0;
+	FString OutSig;
+	const bool bParse = FNiceInkNotary::ParseEnvelope(Env, OutPayload, OutSeq, OutSig);
+	Check(TEXT("信封往返"), bParse && OutPayload == Payload && OutSeq == 7 && OutSig == FakeSig);
+	const bool bLegacy = FNiceInkNotary::ParseEnvelope(Payload, OutPayload, OutSeq, OutSig);
+	Check(TEXT("舊裸 blob 相容（seq=0）"), bLegacy && OutPayload == Payload && OutSeq == 0);
+
+	// --- HTTP 鏈（新 puid 首簽 → 驗簽 → 篡改敗 → 無單拒簽 → latest-seq → attest → 憑單簽 seq=2）---
+	const FString Puid = TEXT("test") + FGuid::NewGuid().ToString(EGuidFormats::Digits).Left(24).ToLower();
+	const FString Sha = FNiceInkNotary::Sha256Hex(Payload);
+	FNiceInkNotary::RequestSignPersona(Puid, Sha, FString(),
+		[Check, Finish, St, Puid, Sha](bool bOk, int32 Seq, FString Sig)
+	{
+		Check(TEXT("首簽（無單放行）seq=1"), bOk && Seq == 1);
+		if (!bOk)
+		{
+			Finish();
+			return;
+		}
+		Check(TEXT("C++ 驗簽通過"), FNiceInkNotary::VerifyPersonaSig(Puid, Seq, Sha, Sig));
+		FString TamperedSha = Sha;
+		TamperedSha[0] = (TamperedSha[0] == TEXT('0')) ? TEXT('1') : TEXT('0');
+		Check(TEXT("篡改 blob 驗簽必敗"), !FNiceInkNotary::VerifyPersonaSig(Puid, Seq, TamperedSha, Sig));
+		Check(TEXT("錯 seq 驗簽必敗"), !FNiceInkNotary::VerifyPersonaSig(Puid, Seq + 1, Sha, Sig));
+
+		FNiceInkNotary::RequestSignPersona(Puid, Sha, FString(),
+			[Check, Finish, Puid, Sha](bool bOk2, int32, FString)
+		{
+			Check(TEXT("已有帳本＋無結算單＝拒簽"), !bOk2);
+			FNiceInkNotary::RequestLatestSeq(Puid,
+				[Check, Finish, Puid, Sha](bool bOk3, int32 Latest)
+			{
+				Check(TEXT("latest-seq=1"), bOk3 && Latest == 1);
+				FNiceInkNotary::RequestAttest(Puid, TEXT("testroom_") + Puid, 1, Sha, 1,
+					[Check, Finish, Puid, Sha](bool bSettled, FString Token)
+				{
+					Check(TEXT("attest 單見證結算"), bSettled && !Token.IsEmpty());
+					if (!bSettled)
+					{
+						Finish();
+						return;
+					}
+					FNiceInkNotary::RequestSignPersona(Puid, Sha, Token,
+						[Check, Finish, Puid, Sha](bool bOk4, int32 Seq4, FString Sig4)
+					{
+						Check(TEXT("憑單簽發 seq=2"), bOk4 && Seq4 == 2);
+						Check(TEXT("seq=2 簽章驗過"), bOk4 &&
+							FNiceInkNotary::VerifyPersonaSig(Puid, Seq4, Sha, Sig4));
+						Finish();
+					});
+				});
+			});
+		});
+	});
 }
 
 void UNiceInkGameInstance::NiSpotMap(int32 On)

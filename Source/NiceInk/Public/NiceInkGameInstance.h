@@ -123,6 +123,14 @@ public:
 	UFUNCTION(Exec)
 	void NiSpotMap(int32 On);
 
+	// 公證接線自查（防作弊 P1；Docs/ANTICHEAT_PLAN.md §4）：對本地後端跑
+	// 信封往返→SHA256 對標準向量→簽發→C++ 驗簽→篡改必敗→無單拒簽→
+	// latest-seq→attest→憑單簽發（序號 +1）。用法：起 Backend（NICEINK_DEV=1、
+	// port 8787）→ 遊戲以 -notary=http://127.0.0.1:8787 啟動 → 主控台 NiNotaryTest
+	// → log 收「NiNotaryTest: DONE」。這支抓的是 C++/python 兩端格式對不齊那一類 bug。
+	UFUNCTION(Exec)
+	void NiNotaryTest();
+
 	// 各輸入輪詢點共用的靈敏度倍率（鉗 0.2–3.0）
 	float GetMouseScale() const;
 

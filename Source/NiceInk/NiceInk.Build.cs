@@ -36,8 +36,12 @@ public class NiceInk : ModuleRules
 			"AIModule",           // 主選單舞台的 AAIController（力士編舞直驅）
 			"NNE",                // 內建臉管線（SPEC #52 C1）：ONNX 推理（NNERuntimeORTCpu）
 			"OpenCV",             // 內建臉管線：古典影像處理（world455 含 shape/photo/calib3d）
-			"OpenCVHelper"        // Pre/PostOpenCVHeaders + DLL 載入
+			"OpenCVHelper",       // Pre/PostOpenCVHeaders + DLL 載入
+			"HTTP"                // 公證後端客戶端（防作弊 Phase 1：/sign-persona 等）
 		});
+
+		// Ed25519 驗簽＋SHA256（NiceInkNotary）＝引擎自帶 OpenSSL 1.1.1t，零新第三方
+		AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
 
 		// 檔案對話框（個人檔案頁「上傳自拍」）＝Windows COM IFileOpenDialog 直呼
 		// （現代對話框、DPI 清晰、Shipping 可用）——不依賴 DesktopPlatform 模組

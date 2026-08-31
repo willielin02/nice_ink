@@ -18,6 +18,7 @@
 #include "NiceInkGameSession.h"
 #include "NiceInkGameState.h"
 #include "NiceInkHUD.h"
+#include "NiceInkNotary.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkSaveGame.h"
@@ -377,6 +378,16 @@ void ANiceInkGameMode::PersistCharacter(ANiceInkCharacter* Character)
 	const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
 	if (!Puid.IsEmpty() && UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
 	{
+		// P1 兩道閘（Docs/ANTICHEAT_PLAN.md §4.1）：
+		// ① unverified 玩家（假裝雲端故障進房/上行逾時）本場一律不落雲＝金庫原封；
+		// ② 無結算單（中途消費點雷射/搖晃、Logout、/attest 失敗）＝只寫主機本機槽，
+		//    上雲延後到下一個結算點。**記帳待 user 裁**：斷線會丟「上一結算點之後」的
+		//    雷射/搖晃現金變動（併入 attest digest 是 Phase 2 的選項）。
+		if (FNiceInkNotary::IsConfigured() &&
+			(!PS->bPersonaVerified || RoundSettlementToken.IsEmpty()))
+		{
+			return;
+		}
 		TArray<uint8> Bytes;
 		if (UGameplayStatics::SaveGameToMemory(Save, Bytes) && Bytes.Num() > 0)
 		{
@@ -386,12 +397,36 @@ void ANiceInkGameMode::PersistCharacter(ANiceInkCharacter* Character)
 				// listen 主機本人：不過網，直寫雲端
 				if (UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this))
 				{
-					Persona->StoreAssets(Bytes);
+					if (FNiceInkNotary::IsConfigured())
+					{
+						// P1：host 本人同樣憑單換簽章再落雲（與遠端 ClientPersonaEnd 同構）
+						const FString Sha = FNiceInkNotary::Sha256Hex(Bytes);
+						TArray<uint8> Payload = Bytes;
+						TWeakObjectPtr<UNiceInkPersonaSubsystem> WeakP = Persona;
+						FNiceInkNotary::RequestSignPersona(Persona->GetLocalPuid(), Sha,
+							RoundSettlementToken,
+							[WeakP, Payload](bool bSignOk, int32 Seq, FString Sig)
+							{
+								if (UNiceInkPersonaSubsystem* P = WeakP.Get())
+								{
+									if (!bSignOk)
+									{
+										UE_LOG(LogTemp, Warning,
+											TEXT("NiAnticheat: host /sign-persona 失敗 — 本輪落未簽版"));
+									}
+									P->StoreAssets(Payload, bSignOk ? Seq : 0, bSignOk ? Sig : FString());
+								}
+							});
+					}
+					else
+					{
+						Persona->StoreAssets(Bytes);
+					}
 				}
 			}
 			else
 			{
-				Character->SendPersonaToOwner(Bytes);
+				Character->SendPersonaToOwner(Bytes, RoundSettlementToken);
 			}
 		}
 	}
@@ -405,6 +440,7 @@ void ANiceInkGameMode::RestoreCharacter(ANiceInkCharacter* Character)
 		return;
 	}
 	PS->bAssetsRestored = true; // 嘗試過即封口（含「無存檔＝乾淨新身」）——防雙重還原
+	PS->bPersonaVerified = true; // 本機槽路只在未配置後端時走＝旗標不消費（見 PersistCharacter）
 
 	const FString Slot = SaveSlotFor(PS);
 	if (!UGameplayStatics::DoesSaveGameExist(Slot, 0))
@@ -605,10 +641,78 @@ void ANiceInkGameMode::TickFaceSend()
 	}
 }
 
-void ANiceInkGameMode::ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes)
+void ANiceInkGameMode::ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes,
+	int32 SigSeq, const FString& SigHex)
 {
 	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
 	if (!PS || PS->bAssetsRestored)
+	{
+		return;
+	}
+
+	// P1 簽章制（Docs/ANTICHEAT_PLAN.md §4.1）：配置後端＝blob 必須驗過才套用。
+	// 所有失敗路徑一律「封口＋乾淨新身」——fallback 到主機本機槽＝可被利用的回滾後門。
+	if (FNiceInkNotary::IsConfigured())
+	{
+		const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
+		if (Puid.IsEmpty())
+		{
+			PS->bAssetsRestored = true;
+			UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: 無 PUID 的 persona（%s）— 乾淨新身"),
+				*PS->GetPlayerName());
+			return;
+		}
+		const FString Sha = FNiceInkNotary::Sha256Hex(Bytes);
+		if (SigSeq > 0 && !FNiceInkNotary::VerifyPersonaSig(Puid, SigSeq, Sha, SigHex))
+		{
+			PS->bAssetsRestored = true;
+			UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: persona 簽章驗不過（%s seq=%d）— 乾淨新身"),
+				*PS->GetPlayerName(), SigSeq);
+			return;
+		}
+		// 防回滾：出示的序號必須＝後端帳本最新（SigSeq=0＝未簽遷移路，帳本必須也是 0）。
+		// 先封口（防 TryRestoreTick 併行雙還原），套用等 latest-seq 回來。
+		PS->bAssetsRestored = true;
+		TWeakObjectPtr<ANiceInkGameMode> WeakThis = this;
+		TWeakObjectPtr<ANiceInkCharacter> WeakChar = Character;
+		TArray<uint8> BytesCopy = Bytes;
+		const int32 ShownSeq = SigSeq;
+		const FString PlayerName = PS->GetPlayerName();
+		FNiceInkNotary::RequestLatestSeq(Puid,
+			[WeakThis, WeakChar, BytesCopy, ShownSeq, PlayerName](bool bOk, int32 LatestSeq)
+			{
+				ANiceInkGameMode* GM = WeakThis.Get();
+				ANiceInkCharacter* C = WeakChar.Get();
+				if (!GM || !C)
+				{
+					return;
+				}
+				if (bOk && LatestSeq != ShownSeq)
+				{
+					UE_LOG(LogTemp, Warning,
+						TEXT("NiAnticheat: persona 序號不符（%s 出示 %d、帳本 %d）＝回滾/失簽 — 乾淨新身"),
+						*PlayerName, ShownSeq, LatestSeq);
+					return; // 不套用＝乾淨新身（bAssetsRestored 已封）
+				}
+				if (!bOk)
+				{
+					// fail-open：簽章本身已驗過（內容真），只損失這一次的回滾防護
+					UE_LOG(LogTemp, Warning,
+						TEXT("NiAnticheat: latest-seq 後端無回應 — fail-open 套用（%s）"), *PlayerName);
+				}
+				GM->ApplyPersonaBytesNow(C, BytesCopy);
+			});
+		return;
+	}
+
+	// 未配置後端：行為與簽章制之前逐位相同
+	ApplyPersonaBytesNow(Character, Bytes);
+}
+
+void ANiceInkGameMode::ApplyPersonaBytesNow(ANiceInkCharacter* Character, const TArray<uint8>& Bytes)
+{
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS)
 	{
 		return;
 	}
@@ -620,9 +724,10 @@ void ANiceInkGameMode::ApplyUploadedPersona(ANiceInkCharacter* Character, const 
 		return;
 	}
 	PS->bAssetsRestored = true;
+	PS->bPersonaVerified = true; // 走到這裡＝上游驗證已過（或未配置後端＝旗標不消費）
 
-	// 信任界線（listen server 派對遊戲＝無絕對防竄改，記帳接受）：
-	// 只做格式與量級的理智檢查，語意照單全收
+	// 信任界線：格式與量級檢查照舊；語意的真偽由 P1 簽章＋序號在上游裁決
+	//（未配置後端＝維持「語意照單全收」的記帳取捨）
 	PS->Cash = FMath::Clamp(Save->Cash, 0, 100000000);
 	int32 Applied = 0;
 	for (const FInkWork& Work : Save->Tattoos)
@@ -667,7 +772,14 @@ void ANiceInkGameMode::TryRestoreTick(TWeakObjectPtr<ANiceInkCharacter> WeakChar
 			{
 				if (Persona->HasCloudAssets())
 				{
-					ApplyUploadedPersona(Character, Persona->GetCachedAssets());
+					ApplyUploadedPersona(Character, Persona->GetCachedAssets(),
+						Persona->GetCachedSeq(), Persona->GetCachedSigHex());
+				}
+				else if (FNiceInkNotary::IsConfigured())
+				{
+					// P1：本機槽 fallback＝繞簽章的回滾後門，配置後端時封死；
+					// 「真的沒有雲端資產」要對後端帳本驗過才算 verified 新人
+					ResolveNoPersonaClaim(Character);
 				}
 				else
 				{
@@ -686,6 +798,15 @@ void ANiceInkGameMode::TryRestoreTick(TWeakObjectPtr<ANiceInkCharacter> WeakChar
 
 	if (TicksLeft <= 0)
 	{
+		if (FNiceInkNotary::IsConfigured())
+		{
+			// P1：逾時同理封死本機槽——「假裝雲端讀失敗」不得換到未驗證的舊資產。
+			// 誠實玩家的雲端故障＝這一場乾淨新身（正本仍在雲端，下次讀到照舊）。
+			PS->bAssetsRestored = true;
+			UE_LOG(LogTemp, Log, TEXT("NiAnticheat: %s 上行逾時 — 乾淨新身（本機槽 fallback 已封）"),
+				*PS->GetPlayerName());
+			return;
+		}
 		UE_LOG(LogTemp, Log, TEXT("NiPersona: no cloud persona for %s within window — host-local fallback"),
 			*PS->GetPlayerName());
 		RestoreCharacter(Character); // 逾時：主機本機 PUID 槽（同機重連有得撈；多半＝乾淨新身）
@@ -696,6 +817,107 @@ void ANiceInkGameMode::TryRestoreTick(TWeakObjectPtr<ANiceInkCharacter> WeakChar
 	{
 		TryRestoreTick(WeakChar, TicksLeft - 1);
 	}), 1.0f, false);
+}
+
+// --- 防作弊 P1：公證接線（2026-08-31；Docs/ANTICHEAT_PLAN.md §4.1）---
+
+void ANiceInkGameMode::ResolveNoPersonaClaim(ANiceInkCharacter* Character)
+{
+	ANiceInkPlayerState* PS = Character ? Character->GetPlayerState<ANiceInkPlayerState>() : nullptr;
+	if (!PS || PS->bAssetsRestored)
+	{
+		return;
+	}
+	PS->bAssetsRestored = true; // 封口（乾淨新身先成立；verified 等帳本回話）
+
+	const FString Puid = UNiceInkPersonaSubsystem::PuidFromNetIdString(PS->GetUniqueId().ToString());
+	if (Puid.IsEmpty())
+	{
+		return; // 無 PUID＝不落雲的路，verified 與否無消費者
+	}
+	TWeakObjectPtr<ANiceInkPlayerState> WeakPS = PS;
+	const FString PlayerName = PS->GetPlayerName();
+	FNiceInkNotary::RequestLatestSeq(Puid,
+		[WeakPS, PlayerName](bool bOk, int32 LatestSeq)
+		{
+			ANiceInkPlayerState* P = WeakPS.Get();
+			if (!P)
+			{
+				return;
+			}
+			if (bOk && LatestSeq > 0)
+			{
+				// 有簽發史卻宣稱空身＝「假裝雲端故障洗白」——本場不落雲，金庫原封
+				UE_LOG(LogTemp, Warning,
+					TEXT("NiAnticheat: %s 宣稱無資產但帳本 seq=%d — 本場 unverified（不落雲）"),
+					*PlayerName, LatestSeq);
+				return;
+			}
+			if (!bOk)
+			{
+				UE_LOG(LogTemp, Warning,
+					TEXT("NiAnticheat: latest-seq 無回應（%s 空身宣稱）— fail-open 視為新人"), *PlayerName);
+			}
+			P->bPersonaVerified = true; // 真新人（或後端不可達的 fail-open）＝正常開局正常落雲
+		});
+}
+
+void ANiceInkGameMode::RequestRoundAttest()
+{
+	RoundSettlementToken.Reset();
+	if (!FNiceInkNotary::IsConfigured())
+	{
+		return;
+	}
+	UNiceInkPersonaSubsystem* Persona = UNiceInkPersonaSubsystem::Get(this);
+	const FString HostPuid = Persona ? Persona->GetLocalPuid() : FString();
+	if (HostPuid.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: host 無 PUID — 本輪無結算單（不落雲）"));
+		return;
+	}
+	if (NotaryRoomId.IsEmpty())
+	{
+		NotaryRoomId = FGuid::NewGuid().ToString(EGuidFormats::Digits);
+	}
+	const ANiceInkGameState* GS = NIState();
+	const int32 Round = GS ? GS->CurrentRound : 0;
+
+	// digest＝回合結果的正準字串（P1 後端不驗語意、host 單見證＝過渡；Phase 2 這裡
+	// 換 quorum digest 規格：全員各自簽、含自我作品雜湊）
+	FString Canon = FString::Printf(TEXT("R|%s|%d|%d|%d"), *NotaryRoomId, Round,
+		GS ? GS->VictimPlayerId : INDEX_NONE, GS ? GS->RevealedAuthorId : INDEX_NONE);
+	if (GS)
+	{
+		for (const APlayerState* P : GS->PlayerArray)
+		{
+			const ANiceInkPlayerState* NiPS = Cast<ANiceInkPlayerState>(P);
+			Canon += FString::Printf(TEXT("|%d:%d"), P ? P->GetPlayerId() : -1, NiPS ? NiPS->Cash : 0);
+		}
+	}
+	const FTCHARToUTF8 Utf8(*Canon);
+	TArray<uint8> CanonBytes;
+	CanonBytes.Append(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+	const FString Digest = FNiceInkNotary::Sha256Hex(CanonBytes);
+
+	TWeakObjectPtr<ANiceInkGameMode> WeakThis = this;
+	FNiceInkNotary::RequestAttest(HostPuid, NotaryRoomId, Round, Digest, /*RosterSize=*/1,
+		[WeakThis](bool bSettled, FString Token)
+		{
+			ANiceInkGameMode* GM = WeakThis.Get();
+			if (!GM)
+			{
+				return;
+			}
+			if (bSettled)
+			{
+				GM->RoundSettlementToken = Token;
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("NiAnticheat: /attest 未結算 — 本輪 Persist 不落雲"));
+			}
+		});
 }
 
 void ANiceInkGameMode::PersistAllCharacters()
@@ -1902,6 +2124,10 @@ void ANiceInkGameMode::HandleAccusation(ANiceInkCharacter* Accuser, int32 WorkId
 
 	GS->SetPhase(ENiceInkPhase::Resolution, ResolutionSeconds);
 	SetPhaseTimer(ResolutionSeconds, &ANiceInkGameMode::OnResolutionDone);
+
+	// P1：判定已定局＝向公證後端換本輪結算單（其後的 Persist 點消費；
+	// 1.2s 儀式窗天然吸收 HTTP 往返）
+	RequestRoundAttest();
 
 	// 上墨儀式：鏡頭就位後（+1.2s）當眾轉碳黑（猜錯）＋全場洗掉麥克筆與證據
 	const bool bWrongGuess = !bCorrect;

@@ -965,22 +965,32 @@ public:
 	// 下行（結算）＝server 把最新資產發回本人、由本人客戶端寫自己的雲端保險箱
 	// （PlayerDataStorage 私人不可代寫＝只能經本人）。LAN/PIE 全程不走這裡。
 
+	// P1 簽章隨身（2026-08-31；Docs/ANTICHEAT_PLAN.md §4.1）：上行 Begin 帶 (SigSeq, SigHex)
+	// ——bytes 恆為裸 payload、簽章走欄位（Begin 是既有拒收判定點，壞簽章不必收完 4MB）。
+	// SigSeq=0＝未簽章（舊資料遷移/未配置後端）。
 	UFUNCTION(Server, Reliable)
-	void ServerPersonaBegin(int32 TotalBytes);
+	void ServerPersonaBegin(int32 TotalBytes, int32 SigSeq, const FString& SigHex);
 	UFUNCTION(Server, Reliable)
 	void ServerPersonaChunk(int32 Offset, const TArray<uint8>& Bytes);
 	UFUNCTION(Server, Reliable)
 	void ServerPersonaEnd(uint32 Crc);
 
+	// P1：宣稱「我的雲端沒有資產」（新玩家/空身）——host 對後端帳本驗真偽
+	//（有簽發史卻宣稱沒有＝洗白攻擊＝本場 unverified 不落雲）
+	UFUNCTION(Server, Reliable)
+	void ServerPersonaNone();
+
+	// P1：下行 Begin 帶結算單（host 於指認判定時向公證後端 attest 取得；空＝未配置後端）
+	// ——client 收完列車後憑單向後端換簽章再落雲（私人保險箱仍必經本人）。
 	UFUNCTION(Client, Reliable)
-	void ClientPersonaBegin(int32 TotalBytes);
+	void ClientPersonaBegin(int32 TotalBytes, const FString& SettlementToken);
 	UFUNCTION(Client, Reliable)
 	void ClientPersonaChunk(int32 Offset, const TArray<uint8>& Bytes);
 	UFUNCTION(Client, Reliable)
 	void ClientPersonaEnd(uint32 Crc);
 
-	// server 端便利：把 bytes 切塊發下行列車給 owner
-	void SendPersonaToOwner(const TArray<uint8>& Bytes);
+	// server 端便利：把 bytes 切塊發下行列車給 owner（Token＝P1 結算單、可空）
+	void SendPersonaToOwner(const TArray<uint8>& Bytes, const FString& SettlementToken = FString());
 
 	// --- 自訂臉房內分發（2026-08-10；登記簿＝UNiceInkFaceShare）---
 	// 上行：owner client 把本機臉工件 blob（NIF1 格式）分塊交給 server；
@@ -1204,10 +1214,13 @@ private:
 	TArray<uint8> PersonaUpBuf;
 	int32 PersonaUpExpected = -1;
 	int32 PersonaUpReceived = 0;
+	int32 PersonaUpSeq = 0;      // P1：本列車攜帶的簽章序號（0=未簽）
+	FString PersonaUpSig;        // P1：本列車攜帶的簽章 hex
 	// client 端下行收件緩衝
 	TArray<uint8> PersonaDownBuf;
 	int32 PersonaDownExpected = -1;
 	int32 PersonaDownReceived = 0;
+	FString PersonaDownToken;    // P1：下行攜帶的結算單（憑它向後端換簽章）
 	// client 端進房上行：等 Persona 雲端拉取完成再發車（0.5s 輪詢、10s 放棄）
 	FTimerHandle PersonaUploadTimer;
 	int32 PersonaUploadTicksLeft = 0;

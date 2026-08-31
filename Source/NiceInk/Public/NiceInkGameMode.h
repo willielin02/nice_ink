@@ -335,8 +335,26 @@ public:
 	float TraceWakeEarliestTime = 0.0f;
 
 	// 雲端隨身上行終點（Character::ServerPersonaEnd 驗收後轉入；B3）：
-	// bytes＝UNiceInkSaveGame 序列化；驗證→套用（錢包＋逐幅 MulticastRestoreWork）
-	void ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);
+	// bytes＝UNiceInkSaveGame 序列化；驗證→套用（錢包＋逐幅 MulticastRestoreWork）。
+	// P1（Docs/ANTICHEAT_PLAN.md §4.1）：配置了公證後端時先驗 Ed25519 簽章（同步）＋
+	// 對後端 latest-seq 防回滾（非同步；後端無回應＝fail-open 套用並記 log）。
+	// 驗不過＝乾淨新身（**不得** fallback 主機本機槽——那是回滾後門）。
+	void ApplyUploadedPersona(ANiceInkCharacter* Character, const TArray<uint8>& Bytes,
+		int32 SigSeq = 0, const FString& SigHex = FString());
+
+	// 舊本體（反序列化＋鉗位＋套用＋熱備）：未配置後端時行為與 P1 之前逐位相同
+	void ApplyPersonaBytesNow(ANiceInkCharacter* Character, const TArray<uint8>& Bytes);
+
+	// P1 結算見證：指認判定當幀向後端 /attest 換 settlement token（host 單見證＝
+	// 過渡語意，Phase 2 升 quorum 同一介面）；token 由其後的 Persist 點消費。
+	// 1.2s 上墨儀式窗天然吸收 HTTP 往返。
+	void RequestRoundAttest();
+
+	// P1：玩家宣稱「我沒有雲端資產」（新玩家/空身）——對後端帳本驗：seq=0＝真新人
+	//（verified 乾淨開局）；seq>0＝有簽發史卻宣稱沒有＝洗白攻擊（unverified＝本場不落雲）
+	void ResolveNoPersonaClaim(ANiceInkCharacter* Character);
+	FString NotaryRoomId;          // attest 房鍵（首次結算生成，一房一鍵）
+	FString RoundSettlementToken;  // 最近一次結算的 token（空＝本輪拿不到＝不上雲）
 
 	// --- 自訂臉房內分發（2026-08-10；server 端集散地）---
 	// 上行驗收終點：存原始 blob（晚到者補發用）＋入主機登記簿＋廣播給已報到 viewer
