@@ -3661,3 +3661,17 @@ row-metered/palette/far×3＝既有失敗集逐字子集、零新增）；robo_f
 ＝最長外部等待、Steamworks $100、AI key）；沉睡凍結的視覺（偷看第一眼、醒來 snap）
 待 viewport。
 
+## 2026-08-31 追記95：防作弊 Phase 1 遊戲端接線＝簽章制 persona 上線（BUILT-自驗）
+
+commit 5c24d5d；規格與實作定案全文＝`Docs/ANTICHEAT_PLAN.md` §4.1「Phase 1 接線實作
+定案」節（信封制 NIP1／上行掛 Begin／驗證點與「絕不 fallback 本機槽」／bPersonaVerified
+＋空身宣稱驗帳本＝洗白洞提前關閉／結算單 host 單見證／fail-open 政策／B5 身分軸未爆彈）。
+
+**驗證**：編譯綠；`NiNotaryTest`（新 Exec 儀器）對本地後端真 HTTP **12/12**；
+robo_trace 迴歸 **21/1**＝失敗名與當日基線逐字相同（環境性 t3 observer）＝零迴歸。
+**未配置後端（BaseUrl 空）＝行為與 P1 之前逐位不變**是本批承重閘，robo/LAN/PIE 零擾動。
+
+**記帳待 user 裁**：①中途消費點（雷射/搖晃）無結算單＝不上雲、延後到下一結算點
+——斷線會丟該段現金變動；②B5 Steam 票證的身分軸（SteamID64 vs EOS PUID）接 B5 前必裁。
+**未動工**：escrow 遊戲端接線（slot 登記不經 host）＝併 Phase 2；正式部署＝§7 外部依賴。
+
