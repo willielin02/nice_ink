@@ -229,7 +229,7 @@ API 現實：TikTok Display API **不提供影片檔下載**（只有 id/描述/
 | 項目 | 內容 | 備註 |
 |---|---|---|
 | hosting＋網域＋TLS | 後端上線 | 網域與隱私政策 TikTok 審核必須 |
-| TikTok developer app | Login Kit＋video.list 送審 | **`[定案 2026-09-01]` 延後到上線後**：審查只收正式運作中的產品、不收半成品 ⇒ 遊戲上線且真有實質重置需求才提交。等待期的橋＝手動辦（玩家交連結、人工看、腳本 AddPromoItem 發券——券與消耗端 Phase 1 已完工） |
+| TikTok developer app | Login Kit＋video.list 送審 | **`[定案 2026-09-01]` 延後到上線後**：審查只收正式運作中的產品、不收半成品 ⇒ 遊戲上線且真有實質重置需求才提交。**自動化流程上線前＝無重置，沒有任何過渡方案**（user 明令；零人力是需求本體） |
 | Steamworks | 合作夥伴帳號（$100）＋app＋publisher key＋itemdef | Phase 3 硬依賴 |
 | AI API key | 審核帳單 | |
 | 金鑰保管 | 私鑰/publisher key/secret 存放 | 絕不進 repo |
@@ -241,7 +241,7 @@ API 現實：TikTok Display API **不提供影片檔下載**（只有 id/描述/
 | Phase 0 | P0-1 slot 化／P0-2 複製過濾／P0-3 描圖校驗 | **BUILT-自驗 2026-08-31**：編譯綠；robo_trace 21/1（唯一 FAIL＝t3 observer 需第三個 PIE 世界＝2-client 降級後結構性不可跑、非本批）；robo_directdraw 59/6（六失敗名＝ghosts/shader row-metered/palette/far×3＝既有失敗集逐字子集、零新增）；robo_feign 23/0；**新儀器 robo_sleepfreeze_probe 6/6**（server 作畫者走 466.3cm、沉睡受害者世界複本位移 0.0cm＝凍結實錘；睜眼後 d=0.0＝收斂即時）；喚醒鉤子 7 支腳本換 `DebugRoboWake`。**沉睡凍結的視覺（偷看第一眼、醒來 snap）待 user viewport** |
 | Phase 1 | 後端骨架＋/sign-persona＋/escrow＋遊戲端接線（本地可跑） | **BUILT-自驗 2026-08-31（commit 5c24d5d）**：後端 14/14＋NiNotaryTest 真 HTTP 12/12＋robo_trace 迴歸 21/1（基線逐字）；正式生效待 §7 部署（BaseUrl 現為空＝功能關閉）。escrow 的遊戲端接線（slot 登記不經 host）未動工＝併 Phase 2 |
 | Phase 2 | /attest quorum＋escrow 接線＋甦醒耗時入 digest | **BUILT-自驗 2026-08-31（commit a296149）**：後端 21/21＋NiNotaryTest 15/15＋robo_trace 迴歸 21/1（基線逐字）。quorum 的多端真連線行為（digest 競態、token 輪詢時序）**待雙機/EOS 真線驗**（PIE 迴路測不出＝08-14 血價同族）。commit-reveal 延後（見 §4.3 定案） |
-| Phase 3 | TikTok adapter＋AI 審核＋Steam Inventory | **`[定案 2026-09-01]` 上線後視需求觸發**（TikTok 審查不收半成品）。剩餘工程全在後端側（adapter/AI 審/發券），遊戲端消耗管線 Phase 1 已完工＝觸發後天級可上線；等待期可手動發券過渡 |
+| Phase 3 | TikTok adapter＋AI 審核＋Steam Inventory | **`[定案 2026-09-01]` 上線後視需求觸發**（TikTok 審查不收半成品）。剩餘工程全在後端側（adapter/AI 審/發券），遊戲端消耗管線 Phase 1 已完工＝觸發後天級可上線。**上線前＝無重置，沒有任何過渡方案**（user 明令） |
 
 ## 9. SPEC 待回寫（累積，等 user 授權對齊時一次寫入）
 
