@@ -1,5 +1,7 @@
 #include "InkCanvasComponent.h"
 
+#include "InkMistSurface.h"
+
 #include "CanvasItem.h"
 #include "Engine/Canvas.h"
 #include "Engine/Texture2D.h"
@@ -147,16 +149,6 @@ UTextureRenderTarget2D* UInkCanvasComponent::EnsureTattooRT()
 	return TattooRT;
 }
 
-UTextureRenderTarget2D* UInkCanvasComponent::EnsureMistRT()
-{
-	if (!MistRT)
-	{
-		MistRT = CreateLayerRT(TEXT("InkMistRT"), MistRenderTargetResolution);
-		OnLayersChanged.Broadcast();
-	}
-	return MistRT;
-}
-
 UTextureRenderTarget2D* UInkCanvasComponent::EnsureScratchRT()
 {
 	if (!ScratchRT)
@@ -171,7 +163,7 @@ void UInkCanvasComponent::PrewarmDrawLayers()
 {
 	bDrawLayersPinned = true;
 	EnsureMarkerRT();
-	EnsureMistRT();
+	EnsureMistLayer();
 }
 
 void UInkCanvasComponent::ReleaseDrawLayerPin()
@@ -276,220 +268,133 @@ UTexture2D* UInkCanvasComponent::GetOrCreateNibTexture()
 	return NibTexture;
 }
 
-UTexture2D* UInkCanvasComponent::GetOrCreateStippleRowTexture()
+// --- 霧層＝CPU 軟體光柵器（2026-09-02 灰洗分檔戰役；語義全文見 InkMistSurface.h）---
+
+bool UInkCanvasComponent::EnsureMistLayer()
 {
-	if (StippleRowTexture)
+	if (MistSurface.IsValid() && MistTex)
 	{
-		return StippleRowTexture;
+		return true;
 	}
-
-	// 條帶（十四版全面改制）：X=橫越排帶、Y=沿行進方向；8 個抖動變體垂直堆疊。
-	// 三步：①高解析域（HiW×HiH）烘 K 顆軟點（鐘形橫剖面＋縱向散佈＋槽內抖動）
-	// ②每顆點的墨做等向高斯擴散（ShaderMistBleedMm=真皮層暈開）③**箱式濾波
-	// 下取樣到與 RT quad 1:1 的目標尺寸**——十三版刮痕真兇=256px 條帶直接塞進
-	// ~25px quad（欠取樣 10×、bilinear 只平均 2×2、無 mips）＝軟點碎成銳利雜訊絲；
-	// 積分下取樣後每個紋素=該範圍暈開墨量的正確平均＝平滑水洗面＋次像素細噪。
-	// premult 白×A；stamp 時 tile color=墨色×流量因子。旋鈕改值要重啟 session。
-	constexpr int32 HiW = 256; // 高解析烘製域（~12.8px/mm）
-	// 排章高寬比 0.3（十五版 1/8→0.3=帶寬 2cm ⇒ 章高 6mm）：細長章（2.5mm）對
-	// 筆尖解算抖動極敏感——相鄰排微旋/錯位=交叉亮脊（帶心 5.7mm 週期調變 std 0.15
-	// 實測、暈開加倍不動=不是點噪聲）；拉高+上下餘弦羽化 ⇒ 每皮膚點吃 ~3 排疊加
-	// =方向抖動被平均（十版圓刷「對方向噪聲免疫」的性質、保留鐘形帶）。
-	constexpr float RowAspect = 0.3f; // 與 StampMistRow 的 AlongPx 比例必須一致
-	const int32 HiH = FMath::RoundToInt(HiW * RowAspect); // 兩軸同 px/mm=等向
-	constexpr int32 Variants = 8;
-	// 目標域=RT 上 quad 的實際像素尺寸（帶寬 2cm@4096 ≈ 25px）
-	const int32 W = FMath::Clamp(FMath::RoundToInt(
-		2.0f * ShaderRowHalfWidthUv * MistRenderTargetResolution), 8, HiW);
-	const int32 VariantH = FMath::Clamp(FMath::RoundToInt(W * RowAspect), 2, HiH);
-	const int32 H = VariantH * Variants;
-	StippleRowTexture = UTexture2D::CreateTransient(W, H, PF_B8G8R8A8, TEXT("InkStippleRow"));
-	StippleRowTexture->SRGB = false;
-	StippleRowTexture->Filter = TF_Bilinear;
-	StippleRowTexture->NeverStream = true;
-
-	FTexture2DMipMap& Mip = StippleRowTexture->GetPlatformData()->Mips[0];
-	FColor* Pixels = static_cast<FColor*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
-	FMemory::Memzero(Pixels, W * H * sizeof(FColor));
-
-	TArray<float> Accum; // 高解析域浮點 alpha（premult over）
-	Accum.SetNumZeroed(HiW * HiH);
-	TArray<float> Scratch;
-	Scratch.SetNumZeroed(HiW * HiH);
-	const int32 K = FMath::Clamp(ShaderRowDotCount, 4, 128);
-	const float DotRadPx = FMath::Max(2.0f, ShaderStippleUvRadius * (HiW / (2.0f * ShaderRowHalfWidthUv)));
-	const float SlotWPx = static_cast<float>(HiW) / K;
-	// 平頂＋線性羽化（十六版填色制）：羽化寬佔半帶比例（帶半寬 10mm、羽化 3mm）
-	const float HalfBandMm = 2.0f * ShaderRowHalfWidthUv / 0.000301f * 0.5f;
-	const float FeatherFrac = FMath::Clamp(
-		ShaderFillFeatherMm / FMath::Max(HalfBandMm, 1.0f), 0.05f, 1.0f);
-	// 高斯暈開核：σ=BleedMm×px/mm（UV/mm≈0.000301=sumo 圖集實測均勻密度）
-	const float HiPxPerMm = HiW * 0.000301f / (2.0f * ShaderRowHalfWidthUv);
-	const float Sigma = ShaderMistBleedMm * HiPxPerMm;
-	TArray<float> Kernel;
-	const int32 KR = (Sigma > 0.3f) ? FMath::Clamp(FMath::CeilToInt(Sigma * 2.5f), 1, 24) : 0;
-	if (KR > 0)
+	if (!MistSurface.IsValid())
 	{
-		float Sum = 0.0f;
-		Kernel.SetNumZeroed(2 * KR + 1);
-		for (int32 i = -KR; i <= KR; ++i)
-		{
-			Kernel[i + KR] = FMath::Exp(-0.5f * FMath::Square(i / Sigma));
-			Sum += Kernel[i + KR];
-		}
-		for (float& Kv : Kernel)
-		{
-			Kv /= Sum; // 核歸一；邊界零填充=帶緣墨自然流失變軟（物理正確）
-		}
+		MistSurface = MakeShared<FInkMistSurface>();
+		MistSurface->Init(MistRenderTargetResolution);
 	}
-
-	for (int32 V = 0; V < Variants; ++V)
+	if (!MistTex)
 	{
-		FMemory::Memzero(Accum.GetData(), Accum.Num() * sizeof(float));
-		uint32 Seed = 0x9E3779B9u * (V + 1);
-		auto NextRand = [&Seed]() -> float
-		{
-			Seed = Seed * 1664525u + 1013904223u;
-			return static_cast<float>(Seed >> 8) / 16777216.0f;
-		};
-		for (int32 i = 0; i < K; ++i)
-		{
-			const float T = ((i + 0.5f) / K) * 2.0f - 1.0f;
-			// 平頂＋線性羽化（十六版）：帶內均勻、羽化帶內線性歸零——相鄰掃軌
-			// 重疊在羽化區互補成平=塗均勻構造保證（鐘形漸層剖面已退役）
-			const float Wt = FMath::Clamp((1.0f - FMath::Abs(T)) / FeatherFrac, 0.0f, 1.0f);
-			const float DotA = ShaderStippleAlphaCenter * Wt;
-			const float Cx = (T * 0.5f + 0.5f) * HiW + (NextRand() - 0.5f) * SlotWPx;
-			// 縱向散佈撐滿條帶高度（十三版：小點蓋不滿 2mm 排距=排間橫紋；
-			// 散佈到全高＝相鄰排交錯互融、排結構融進連續場）
-			const float CySpread = FMath::Max(SlotWPx, HiH - 2.0f * DotRadPx);
-			const float Cy = HiH * 0.5f + (NextRand() - 0.5f) * CySpread;
-			const int32 X0 = FMath::Max(0, FMath::FloorToInt(Cx - DotRadPx - 1));
-			const int32 X1 = FMath::Min(HiW - 1, FMath::CeilToInt(Cx + DotRadPx + 1));
-			const int32 Y0 = FMath::Max(0, FMath::FloorToInt(Cy - DotRadPx - 1));
-			const int32 Y1 = FMath::Min(HiH - 1, FMath::CeilToInt(Cy + DotRadPx + 1));
-			for (int32 Y = Y0; Y <= Y1; ++Y)
-			{
-				for (int32 X = X0; X <= X1; ++X)
-				{
-					const float R01 = FMath::Sqrt(FMath::Square(X - Cx) + FMath::Square(Y - Cy)) / DotRadPx;
-					if (R01 >= 1.0f)
-					{
-						continue;
-					}
-					const float Shape = 0.5f + 0.5f * FMath::Cos(PI * R01); // 軟點核心
-					float& Dst = Accum[Y * HiW + X];
-					const float Src = DotA * Shape;
-					Dst = Src + Dst * (1.0f - Src); // premult over（點相疊自然變深）
-				}
-			}
-		}
-
-		// ②真皮層暈開：等向可分離高斯（零填充；HiH/HiW 比=quad 高寬比 ⇒ 兩軸等向）
-		if (KR > 0)
-		{
-			for (int32 Y = 0; Y < HiH; ++Y)
-			{
-				for (int32 X = 0; X < HiW; ++X)
-				{
-					float Acc = 0.0f;
-					for (int32 J = -KR; J <= KR; ++J)
-					{
-						const int32 SX = X + J;
-						if (SX >= 0 && SX < HiW)
-						{
-							Acc += Accum[Y * HiW + SX] * Kernel[J + KR];
-						}
-					}
-					Scratch[Y * HiW + X] = Acc;
-				}
-			}
-			for (int32 Y = 0; Y < HiH; ++Y)
-			{
-				for (int32 X = 0; X < HiW; ++X)
-				{
-					float Acc = 0.0f;
-					for (int32 J = -KR; J <= KR; ++J)
-					{
-						const int32 SY = Y + J;
-						if (SY >= 0 && SY < HiH)
-						{
-							Acc += Scratch[SY * HiW + X] * Kernel[J + KR];
-						}
-					}
-					Accum[Y * HiW + X] = Acc;
-				}
-			}
-		}
-
-		// ②b 上下餘弦羽化包絡（十五版）：章沿行進方向的剖面=軟鐘形——排距 2mm/
-		// 章高 6mm ⇒ 相鄰三排 cos² 疊加≈常數（constant-overlap-add=行進向平坦）；
-		// 章緣歸零=相鄰排微旋/錯位時無硬邊交叉亮脊。包絡後總墨量歸一回包絡前
-		//（每排墨量不變=勞動量校準不動）。
-		{
-			float SumBefore = 0.0f;
-			for (const float Av : Accum)
-			{
-				SumBefore += Av;
-			}
-			for (int32 Y = 0; Y < HiH; ++Y)
-			{
-				const float Ty = ((Y + 0.5f) / HiH) * 2.0f - 1.0f;
-				const float Env = 0.5f + 0.5f * FMath::Cos(PI * Ty);
-				for (int32 X = 0; X < HiW; ++X)
-				{
-					Accum[Y * HiW + X] *= Env;
-				}
-			}
-			float SumAfter = 0.0f;
-			for (const float Av : Accum)
-			{
-				SumAfter += Av;
-			}
-			if (SumAfter > 1e-3f)
-			{
-				const float Renorm = SumBefore / SumAfter;
-				for (float& Av : Accum)
-				{
-					Av = FMath::Min(Av * Renorm, 1.0f);
-				}
-			}
-		}
-
-		// ③箱式濾波下取樣到目標域（每目標紋素=來源box的墨量平均=積分正確）
-		for (int32 Y = 0; Y < VariantH; ++Y)
-		{
-			const int32 SY0 = (Y * HiH) / VariantH;
-			const int32 SY1 = FMath::Max(SY0 + 1, ((Y + 1) * HiH) / VariantH);
-			for (int32 X = 0; X < W; ++X)
-			{
-				const int32 SX0 = (X * HiW) / W;
-				const int32 SX1 = FMath::Max(SX0 + 1, ((X + 1) * HiW) / W);
-				float Acc = 0.0f;
-				for (int32 SY = SY0; SY < SY1; ++SY)
-				{
-					for (int32 SX = SX0; SX < SX1; ++SX)
-					{
-						Acc += Accum[SY * HiW + SX];
-					}
-				}
-				Acc /= static_cast<float>((SY1 - SY0) * (SX1 - SX0));
-				const uint8 A = static_cast<uint8>(FMath::RoundToInt(
-					FMath::Clamp(Acc, 0.0f, 1.0f) * 255.0f));
-				Pixels[(V * VariantH + Y) * W + X] = FColor(A, A, A, A); // 預乘白×A
-			}
-		}
+		MistTex = CreateMistTexture(this, TEXT("InkMistTex"), MistRenderTargetResolution);
+		// 初始內容＝整張從（零的）緩衝上傳一次（貼圖無 bulk＝不上傳就是未定義）
+		UploadMistSurface(MistSurface, MistTex, /*bFull=*/true);
+		OnLayersChanged.Broadcast();
 	}
+	return MistSurface.IsValid() && MistTex != nullptr;
+}
 
-	Mip.BulkData.Unlock();
-	StippleRowTexture->UpdateResource();
-	return StippleRowTexture;
+void UInkCanvasComponent::EnsureMistScratch()
+{
+	if (!MistScratchSurface.IsValid())
+	{
+		MistScratchSurface = MakeShared<FInkMistSurface>();
+		MistScratchSurface->Init(MistRenderTargetResolution);
+	}
+	if (!MistScratchTex)
+	{
+		// 只是合成暫存、不進材質＝不必廣播
+		MistScratchTex = CreateMistTexture(this, TEXT("InkMistScratchTex"), MistRenderTargetResolution);
+		UploadMistSurface(MistScratchSurface, MistScratchTex, /*bFull=*/true);
+	}
+}
+
+UTexture2D* UInkCanvasComponent::CreateMistTexture(UObject* Outer, const TCHAR* Name, int32 Res)
+{
+	UTexture2D* Tex = UTexture2D::CreateTransient(Res, Res, PF_B8G8R8A8, Name);
+	// sRGB=true＝與舊 RTF_RGBA8 RT 同語義（RT 預設非線性 gamma；實測其儲存位元組
+	// ＝sRGB 編碼：linear 0.0168 的「1 號黑」落盤 35/255）——材質取樣端零改動
+	Tex->SRGB = true;
+	Tex->Filter = TF_Bilinear;
+	Tex->NeverStream = true;
+	Tex->AddressX = TA_Clamp;
+	Tex->AddressY = TA_Clamp;
+	// **不鎖 bulk、不歸零**（09-02 OOM 修）：鎖了就是每張 64MB 的 CPU 側常駐副本，
+	// 而內容永遠從光柵緩衝 UpdateTextureRegions 上傳＝bulk 純浪費。robo 單行程
+	// 三世界 ×（bulk 64＋緩衝 64）疊在既有記憶體壓力上＝本日 OOM 現場（08-25
+	//「Out of video memory 倒的是系統記憶體」同族）。初始內容由呼叫端做一次
+	// 全區上傳（緩衝是零＝全透明）來定義。
+	Tex->UpdateResource();
+	return Tex;
+}
+
+void UInkCanvasComponent::UploadMistSurface(const TSharedPtr<FInkMistSurface>& Surface, UTexture2D* Tex, bool bFull)
+{
+	if (!Tex || !Surface.IsValid() || !Surface->IsInited())
+	{
+		return;
+	}
+	FIntRect R;
+	if (bFull)
+	{
+		Surface->MarkAllDirty();
+	}
+	if (!Surface->TakeDirty(R))
+	{
+		return;
+	}
+	const int32 Res = Surface->Resolution();
+	if (!Surface->HasGlaze())
+	{
+		// 零複製快路：直接引用光柵器常駐緩衝（pitch=整列；SrcX/SrcY 指進緩衝）；
+		// **清理回呼抓一份 SharedPtr＝緩衝被釘住到渲染執行緒複製完成**（09-02 崩潰修）。
+		// 複製期間遊戲執行緒繼續寫緩衝＝良性（讀到更新的位元組、下一筆上傳跟上）。
+		FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D(
+			R.Min.X, R.Min.Y, R.Min.X, R.Min.Y, R.Width(), R.Height());
+		Tex->UpdateTextureRegions(0, 1, Region, Res * sizeof(FColor), sizeof(FColor),
+			(uint8*)const_cast<FColor*>(Surface->Data()),
+			[Surface](uint8*, const FUpdateTextureRegion2D* Regions)
+			{
+				delete Regions;
+			});
+		return;
+	}
+	// 罩染合成路（09-02 glazing）：把「罩染 over 基底」預合成進 rect-local 暫存再
+	// 上傳——材質端仍只看到一張貼圖＝零材質改動；暫存自含＝清理回呼釋放、無 UAF。
+	const int32 W = R.Width();
+	const int32 H = R.Height();
+	FColor* Staging = new FColor[static_cast<int64>(W) * H];
+	Surface->ComposeInto(Staging, W, R);
+	FUpdateTextureRegion2D* Region = new FUpdateTextureRegion2D(
+		R.Min.X, R.Min.Y, 0, 0, W, H);
+	Tex->UpdateTextureRegions(0, 1, Region, W * sizeof(FColor), sizeof(FColor),
+		(uint8*)Staging,
+		[](uint8* Data, const FUpdateTextureRegion2D* Regions)
+		{
+			delete[] reinterpret_cast<FColor*>(Data);
+			delete Regions;
+		});
+}
+
+void UInkCanvasComponent::FlushMistUpload()
+{
+	if (MistSurface.IsValid() && MistTex)
+	{
+		UploadMistSurface(MistSurface, MistTex, /*bFull=*/false);
+	}
+}
+
+void UInkCanvasComponent::ReleaseMistLayer(bool& bOutChanged)
+{
+	if (MistTex || MistSurface.IsValid())
+	{
+		MistTex = nullptr; // 只放指標；消費端重綁後由 GC 收（與 RT 同紀律）
+		MistSurface.Reset();
+		bOutChanged = true;
+	}
 }
 
 // --- 作畫 ---
 
 void UInkCanvasComponent::BeginStroke(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke,
-	EInkNeedle Needle, uint8 Flow)
+	EInkNeedle Needle, uint8 Flow, uint8 Tier)
 {
 	if (AuthorId == INDEX_NONE)
 	{
@@ -513,8 +418,22 @@ void UInkCanvasComponent::BeginStroke(int32 AuthorId, FLinearColor Color, FVecto
 
 	FInkStroke Stroke;
 	Stroke.Color = Color;
+	// 濃度檔（09-02 分檔）：per-stroke；只有 Shader 消費（其餘針型恆實檔）
+	Stroke.TierAlpha = (Needle == EInkNeedle::Shader) ? Tier : 255;
 	Stroke.Points.Add(UV);
 	Stroke.PointFlow.Add(Flow);
+	// 稿線牆（09-02 v2）：**首點也有牆**——v1 首點恆無牆（「首點的牆算不出來」），
+	// 等於每一筆的起點都是一個整圓的漏墨口。半平面不需要行進方向；編碼框固定
+	// (1,0)，重放端首點同樣以 (1,0) 解碼＝一致。
+	uint8 Wall0[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+	if (Needle == EInkNeedle::Shader)
+	{
+		FNiInkWallPlane Planes[2];
+		int32 NumPlanes = 0;
+		ComputeStencilWallPlanes(AuthorId, UV, FVector2D(1.0, 0.0), Planes, NumPlanes);
+		EncodeWallPlanes(Planes, NumPlanes, FVector2D(1.0, 0.0), ShaderRowHalfWidthUv, Wall0);
+	}
+	Stroke.PointWall.Append(Wall0, 4);
 	Stroke.StartTimestamp = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0f;
 	Stroke.bDotStroke = bDotStroke;
 	Stroke.NeedleType = Needle;
@@ -524,7 +443,15 @@ void UInkCanvasComponent::BeginStroke(int32 AuthorId, FLinearColor Color, FVecto
 	LastPointByAuthor.Add(AuthorId, UV);
 	LastRowDirByAuthor.Remove(AuthorId); // 筆劃首點=尚無排向
 
-	StampIntoLayerRT(UV, UV, Color, /*bDotOnly=*/true, Needle, nullptr, Flow / 255.0f);
+	// 罩染的筆劃邊界（09-02 三修）：開筆＝新世代——同筆掃過自己恆走 max、
+	// 跨筆的淡壓深才罩染（重放端經 MulticastPaintBegin 走同一條＝同構）
+	if (Needle == EInkNeedle::Shader && EnsureMistLayer())
+	{
+		MistSurface->BeginStrokeMark();
+	}
+
+	StampIntoLayerRT(UV, UV, Color, /*bDotOnly=*/true, Needle, nullptr, Flow / 255.0f, Wall0,
+		Stroke.TierAlpha / 255.0f);
 	OnCanvasChanged.Broadcast();
 }
 
@@ -571,7 +498,25 @@ void UInkCanvasComponent::AddStrokePoint(int32 AuthorId, FVector2D UV, uint8 Flo
 			LastRowDirByAuthor.Add(AuthorId, Delta / DeltaLen);
 		}
 		const FVector2D* RowDir = LastRowDirByAuthor.Find(AuthorId);
-		StampIntoLayerRT(UV, UV, Stroke.Color, /*bDotOnly=*/true, Stroke.NeedleType, RowDir, Flow / 255.0f);
+		// 稿線牆（09-01 建制、09-02 v2 半平面）：只有填色有牆；落墨當下算一次、存進
+		// 筆劃＝重建可重現（稿線 EnterTour 會被洗掉，現算的話已裁好的填色會在巡禮
+		// 那刻膨脹回去）。
+		uint8 Wall[4] = { 0xFF, 0xFF, 0xFF, 0xFF };
+		if (Stroke.NeedleType == EInkNeedle::Shader)
+		{
+			const FVector2D FrameDir = RowDir ? *RowDir : FVector2D(1.0, 0.0);
+			FNiInkWallPlane Planes[2];
+			int32 NumPlanes = 0;
+			ComputeStencilWallPlanes(AuthorId, UV, FrameDir, Planes, NumPlanes);
+			EncodeWallPlanes(Planes, NumPlanes, FrameDir, ShaderRowHalfWidthUv, Wall);
+		}
+		while (Stroke.PointWall.Num() < (Stroke.Points.Num() - 1) * 4)
+		{
+			Stroke.PointWall.Add(0xFF); // 缺項補「不截斷」＝與 PointFlow 同款對齊語義（stride 4）
+		}
+		Stroke.PointWall.Append(Wall, 4);
+		StampIntoLayerRT(UV, UV, Stroke.Color, /*bDotOnly=*/true, Stroke.NeedleType, RowDir, Flow / 255.0f, Wall,
+			Stroke.TierAlpha / 255.0f);
 		if (Stroke.NeedleType == EInkNeedle::Liner)
 		{
 			// 節拍聲只給液線針（霧針高頻沉積的逐針聲=機關槍噪音）
@@ -795,12 +740,12 @@ void UInkCanvasComponent::RebuildRenderTargets()
 	// 「新的那張」才安全（釋放只是放開指標，資源由 UObject 生命週期收）。
 	const FLayerNeeds Needs = ComputeLayerNeeds();
 	if (Needs.bMarker) { EnsureMarkerRT(); }
-	if (Needs.bMist)   { EnsureMistRT(); }
+	if (Needs.bMist)   { EnsureMistLayer(); }
 	if (Needs.bTattoo) { EnsureTattooRT(); }
 
 	bool bLayerSetChanged = false;
 	if (!Needs.bMarker)  { ReleaseLayer(MarkerRT, bLayerSetChanged); }
-	if (!Needs.bMist)    { ReleaseLayer(MistRT, bLayerSetChanged); }
+	if (!Needs.bMist)    { ReleaseMistLayer(bLayerSetChanged); }
 	if (!Needs.bTattoo)  { ReleaseLayer(TattooRT, bLayerSetChanged); }
 	if (!Needs.bScratch) { bool bIgnored = false; ReleaseLayer(ScratchRT, bIgnored); }
 	if (bLayerSetChanged)
@@ -816,9 +761,9 @@ void UInkCanvasComponent::RebuildRenderTargets()
 	{
 		UKismetRenderingLibrary::ClearRenderTarget2D(this, TattooRT, FLinearColor::Transparent);
 	}
-	if (MistRT)
+	if (MistSurface.IsValid())
 	{
-		UKismetRenderingLibrary::ClearRenderTarget2D(this, MistRT, FLinearColor::Transparent);
+		MistSurface->Clear();
 	}
 
 	// 麥克筆線層：玩家原色、全不透明，直接 stamp（只收 Liner——銳化只咬線）
@@ -841,43 +786,83 @@ void UInkCanvasComponent::RebuildRenderTargets()
 		UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, Context);
 	}
 
-	// 霧層（07-23 十版）：Shader 筆劃的軟霧重播——獨立層、銳化不咬
-	if (MistRT)
+	// 霧層（07-23 十版建制；09-02 CPU 光柵）：Shader 筆劃重播進 CPU 緩衝、整張上傳
+	if (MistSurface.IsValid())
 	{
-		UCanvas* Canvas = nullptr;
-		FVector2D CanvasSize = FVector2D::ZeroVector;
-		FDrawToRenderTargetContext Context;
-		UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(this, MistRT, Canvas, CanvasSize, Context);
-		if (Canvas)
+		const FVector2D SurfSize(MistSurface->Resolution(), MistSurface->Resolution());
+		for (const FInkWork& Work : Works)
 		{
-			for (const FInkWork& Work : Works)
+			if (Work.State == EInkWorkState::Marker)
 			{
-				if (Work.State == EInkWorkState::Marker)
-				{
-					DrawWorkStrokes(Canvas, CanvasSize, Work, FLinearColor::White, /*bUseOverrideColor=*/false, ENeedleFilter::ShaderOnly);
-				}
+				DrawWorkStrokes(nullptr, SurfSize, Work, FLinearColor::White, /*bUseOverrideColor=*/false, ENeedleFilter::ShaderOnly);
 			}
 		}
-		UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, Context);
+		if (MistTex)
+		{
+			UploadMistSurface(MistSurface, MistTex, /*bFull=*/true);
+		}
 	}
 
-	// 刺青層：碳黑墨色。未淡化的直接 stamp；
-	// 淡化的先在 ScratchRT 以滿透明度畫完，再整張以工作透明度合成
+	// 刺青層：碳黑墨色。未淡化的：**霧成分先走 CPU 光柵合成一張打底**（與活霧同
+	// 一支光柵器＝轉碳黑那一刻外觀零跳變），液線成分 canvas 直畫在上（筋彫壓在
+	// 暈し上＝正確層序）。淡化的：同構做進 ScratchRT，再整張以工作透明度合成
 	//（半透明 stamp 直接重疊會產生堆疊條紋）。
 	if (TattooRT)
 	{
+		bool bAnyCarbonMist = false;
+		for (const FInkWork& Work : Works)
+		{
+			if (Work.State != EInkWorkState::Marker && Work.LaserLevel == 0)
+			{
+				for (const FInkStroke& St : Work.Strokes)
+				{
+					if (St.NeedleType == EInkNeedle::Shader)
+					{
+						bAnyCarbonMist = true;
+						break;
+					}
+				}
+			}
+			if (bAnyCarbonMist)
+			{
+				break;
+			}
+		}
+		if (bAnyCarbonMist)
+		{
+			EnsureMistScratch();
+			MistScratchSurface->Clear();
+			MistTargetOverride = MistScratchSurface.Get();
+			const FVector2D SurfSize(MistScratchSurface->Resolution(), MistScratchSurface->Resolution());
+			for (const FInkWork& Work : Works)
+			{
+				if (Work.State != EInkWorkState::Marker && Work.LaserLevel == 0)
+				{
+					DrawWorkStrokes(nullptr, SurfSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::ShaderOnly);
+				}
+			}
+			MistTargetOverride = nullptr;
+			UploadMistSurface(MistScratchSurface, MistScratchTex, /*bFull=*/true);
+		}
+
 		UCanvas* Canvas = nullptr;
 		FVector2D CanvasSize = FVector2D::ZeroVector;
 		FDrawToRenderTargetContext Context;
 		UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(this, TattooRT, Canvas, CanvasSize, Context);
 		if (Canvas)
 		{
+			if (bAnyCarbonMist && MistScratchTex && MistScratchTex->GetResource())
+			{
+				FCanvasTileItem MistUnderlay(FVector2D::ZeroVector,
+					MistScratchTex->GetResource(), CanvasSize, FLinearColor::White);
+				MistUnderlay.BlendMode = SE_BLEND_AlphaComposite;
+				Canvas->DrawItem(MistUnderlay);
+			}
 			for (const FInkWork& Work : Works)
 			{
 				if (Work.State != EInkWorkState::Marker && Work.LaserLevel == 0)
 				{
-					// 刺青層一趟全畫：碳黑的霧筆劃=軟黑填色（刺青層無銳化、軟霧成立）
-					DrawWorkStrokes(Canvas, CanvasSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::All);
+					DrawWorkStrokes(Canvas, CanvasSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::LinerOnly);
 				}
 			}
 		}
@@ -900,6 +885,27 @@ void UInkCanvasComponent::RebuildRenderTargets()
 		EnsureScratchRT();
 		UKismetRenderingLibrary::ClearRenderTarget2D(this, ScratchRT, FLinearColor::Transparent);
 
+		// 霧成分＝CPU 光柵（與未淡化路同構），一張 tile 打底進 ScratchRT
+		bool bWorkHasMist = false;
+		for (const FInkStroke& St : Work.Strokes)
+		{
+			if (St.NeedleType == EInkNeedle::Shader)
+			{
+				bWorkHasMist = true;
+				break;
+			}
+		}
+		if (bWorkHasMist)
+		{
+			EnsureMistScratch();
+			MistScratchSurface->Clear();
+			MistTargetOverride = MistScratchSurface.Get();
+			const FVector2D SurfSize(MistScratchSurface->Resolution(), MistScratchSurface->Resolution());
+			DrawWorkStrokes(nullptr, SurfSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::ShaderOnly);
+			MistTargetOverride = nullptr;
+			UploadMistSurface(MistScratchSurface, MistScratchTex, /*bFull=*/true);
+		}
+
 		{
 			UCanvas* Canvas = nullptr;
 			FVector2D CanvasSize = FVector2D::ZeroVector;
@@ -907,7 +913,14 @@ void UInkCanvasComponent::RebuildRenderTargets()
 			UKismetRenderingLibrary::BeginDrawCanvasToRenderTarget(this, ScratchRT, Canvas, CanvasSize, Context);
 			if (Canvas)
 			{
-				DrawWorkStrokes(Canvas, CanvasSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::All);
+				if (bWorkHasMist && MistScratchTex && MistScratchTex->GetResource())
+				{
+					FCanvasTileItem MistUnderlay(FVector2D::ZeroVector,
+						MistScratchTex->GetResource(), CanvasSize, FLinearColor::White);
+					MistUnderlay.BlendMode = SE_BLEND_AlphaComposite;
+					Canvas->DrawItem(MistUnderlay);
+				}
+				DrawWorkStrokes(Canvas, CanvasSize, Work, CarbonInkColor, /*bUseOverrideColor=*/true, ENeedleFilter::LinerOnly);
 			}
 			UKismetRenderingLibrary::EndDrawCanvasToRenderTarget(this, Context);
 		}
@@ -947,12 +960,21 @@ void UInkCanvasComponent::DrawWorkStrokes(UCanvas* Canvas, const FVector2D& Canv
 		}
 		FLinearColor Color = bUseOverrideColor ? OverrideColor : Stroke.Color;
 		Color.A = 1.0f;
+		// 罩染筆劃邊界（重放側）：每條霧筆劃開新世代——與 live 的 BeginStroke 同構
+		//（世代「值」不必跨端相同，只比對同/異筆＝每筆唯一即可 ⇒ 重建逐位等價成立）
+		if (Stroke.NeedleType == EInkNeedle::Shader)
+		{
+			if (FInkMistSurface* Surf = MistTargetOverride ? MistTargetOverride : MistSurface.Get())
+			{
+				Surf->BeginStrokeMark();
+			}
+		}
 		StampPolyline(Canvas, CanvasSize, Stroke.Points, Color, Stroke.bDotStroke,
-			Stroke.NeedleType, &Stroke.PointFlow);
+			Stroke.NeedleType, &Stroke.PointFlow, &Stroke.PointWall, Stroke.TierAlpha / 255.0f);
 	}
 }
 
-void UInkCanvasComponent::StampPolyline(UCanvas* Canvas, const FVector2D& CanvasSize, const TArray<FVector2D>& Points, const FLinearColor& Color, bool bDots, EInkNeedle Needle, const TArray<uint8>* PointFlow) const
+void UInkCanvasComponent::StampPolyline(UCanvas* Canvas, const FVector2D& CanvasSize, const TArray<FVector2D>& Points, const FLinearColor& Color, bool bDots, EInkNeedle Needle, const TArray<uint8>* PointFlow, const TArray<uint8>* PointWall, float Tier01) const
 {
 	if (Points.IsEmpty())
 	{
@@ -966,7 +988,15 @@ void UInkCanvasComponent::StampPolyline(UCanvas* Canvas, const FVector2D& Canvas
 			? (*PointFlow)[Index] / 255.0f : 1.0f;
 	};
 
-	StampNeedleDot(Canvas, CanvasSize, Points[0], Color, Needle, nullptr, FlowAt(0));
+	// 逐點稿線牆（09-01；09-02 v2＝每點 4 位元組，見 FInkStroke::PointWall）：
+	// 缺項=不截斷（舊存檔／Liner／稿筆／robo 折線零遷移）
+	auto WallAt = [PointWall](int32 Index) -> const uint8*
+	{
+		return (PointWall && PointWall->Num() >= (Index + 1) * 4)
+			? PointWall->GetData() + Index * 4 : nullptr;
+	};
+
+	StampNeedleDot(Canvas, CanvasSize, Points[0], Color, Needle, nullptr, FlowAt(0), WallAt(0), Tier01);
 	if (bDots)
 	{
 		// 點刺重播：逐點蓋章；排向由相鄰兩點推導（與 live 增量同構＝同一份
@@ -983,132 +1013,306 @@ void UInkCanvasComponent::StampPolyline(UCanvas* Canvas, const FVector2D& Canvas
 				bHasDir = true;
 			}
 			StampNeedleDot(Canvas, CanvasSize, Points[Index], Color, Needle,
-				bHasDir ? &RowDir : nullptr, FlowAt(Index));
+				bHasDir ? &RowDir : nullptr, FlowAt(Index), WallAt(Index), Tier01);
 		}
 		return;
 	}
 	for (int32 Index = 1; Index < Points.Num(); ++Index)
 	{
-		StampSegment(Canvas, CanvasSize, Points[Index - 1], Points[Index], Color,
-			NeedleUvRadius(Needle));
+		if (Needle == EInkNeedle::Shader)
+		{
+			// 折線段（robo/舊管線）在霧層＝沿線密排單點（CPU 光柵無 canvas 段畫）
+			StampMistSegment(Points[Index - 1], Points[Index], Color, Tier01);
+		}
+		else if (Canvas)
+		{
+			StampSegment(Canvas, CanvasSize, Points[Index - 1], Points[Index], Color,
+				NeedleUvRadius(Needle));
+		}
 	}
 }
 
-void UInkCanvasComponent::StampNeedleDot(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, EInkNeedle Needle, const FVector2D* RowDirUv, float Flow) const
+// 霧層折線段（robo/證據等舊管線語義）：以麥克筆半徑沿線每半徑 0.5 落一點——
+// max 合成下聯集＝連續線，與舊 StampSegment 進霧層的讀感等價
+void UInkCanvasComponent::StampMistSegment(const FVector2D& From, const FVector2D& To, const FLinearColor& Color, float Tier01) const
+{
+	FInkMistSurface* Surf = MistTargetOverride ? MistTargetOverride : MistSurface.Get();
+	if (!Surf)
+	{
+		return;
+	}
+	Surf->Configure(MistToneCoolColor, MistToneCoolStrength, MistToneCurveGamma, MistGrainAmp, MistGrainPeriodPx);
+	const float R = MarkerUvRadius;
+	const float EdgeUv = 1.0f / FMath::Max(Surf->Resolution(), 1); // 1 紋素斜坡＝抗鋸齒
+	const float Len = static_cast<float>((To - From).Size());
+	const int32 Steps = FMath::Max(1, FMath::CeilToInt(Len / FMath::Max(R * 0.5f, 1e-6f)));
+	for (int32 I = 0; I <= Steps; ++I)
+	{
+		const FVector2D P = From + (To - From) * (static_cast<float>(I) / Steps);
+		Surf->StampDot(P, R, EdgeUv, Color, Tier01);
+	}
+}
+
+// --- 稿線擋墨（2026-09-01；user 定案「稿線變成擋墨的牆」）---
+//
+// 填色掃到自己畫的稿線就停：手照樣自由亂掃、游標零干擾，邊界由稿線保證乾淨。
+// 這不是新的否決機制——被擋的是**墨的落點**，不是游標，與既有的可畫域橢圓同一類
+//（橢圓外收筆、游標不受影響）。
+//
+// 兩條刻意的限制：
+//   ①**只擋同一位作者的稿線**——別人的框關不住你的墨（否則「畫個籠子把人圍起來」
+//     就是零成本騷擾）；也符合心智模型「你的稿線關住你的墨」。
+//   ②**只擋 Shader**——割線已經有沿稿自動走（吸附、不是牆），語義不同不可混。
+// **v2＝半平面（09-02；v1 白刺定罪）**：v1 只在行進方向 ±0.3R 的窗內查、且只會把章
+// 「橫向夾窄」——正對稿線衝過去時線落在窗外＝查不到，圓章前半直接壓過線 ⇒ 放射白刺
+//（長度上限恰為一個半徑、方向垂直輪廓＝user 截圖的簽名）。削章模型只有一個自由度，
+// 斜的、正面的牆構造上削不出來——**解不在那個參數空間裡**。v2：對每一枚章收集半徑
+// R 內同作者稿線段的半平面（過最近點、法線＝章心→最近點；線段內部＝稿線本身的直線，
+// 端點＝圓帽切面＝牆以圓角收尾不無限延伸），聚類取最近至多 2 個（轉角）。
+void UInkCanvasComponent::ComputeStencilWallPlanes(int32 AuthorId, const FVector2D& CenterUV,
+	const FVector2D& FrameDir, FNiInkWallPlane OutPlanes[2], int32& OutNum) const
+{
+	OutNum = 0;
+	const float R = ShaderRowHalfWidthUv;
+	if (AuthorId == INDEX_NONE || R <= 0.0f)
+	{
+		return;
+	}
+	const float RSq = R * R;
+
+	// 聚類：法線差 <25° 視為同一面牆（同一條稿線的相鄰線段），每群只留最近者；
+	// 8 群上限防退化（半徑 10mm 內塞不進更多真牆）。
+	FNiInkWallPlane Cands[8];
+	int32 NumCands = 0;
+	const float SameWallCos = FMath::Cos(FMath::DegreesToRadians(25.0f));
+
+	for (const FInkWork& W : Works)
+	{
+		if (W.State != EInkWorkState::Marker || W.AuthorId != AuthorId)
+		{
+			continue;
+		}
+		for (const FInkStroke& St : W.Strokes)
+		{
+			if (St.NeedleType != EInkNeedle::Stencil)
+			{
+				continue;
+			}
+			// **逐線段、不逐點**（09-01 首驗修）：逐點查會讓「落在兩個稿點之間」的
+			// 章查不到牆＝把 bug 綁在稿點間距的旋鈕上；查線段＝與稿點密度無關。
+			for (int32 Pi = 0; Pi + 1 < St.Points.Num(); ++Pi)
+			{
+				const FVector2D A = St.Points[Pi];
+				const FVector2D B = St.Points[Pi + 1];
+				if ((A.X - CenterUV.X > R && B.X - CenterUV.X > R) ||
+					(CenterUV.X - A.X > R && CenterUV.X - B.X > R) ||
+					(A.Y - CenterUV.Y > R && B.Y - CenterUV.Y > R) ||
+					(CenterUV.Y - A.Y > R && CenterUV.Y - B.Y > R))
+				{
+					continue; // 粗篩：兩端在同一側且都離章 >R
+				}
+				const FVector2D AB = B - A;
+				const float LenSq = static_cast<float>(AB.SizeSquared());
+				float T = 0.0f;
+				if (LenSq > 1e-16f)
+				{
+					T = FMath::Clamp(static_cast<float>(FVector2D::DotProduct(CenterUV - A, AB)) / LenSq, 0.0f, 1.0f);
+				}
+				const FVector2D Q = A + AB * T;
+				const FVector2D ToQ = Q - CenterUV;
+				const float DistSq = static_cast<float>(ToQ.SizeSquared());
+				if (DistSq > RSq)
+				{
+					continue;
+				}
+				const float Dist = FMath::Sqrt(DistSq);
+				FVector2D N;
+				if (Dist > R * 0.02f)
+				{
+					N = ToQ / Dist;
+				}
+				else
+				{
+					// 章心正壓在稿線上＝法線不定：取線段法線、朝行進前方
+					//（保留「來的那一側」——跨線的那一瞬各章各自守自己那側）
+					const FVector2D SegPerp = FVector2D(-AB.Y, AB.X).GetSafeNormal();
+					if (SegPerp.IsNearlyZero())
+					{
+						continue;
+					}
+					N = (FVector2D::DotProduct(SegPerp, FrameDir) >= 0.0) ? SegPerp : -SegPerp;
+				}
+				bool bMerged = false;
+				for (int32 Ci = 0; Ci < NumCands; ++Ci)
+				{
+					if (FVector2D::DotProduct(Cands[Ci].NormalUv, N) > SameWallCos)
+					{
+						if (Dist < Cands[Ci].DistUv)
+						{
+							Cands[Ci].NormalUv = N;
+							Cands[Ci].DistUv = Dist;
+						}
+						bMerged = true;
+						break;
+					}
+				}
+				if (!bMerged && NumCands < 8)
+				{
+					Cands[NumCands].NormalUv = N;
+					Cands[NumCands].DistUv = Dist;
+					++NumCands;
+				}
+			}
+		}
+	}
+
+	// 依距離插入排序（≤8 元素）、取最近 2 群
+	for (int32 I = 1; I < NumCands; ++I)
+	{
+		const FNiInkWallPlane Key = Cands[I];
+		int32 J = I - 1;
+		while (J >= 0 && Cands[J].DistUv > Key.DistUv)
+		{
+			Cands[J + 1] = Cands[J];
+			--J;
+		}
+		Cands[J + 1] = Key;
+	}
+	OutNum = FMath::Min(NumCands, 2);
+	for (int32 I = 0; I < OutNum; ++I)
+	{
+		OutPlanes[I] = Cands[I];
+	}
+}
+
+void UInkCanvasComponent::EncodeWallPlanes(const FNiInkWallPlane* Planes, int32 Num,
+	const FVector2D& FrameDir, float HalfWUv, uint8 Out[4])
+{
+	Out[0] = Out[1] = Out[2] = Out[3] = 0xFF;
+	if (HalfWUv <= 0.0f)
+	{
+		return;
+	}
+	const FVector2D Perp(-FrameDir.Y, FrameDir.X);
+	for (int32 I = 0; I < Num && I < 2; ++I)
+	{
+		const float CosA = static_cast<float>(FVector2D::DotProduct(Planes[I].NormalUv, FrameDir));
+		const float SinA = static_cast<float>(FVector2D::DotProduct(Planes[I].NormalUv, Perp));
+		float Ang = FMath::Atan2(SinA, CosA);
+		if (Ang < 0.0f)
+		{
+			Ang += 2.0f * PI;
+		}
+		Out[I * 2 + 0] = static_cast<uint8>(FMath::RoundToInt(Ang / (2.0f * PI) * 256.0f) & 255);
+		Out[I * 2 + 1] = static_cast<uint8>(FMath::Clamp(FMath::RoundToInt(Planes[I].DistUv / HalfWUv * 254.0f), 0, 254));
+	}
+}
+
+int32 UInkCanvasComponent::DecodeWallPlanes(const uint8* In4, const FVector2D& FrameDir,
+	float HalfWUv, FNiInkWallPlane OutPlanes[2])
+{
+	if (!In4 || HalfWUv <= 0.0f)
+	{
+		return 0;
+	}
+	const FVector2D Perp(-FrameDir.Y, FrameDir.X);
+	int32 Num = 0;
+	for (int32 I = 0; I < 2; ++I)
+	{
+		if (In4[I * 2 + 1] == 0xFF)
+		{
+			continue;
+		}
+		const float Ang = static_cast<float>(In4[I * 2 + 0]) / 256.0f * 2.0f * PI;
+		OutPlanes[Num].NormalUv = FrameDir * FMath::Cos(Ang) + Perp * FMath::Sin(Ang);
+		OutPlanes[Num].DistUv = static_cast<float>(In4[I * 2 + 1]) / 254.0f * HalfWUv;
+		++Num;
+	}
+	return Num;
+}
+
+void UInkCanvasComponent::StampNeedleDot(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, EInkNeedle Needle, const FVector2D* RowDirUv, float Flow, const uint8* Wall4, float Tier01) const
 {
 	if (Needle != EInkNeedle::Shader)
 	{
 		// Liner 忽略流量：割線=機器擁有速度（巡航恆速），濃度不是手的表達軸
-		StampDot(Canvas, CanvasSize, UV, Color, MarkerUvRadius);
+		if (Canvas)
+		{
+			StampDot(Canvas, CanvasSize, UV, Color, MarkerUvRadius);
+		}
 		return;
 	}
-	StampMistRow(Canvas, CanvasSize, UV, Color, RowDirUv, Flow);
+	StampMistRow(UV, Color, RowDirUv, Flow, Wall4, Tier01);
 }
 
-void UInkCanvasComponent::StampMistRow(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Color, const FVector2D* RowDirUv, float Flow) const
+void UInkCanvasComponent::StampMistRow(const FVector2D& UV, const FLinearColor& Color, const FVector2D* RowDirUv, float Flow, const uint8* Wall4, float Tier01) const
 {
-	// 細針點排章（07-23 十一版 user 規格）：一排超小「半透明」墨點垂直於行進
-	// 方向、單點不透明度沿排弧形衰減（中央 30%→邊緣 5%=接觸壓力剖面=羽化）。
-	// 半透明點在畫布上真實疊加融合（30%+30%=51%）——密度夠=平滑灰面＋細緻
-	// 針點紋理；胡椒點版的不透明點只能靠肉眼混色=本作視距（貼膚30cm+FOV36）死路。
-	// 決定性：亂數種子=UV 量化雜湊（LCG 推進、恆消費）——各端/重放/碳黑同 pattern。
-	UTexture2D* Nib = const_cast<UInkCanvasComponent*>(this)->GetOrCreateSoftNibTexture();
-	if (!Nib || !Nib->GetResource())
+	// 打霧的一枚章＝**圓形硬心軟邊**（2026-09-01 定形；09-02 改 CPU 光柵）。
+	//
+	// 為什麼是圓：舊排帶的兩端有 10mm 力臂，朝向由 2mm 位移正規化＝手一慢就是雜訊
+	// ⇒ 梳齒；圓沒有「兩端」，聯集＝等距偏移曲線（扇貝 s²/8R＝0.05mm 看不見）
+	// ＝平滑是構造保證。硬心軟邊＝地與暈し：漸層是**邊界現象**，面的內部深淺叫髒；
+	// 反覆工作＝實心區往外長、暈開停在最前緣（真打霧手法）。
+	//
+	// 為什麼 CPU（09-02 分檔）：淡/中檔的均勻性要求「同檔重疊＝不變深」跨筆劃成立
+	// ⇒ 合成必須 max，Canvas 給不了 ⇒ FInkMistSurface（全文見該檔頭）。
+	// 圓章剖面直接逐像素解析求值（羽化 2mm≈2.5px 取樣充分）——比縮放貼圖更乾淨，
+	// 十四版「烘在目的地解析度」的積分需求由解析求值天然滿足。
+	FInkMistSurface* Surf = MistTargetOverride ? MistTargetOverride : MistSurface.Get();
+	if (!Surf || !Surf->IsInited())
 	{
 		return;
 	}
-	// 冷墨底色：半透明純黑疊暖膚=棕（髒讀感真兇之一）；皮下墨散射偏藍
+	Surf->Configure(MistToneCoolColor, MistToneCoolStrength, MistToneCurveGamma, MistGrainAmp, MistGrainPeriodPx);
+	// 冷墨底色（預設 0＝關；見標頭）：半透明純黑疊暖膚=棕
 	const FLinearColor Ink(
 		FMath::Max(Color.R, ShaderMistCoolFloor.R),
 		FMath::Max(Color.G, ShaderMistCoolFloor.G),
 		FMath::Max(Color.B, ShaderMistCoolFloor.B));
 
-	Flow = FMath::Clamp(Flow, 0.0f, 1.0f);
+	// 密度＝檔位 × 流量 × 濃度旋鈕（剖面在光柵器內乘）
+	const float Density = FMath::Clamp(Flow, 0.0f, 1.0f)
+		* FMath::Clamp(Tier01, 0.0f, 1.0f)
+		* FMath::Clamp(ShaderStippleAlphaCenter, 0.01f, 1.0f);
+	if (Density <= 0.0f)
+	{
+		return;
+	}
 
-	// 縫區閘（07-24 跨縫制）：距 UV 縫 <2.5cm 的排改走表面補丁逐點落墨——
-	// 平面條帶在縫上會被裁出直線界線＋汙染圖集隔壁島（viewport 實錘）
+	// 稿線擋墨 v2（09-02）：解碼本點的裁切半平面。Wall4 是落墨當下算好存進筆劃的
+	//（見 FInkStroke::PointWall）——重建時讀回同一組數，稿線洗掉也不會膨脹。
+	// 解碼框＝行進方向（首點=(1,0)）；live 與重放由同一份點序列推導＝一致。
+	const FVector2D FrameDir = RowDirUv ? *RowDirUv : FVector2D(1.0, 0.0);
+	FNiInkWallPlane WallPlanes[2];
+	const int32 NumWallPlanes = DecodeWallPlanes(Wall4, FrameDir, ShaderRowHalfWidthUv, WallPlanes);
+
+	// 縫區閘（07-24 跨縫制）：距 UV 縫 <2.5cm 的章改走表面補丁逐點落墨——
+	// 平面圓章在縫上會被裁出直線界線＋汙染圖集隔壁島（viewport 實錘）
 	if (RowDirUv)
 	{
 		if (UInkBodyComponent* Body = ResolveBody())
 		{
 			if (Body->IsUVNearSeam(UV) &&
-				StampMistRowOnSurface(Canvas, CanvasSize, UV, Ink, *RowDirUv, Flow))
+				StampMistRowOnSurface(UV, Ink, *RowDirUv, Density, WallPlanes, NumWallPlanes))
 			{
 				return;
 			}
 		}
 	}
-	if (!RowDirUv)
+
+	// 剖面幾何：羽化寬（mm）→ 半徑比例（與退役貼圖同式）
+	const float RadiusMm = FMath::Max(ShaderRowHalfWidthUv, 1e-5f) / 0.000301f;
+	const float FeatherFrac = FMath::Clamp(ShaderFillFeatherMm / FMath::Max(RadiusMm, 0.01f), 0.02f, 1.0f);
+
+	// 牆平面轉光柵器型別（同語義、零耦合的型別橋）
+	FInkMistSurface::FPlane SurfPlanes[2];
+	for (int32 I = 0; I < NumWallPlanes; ++I)
 	{
-		// 筆劃首點=尚無排向：單顆軟點（中央濃度×流量）。
-		// 暈開守恆（十四版）：實體點徑 ~1.6px 畫不出漸層——腳印放大到
-		// max(3px, 實徑+2×暈開)、α 按面積比縮＝墨量守恆、讀感與條帶路徑一致
-		const float PhysDiaPx = ShaderStippleUvRadius * 2.0f * CanvasSize.X;
-		const float BleedPx = ShaderMistBleedMm * 0.000301f * CanvasSize.X;
-		const float Diameter = FMath::Max(3.0f, PhysDiaPx + 2.0f * BleedPx);
-		const float A = ShaderStippleAlphaCenter * Flow *
-			FMath::Square(PhysDiaPx / Diameter);
-		const FLinearColor Premult(Ink.R * A, Ink.G * A, Ink.B * A, A);
-		const FVector2D TopLeft(UV.X * CanvasSize.X - Diameter * 0.5f, UV.Y * CanvasSize.Y - Diameter * 0.5f);
-		FCanvasTileItem TileItem(TopLeft, Nib->GetResource(), FVector2D(Diameter, Diameter), Premult);
-		TileItem.BlendMode = SE_BLEND_AlphaComposite;
-		Canvas->DrawItem(TileItem);
-		return;
+		SurfPlanes[I].NormalUv = WallPlanes[I].NormalUv;
+		SurfPlanes[I].DistUv = WallPlanes[I].DistUv;
 	}
-
-	// 整排=一張預烘條帶（robo superfast 實錘：每排 20 個 canvas item 的提交成本
-	// 拖垮幀率）：兩個三角形擺出旋轉貼片（角點顯式算=無旋轉符號歧義）、
-	// 變體由 UV 量化雜湊選=各端/重放/碳黑同 pattern
-	UTexture2D* Strip = const_cast<UInkCanvasComponent*>(this)->GetOrCreateStippleRowTexture();
-	if (!Strip || !Strip->GetResource())
-	{
-		return;
-	}
-	constexpr int32 Variants = 8;
-	const uint32 Hash = (static_cast<uint32>(FMath::RoundToInt(UV.X * 65536.0f)) * 73856093u)
-		^ (static_cast<uint32>(FMath::RoundToInt(UV.Y * 65536.0f)) * 19349663u);
-	const int32 V = static_cast<int32>((Hash >> 4) % Variants);
-	const float V0 = static_cast<float>(V) / Variants;
-	const float V1 = static_cast<float>(V + 1) / Variants;
-	// 反成軌（斷格修同輪）：24 個槽位是固定的——只靠 8 變體的槽內抖動，
-	// 沿行進方向點會排成縱向軌。每排加①橫向整體平移 ±1 槽寬②鏡像翻轉，
-	// 皆由雜湊決定＝各端/重放/碳黑同 pattern。
-	const float SlotShift = ((static_cast<float>((Hash >> 12) & 0xFF) / 255.0f) - 0.5f) * 2.0f
-		* (2.0f * ShaderRowHalfWidthUv / FMath::Max(ShaderRowDotCount, 1));
-	const bool bFlipU = (Hash & 1u) != 0;
-	const float U0 = bFlipU ? 1.0f : 0.0f;
-	const float U1 = bFlipU ? 0.0f : 1.0f;
-
-	const FVector2D Perp(-RowDirUv->Y, RowDirUv->X);
-	const FVector2D ShiftedUV = ClampUV(UV + Perp * SlotShift);
-	const FVector2D CenterPx(ShiftedUV.X * CanvasSize.X, ShiftedUV.Y * CanvasSize.Y);
-	const float HalfWPx = ShaderRowHalfWidthUv * CanvasSize.X;
-	const FVector2D AcrossPx = Perp * HalfWPx;                  // 條帶 X=橫越排帶
-	// 條帶 Y=沿行進；高寬比 0.3（=章高 6mm、上下餘弦羽化烘在紋理裡）——
-	// 必須與 GetOrCreateStippleRowTexture 的 RowAspect 一致
-	const FVector2D AlongPx = (*RowDirUv) * (HalfWPx * 0.3f);
-	// alpha 剖面已烘進條帶；流量因子乘在頂點色（premult：RGB 與 A 同乘）——
-	// 手速→濃淡不重烘紋理、不加 item 數（條帶預烘的效能成果不動）
-	const FLinearColor VtxColor(Ink.R * Flow, Ink.G * Flow, Ink.B * Flow, Flow);
-
-	FCanvasUVTri Tri1, Tri2;
-	const FVector2D PA = CenterPx - AcrossPx - AlongPx; // (U0,V0)
-	const FVector2D PB = CenterPx + AcrossPx - AlongPx; // (U1,V0)
-	const FVector2D PC = CenterPx + AcrossPx + AlongPx; // (U1,V1)
-	const FVector2D PD = CenterPx - AcrossPx + AlongPx; // (U0,V1)
-	Tri1.V0_Pos = PA; Tri1.V0_UV = FVector2D(U0, V0); Tri1.V0_Color = VtxColor;
-	Tri1.V1_Pos = PB; Tri1.V1_UV = FVector2D(U1, V0); Tri1.V1_Color = VtxColor;
-	Tri1.V2_Pos = PC; Tri1.V2_UV = FVector2D(U1, V1); Tri1.V2_Color = VtxColor;
-	Tri2.V0_Pos = PA; Tri2.V0_UV = FVector2D(U0, V0); Tri2.V0_Color = VtxColor;
-	Tri2.V1_Pos = PC; Tri2.V1_UV = FVector2D(U1, V1); Tri2.V1_Color = VtxColor;
-	Tri2.V2_Pos = PD; Tri2.V2_UV = FVector2D(U0, V1); Tri2.V2_Color = VtxColor;
-
-	TArray<FCanvasUVTri> Tris;
-	Tris.Add(Tri1);
-	Tris.Add(Tri2);
-	FCanvasTriangleItem TriItem(Tris, Strip->GetResource());
-	TriItem.BlendMode = SE_BLEND_AlphaComposite; // 預乘 over：排/趟自然疊深
-	Canvas->DrawItem(TriItem);
+	Surf->StampDisc(UV, ShaderRowHalfWidthUv, FeatherFrac, Ink, Density,
+		NumWallPlanes > 0 ? SurfPlanes : nullptr, NumWallPlanes);
 }
 
 UInkBodyComponent* UInkCanvasComponent::ResolveBody() const
@@ -1124,13 +1328,14 @@ UInkBodyComponent* UInkCanvasComponent::ResolveBody() const
 	return CachedBody.Get();
 }
 
-bool UInkCanvasComponent::StampMistRowOnSurface(UCanvas* Canvas, const FVector2D& CanvasSize, const FVector2D& UV, const FLinearColor& Ink, const FVector2D& RowDirUv, float Flow) const
+bool UInkCanvasComponent::StampMistRowOnSurface(const FVector2D& UV, const FLinearColor& Ink, const FVector2D& RowDirUv, float Density, const FNiInkWallPlane* WallPlanes, int32 NumWallPlanes) const
 {
 	// 縫區排章：以排心為種子沿皮膚 BFS 攤平（補丁=cm 平面、跨縫連續），每顆針點
 	// 在攤平面上定位再映回 UV0——點落在縫哪一側由「真實表面」決定，兩側自動接續、
 	// 圖集上排在隔壁的無關島構造上碰不到。補丁在相鄰排之間快取（中心移 >0.5cm 重建）。
+	FInkMistSurface* Surf = MistTargetOverride ? MistTargetOverride : MistSurface.Get();
 	UInkBodyComponent* Body = ResolveBody();
-	if (!Body)
+	if (!Body || !Surf || !Surf->IsInited())
 	{
 		return false;
 	}
@@ -1193,55 +1398,86 @@ bool UInkCanvasComponent::StampMistRowOnSurface(UCanvas* Canvas, const FVector2D
 	const FVector2D DirC = DirCRaw / CmPerUv;
 	const FVector2D PerpC(-DirC.Y, DirC.X);
 
-	UTexture2D* Nib = const_cast<UInkCanvasComponent*>(this)->GetOrCreateSoftNibTexture();
-	if (!Nib || !Nib->GetResource())
+	// **縫區也是圓章**（2026-09-01；09-02 改 CPU 光柵）：平面路徑貼一枚圓形硬心軟邊；
+	// 這裡因為要跨縫，改成把同一個圓在**攤平面上以同心環取樣**、每個樣本各自映回
+	// UV0 落一顆點。點落在縫哪一側由真實表面決定 ⇒ 兩側自動接續、鄰島碰不到。
+	//
+	// max 合成（09-02）讓兩隻舊病一起消滅：①軟章疊合坑疤（09-01 首驗血價）——
+	// 重疊點取最大＝剖面本身，不會堆疊；②over 反解 1−(1−t)^(1/N) 隨之退役——
+	// 每顆點直接寫目標濃度。
+	const float RadCm = ShaderRowHalfWidthUv * CmPerUv;
+	const float RadMm = ShaderRowHalfWidthUv / 0.000301f;
+	const float FeatherFrac = FMath::Clamp(ShaderFillFeatherMm / FMath::Max(RadMm, 0.01f), 0.02f, 1.0f);
+	const float CoreFrac = 1.0f - FeatherFrac;
+
+	constexpr int32 Rings = 5;                        // 含中心點（環距 = R/4）
+	const float RingStepCm = RadCm / FMath::Max(Rings - 1, 1);
+	const float RingStepUv = RingStepCm / FMath::Max(CmPerUv, 1e-6f);
+	// 腳印 = 2.5×環距 ⇒ 相鄰點重疊充分＝max 聯集融成連續面
+	const float DotRadUv = FMath::Max(1.5f / Surf->Resolution(), 1.25f * RingStepUv);
+	const float DotEdgeUv = 1.0f / Surf->Resolution(); // 1 紋素斜坡＝抗鋸齒
+
+	for (int32 Ring = 0; Ring < Rings; ++Ring)
 	{
-		return false;
-	}
-	const float HalfWCm = ShaderRowHalfWidthUv * CmPerUv;
-	const int32 K = FMath::Clamp(ShaderRowDotCount, 4, 128);
-	const float SlotWCm = 2.0f * HalfWCm / K;
-	// 暈開守恆（十四版，與條帶/首點路徑同語義）：腳印=max(3px, 實徑+2×暈開)、
-	// α 按面積比縮=墨量守恆——縫區讀感與平面條帶一致
-	const float PhysDiaPx = ShaderStippleUvRadius * 2.0f * CanvasSize.X;
-	const float BleedPx = ShaderMistBleedMm * 0.000301f * CanvasSize.X;
-	const float DotDiaPx = FMath::Max(3.0f, PhysDiaPx + 2.0f * BleedPx);
-	const float InkConserve = FMath::Square(PhysDiaPx / DotDiaPx);
-	uint32 Seed = (static_cast<uint32>(FMath::RoundToInt(UV.X * 65536.0f)) * 73856093u)
-		^ (static_cast<uint32>(FMath::RoundToInt(UV.Y * 65536.0f)) * 19349663u);
-	auto NextRand = [&Seed]() -> float
-	{
-		Seed = Seed * 1664525u + 1013904223u;
-		return static_cast<float>(Seed >> 8) / 16777216.0f;
-	};
-	for (int32 i = 0; i < K; ++i)
-	{
-		const float T = ((i + 0.5f) / K) * 2.0f - 1.0f;
-		// 平頂＋線性羽化×流量×暈開守恆——與條帶烘製同公式（縫區/平面讀感一致）
-		const float FeatherFrac = FMath::Clamp(
-			ShaderFillFeatherMm * 0.1f / FMath::Max(HalfWCm, 0.01f), 0.05f, 1.0f);
-		const float Wt = FMath::Clamp((1.0f - FMath::Abs(T)) / FeatherFrac, 0.0f, 1.0f);
-		const float A = ShaderStippleAlphaCenter * Wt * Flow * InkConserve;
-		const float JitterAcross = (NextRand() - 0.5f) * SlotWCm;
-		// 縱向散佈與條帶烘製同語義（章高=帶寬×0.3=0.6×HalfW、扣點半徑防截斷；
-		// 不做包絡=均勻散佈——縫區是稀有事件、剖面略方可接受）
-		const float DotRadCm = ShaderStippleUvRadius * CmPerUv;
-		const float AlongSpreadCm = FMath::Max(SlotWCm, 0.6f * HalfWCm - 2.0f * DotRadCm);
-		const float JitterAlong = (NextRand() - 0.5f) * AlongSpreadCm;
-		const FVector2D ChartPt = CenterChart
-			+ PerpC * (T * HalfWCm + JitterAcross)
-			+ DirC * JitterAlong;
-		FVector2D DotUV;
-		if (!SeamPatch.ChartToUV0(ChartPt, DotUV))
+		const float R01 = (Rings > 1) ? (static_cast<float>(Ring) / (Rings - 1)) : 0.0f;
+		// 徑向剖面＝與平面圓章同式（硬心＋smoothstep 軟邊）
+		float Prof;
+		if (R01 <= CoreFrac)
 		{
-			continue; // 補丁外（剪影邊/褌洞）＝誠實不落墨
+			Prof = 1.0f;
 		}
-		const FLinearColor Premult(Ink.R * A, Ink.G * A, Ink.B * A, A);
-		const FVector2D TopLeft(DotUV.X * CanvasSize.X - DotDiaPx * 0.5f,
-			DotUV.Y * CanvasSize.Y - DotDiaPx * 0.5f);
-		FCanvasTileItem TileItem(TopLeft, Nib->GetResource(), FVector2D(DotDiaPx, DotDiaPx), Premult);
-		TileItem.BlendMode = SE_BLEND_AlphaComposite;
-		Canvas->DrawItem(TileItem);
+		else
+		{
+			const float T = FMath::Clamp((1.0f - R01) / FMath::Max(FeatherFrac, 1e-4f), 0.0f, 1.0f);
+			Prof = T * T * (3.0f - 2.0f * T);
+		}
+		const float Target = Prof * Density;
+		if (Target <= 0.004f)
+		{
+			continue;
+		}
+		const int32 Count = (Ring == 0) ? 1
+			: FMath::Max(6, FMath::RoundToInt(2.0f * PI * R01 * RadCm / RingStepCm));
+		for (int32 i = 0; i < Count; ++i)
+		{
+			const float Ang = (Count > 1) ? (2.0f * PI * i / Count) : 0.0f;
+			// 局部座標：u＝沿行進、v＝橫越
+			const float LocalU = FMath::Cos(Ang) * R01 * RadCm;
+			const float LocalV = FMath::Sin(Ang) * R01 * RadCm;
+			const FVector2D ChartPt = CenterChart + DirC * LocalU + PerpC * LocalV;
+			FVector2D DotUV;
+			if (!SeamPatch.ChartToUV0(ChartPt, DotUV))
+			{
+				continue; // 補丁外（剪影邊/褌洞）＝誠實不落墨
+			}
+			// 稿線牆 v2（09-02 二修）：測**實際落點**（DotUV−章心），不測局部座標的
+			// 理論落點——chart→UV 逐 tri 各自仿射，折疊/高扭曲處兩者可以差一整顆章
+			// ⇒ 用理論落點測＝漏（c6 首驗縫區漏 26%、深達一個半徑實錘）。跨島跳走
+			// 的點（|offset|>3R）牆概念不適用、也落不到牆邊＝不測。點腳印半徑扣進
+			// 距離＝腳印也不越線（planar 路是硬裁，點章語義對齊）。
+			if (NumWallPlanes > 0)
+			{
+				const FVector2D OffUv = DotUV - UV;
+				const float R3 = 3.0f * ShaderRowHalfWidthUv;
+				if (static_cast<float>(OffUv.SizeSquared()) <= R3 * R3)
+				{
+					bool bBlocked = false;
+					for (int32 Wi = 0; Wi < NumWallPlanes; ++Wi)
+					{
+						if (static_cast<float>(FVector2D::DotProduct(OffUv, WallPlanes[Wi].NormalUv)) > WallPlanes[Wi].DistUv - DotRadUv)
+						{
+							bBlocked = true;
+							break;
+						}
+					}
+					if (bBlocked)
+					{
+						continue; // 牆外＝不落墨
+					}
+				}
+			}
+			Surf->StampDot(DotUV, DotRadUv, DotEdgeUv, Ink, Target);
+		}
 	}
 	return true;
 }
@@ -1286,12 +1522,35 @@ void UInkCanvasComponent::StampDot(UCanvas* Canvas, const FVector2D& CanvasSize,
 	Canvas->DrawItem(TileItem);
 }
 
-void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2D& To, const FLinearColor& Color, bool bDotOnly, EInkNeedle Needle, const FVector2D* RowDirUv, float Flow)
+void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2D& To, const FLinearColor& Color, bool bDotOnly, EInkNeedle Needle, const FVector2D* RowDirUv, float Flow, const uint8* Wall4, float Tier01)
 {
-	// 針型路由：Liner→線層（銳化咬=脆的實心墨）；Shader→霧層
-	//（獨立層=銳化不咬=半透明針點成立——兩種材質語義分層的結構保證，三版鐵則）
+	// 針型路由：Liner→線層（GPU canvas；銳化咬=脆的實心墨）；Shader→霧層
+	//（09-02 起＝CPU 光柵器；獨立層=銳化不咬——兩種材質語義分層的結構保證）
 	// 惰性配置：真的有墨要落才配那一層（受害者入睡已預熱＝這裡通常是命中）
-	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? EnsureMistRT() : EnsureMarkerRT();
+	if (Needle == EInkNeedle::Shader)
+	{
+		if (!EnsureMistLayer())
+		{
+			return;
+		}
+		const float Res = static_cast<float>(MistSurface->Resolution());
+		if (bDotOnly)
+		{
+			StampNeedleDot(nullptr, FVector2D(Res, Res), To, Color, Needle, RowDirUv, Flow, Wall4, Tier01);
+		}
+		else
+		{
+			StampMistSegment(From, To, Color, Tier01);
+		}
+		// 批內只累積髒區、EndStampBatch 一次上傳；非批（robo/證據直呼）即時上傳
+		if (!bMistBatchOpen)
+		{
+			FlushMistUpload();
+		}
+		return;
+	}
+
+	UTextureRenderTarget2D* LayerRT = EnsureMarkerRT();
 	if (!LayerRT)
 	{
 		return;
@@ -1302,7 +1561,7 @@ void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2
 	{
 		if (bDotOnly)
 		{
-			StampNeedleDot(BatchCanvas, BatchCanvasSize, To, Color, Needle, RowDirUv, Flow);
+			StampNeedleDot(BatchCanvas, BatchCanvasSize, To, Color, Needle, RowDirUv, Flow, Wall4, Tier01);
 		}
 		else
 		{
@@ -1319,7 +1578,7 @@ void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2
 	{
 		if (bDotOnly)
 		{
-			StampNeedleDot(Canvas, CanvasSize, To, Color, Needle, RowDirUv, Flow);
+			StampNeedleDot(Canvas, CanvasSize, To, Color, Needle, RowDirUv, Flow, Wall4, Tier01);
 		}
 		else
 		{
@@ -1331,7 +1590,7 @@ void UInkCanvasComponent::StampIntoLayerRT(const FVector2D& From, const FVector2
 
 void UInkCanvasComponent::BeginStampBatchFor(int32 AuthorId)
 {
-	if (BatchCanvas)
+	if (BatchCanvas || bMistBatchOpen)
 	{
 		return; // 已開（防重入）
 	}
@@ -1346,7 +1605,16 @@ void UInkCanvasComponent::BeginStampBatchFor(int32 AuthorId)
 		return;
 	}
 	const EInkNeedle Needle = Work->Strokes.Last().NeedleType;
-	UTextureRenderTarget2D* LayerRT = (Needle == EInkNeedle::Shader) ? EnsureMistRT() : EnsureMarkerRT();
+	if (Needle == EInkNeedle::Shader)
+	{
+		// 霧層批次（CPU 光柵）：批內只寫緩衝累積髒區、EndStampBatch 一次上傳
+		if (EnsureMistLayer())
+		{
+			bMistBatchOpen = true;
+		}
+		return;
+	}
+	UTextureRenderTarget2D* LayerRT = EnsureMarkerRT();
 	if (!LayerRT)
 	{
 		return;
@@ -1365,6 +1633,11 @@ void UInkCanvasComponent::BeginStampBatchFor(int32 AuthorId)
 
 void UInkCanvasComponent::EndStampBatch()
 {
+	if (bMistBatchOpen)
+	{
+		bMistBatchOpen = false;
+		FlushMistUpload();
+	}
 	if (!BatchCanvas)
 	{
 		return;
@@ -1428,11 +1701,37 @@ bool UInkCanvasComponent::ExportLayersToPng(const FString& AbsolutePathPrefix)
 	//（新配的層是全透明＝與「舊制配了但沒畫過」的內容逐位相同）
 	EnsureMarkerRT();
 	EnsureTattooRT();
-	EnsureMistRT();
+	EnsureMistLayer();
 
 	const bool bMarkerSaved = SaveRTToPng(MarkerRT, AbsolutePathPrefix + TEXT("_marker.png"));
 	const bool bTattooSaved = SaveRTToPng(TattooRT, AbsolutePathPrefix + TEXT("_tattoo.png"));
-	const bool bMistSaved = SaveRTToPng(MistRT, AbsolutePathPrefix + TEXT("_mist.png"));
+
+	// 霧層＝直接吐 CPU 權威緩衝（BGRA 預乘 sRGB＝與舊 RT dump 同語義、零 GPU 往返）；
+	// 有罩染時吐「罩染 over 基底」的合成結果＝dump 恆等於顯示內容
+	bool bMistSaved = false;
+	if (MistSurface.IsValid() && MistSurface->IsInited())
+	{
+		const int32 Res = MistSurface->Resolution();
+		const FColor* PixelData = MistSurface->Data();
+		TArray64<FColor> Composed;
+		if (MistSurface->HasGlaze())
+		{
+			Composed.SetNumUninitialized(static_cast<int64>(Res) * Res);
+			MistSurface->ComposeInto(Composed.GetData(), Res, FIntRect(0, 0, Res, Res));
+			PixelData = Composed.GetData();
+		}
+		IFileManager::Get().MakeDirectory(*FPaths::GetPath(AbsolutePathPrefix), true);
+		IImageWrapperModule& ImageWrapperModule = FModuleManager::LoadModuleChecked<IImageWrapperModule>(TEXT("ImageWrapper"));
+		TSharedPtr<IImageWrapper> ImageWrapper = ImageWrapperModule.CreateImageWrapper(EImageFormat::PNG);
+		if (ImageWrapper.IsValid())
+		{
+			ImageWrapper->SetRaw(PixelData, static_cast<int64>(Res) * Res * sizeof(FColor), Res, Res, ERGBFormat::BGRA, 8);
+			const TArray64<uint8>& CompressedData = ImageWrapper->GetCompressed(90);
+			TArray<uint8> SaveData;
+			SaveData.Append(CompressedData.GetData(), CompressedData.Num());
+			bMistSaved = FFileHelper::SaveArrayToFile(SaveData, *(AbsolutePathPrefix + TEXT("_mist.png")));
+		}
+	}
 	return bMarkerSaved && bTattooSaved && bMistSaved;
 }
 

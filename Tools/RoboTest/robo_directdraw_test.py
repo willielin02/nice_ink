@@ -654,11 +654,14 @@ class Test:
             raw, d = summary(host)
             dn = d.get("dotN", 0.0) - self.flow2_dot0
             check("flow probe pass2 deposits (adjacent track)", dn >= 20.0, f"d_dotN={dn:.0f}")
-            # 十六版填色制：流量恆滿（手速→濃淡退役——塗色工具的濃度屬於機器）
-            check("flow constant across speeds (fill tool contract)",
+            # 09-02 終裁：甩筆淡出**預設關**（MistFadeFloor=1.0；user：隱性觸發的
+            # 功能必被讀成 bug）⇒ 任何速度流量恆滿＝十六版「塗色工具濃度屬於機器」
+            # 語義回歸。旋鈕留著：要開淡出＝Floor 降回 ~0.10，並把本契約期望改回
+            # 10~128（淡出域）。
+            check("flow constant at any speed (fade off by default)",
                   getattr(self, "sfast_mid_flow", None) is not None and
                   self.sfast_mid_flow == 255.0,
-                  f"superfast mid flow={getattr(self, 'sfast_mid_flow', None)}")
+                  f"superfast mid flow={getattr(self, 'sfast_mid_flow', None)} (期望 255＝淡出關)")
             victim = find_char(self.server(), self.victim_pid)
             victim.get_editor_property("InkCanvas").call_method(
                 "ExportLayersToPng",

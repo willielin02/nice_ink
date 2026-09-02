@@ -15,7 +15,7 @@ namespace
 		const TCHAR* S[NiLoc::NumLangs];
 	};
 
-	static const FNiLocRow GTable[static_cast<int32>(ENiLocKey::COUNT)] = {
+	static const FNiLocRow GTable[] = {
 	// YourName
 	{ { TEXT("YOUR NAME"), TEXT("プレイヤー名"), TEXT("你的名字"), TEXT("你的名字"), TEXT("이름"),
 		TEXT("TU NOMBRE"), TEXT("TON NOM"), TEXT("IL TUO NOME"), TEXT("DEIN NAME"),
@@ -510,7 +510,106 @@ namespace
 		TEXT("끄기"), TEXT("desactivado"), TEXT("désactivé"), TEXT("spento"),
 		TEXT("aus"), TEXT("desligado"), TEXT("выкл"),
 		TEXT("kapalı"), TEXT("إيقاف") } },
+	// PhaseDrawing
+	{ { TEXT("DRAWING"), TEXT("彫り中"), TEXT("作畫中"), TEXT("作画中"),
+		TEXT("작업 중"), TEXT("TATUANDO"), TEXT("EN COURS"), TEXT("IN CORSO"), TEXT("AM WERK"),
+		TEXT("TATUANDO"), TEXT("ТАТУИРУЕМ"), TEXT("ÇALIŞMA"), TEXT("الوشم جارٍ") } },
+	// SubjectAsleep
+	{ { TEXT("{0} is asleep"), TEXT("{0} は寝ている"), TEXT("{0} 睡著了"), TEXT("{0} 睡着了"),
+		TEXT("{0} 님이 잠들었다"), TEXT("{0} está dormido"), TEXT("{0} dort"), TEXT("{0} dorme"), TEXT("{0} schläft"),
+		TEXT("{0} está dormindo"), TEXT("{0} спит"), TEXT("{0} uyuyor"), TEXT("{0} نائم") } },
+	// NeedleStencil
+	{ { TEXT("STENCIL"), TEXT("下書き"), TEXT("打稿"), TEXT("打稿"),
+		TEXT("밑그림"), TEXT("PLANTILLA"), TEXT("CALQUE"), TEXT("STENCIL"), TEXT("VORZEICHNUNG"),
+		TEXT("ESBOÇO"), TEXT("ЭСКИЗ"), TEXT("ŞABLON"), TEXT("تخطيط") } },
+	// NeedleLiner
+	{ { TEXT("LINER"), TEXT("筋彫り"), TEXT("割線"), TEXT("割线"),
+		TEXT("라이너"), TEXT("LÍNEA"), TEXT("LIGNE"), TEXT("LINEA"), TEXT("LINIE"),
+		TEXT("LINHA"), TEXT("КОНТУР"), TEXT("ÇİZGİ"), TEXT("خط") } },
+	// NeedleShader
+	{ { TEXT("SHADER"), TEXT("ぼかし"), TEXT("打霧"), TEXT("打雾"),
+		TEXT("셰이딩"), TEXT("SOMBRA"), TEXT("OMBRE"), TEXT("SFUMATURA"), TEXT("SCHATTEN"),
+		TEXT("SOMBRA"), TEXT("ТЕНЬ"), TEXT("GÖLGE"), TEXT("تظليل") } },
+	// TrayRelease
+	{ { TEXT("move toward a cup   ·   release to load it"), TEXT("カップの方へ動かす   ·   離すと装填"),
+		TEXT("往那杯的方向推   ·   放開就沾上"), TEXT("往那杯的方向推   ·   松开就沾上"), TEXT("원하는 컵 쪽으로 움직인다   ·   놓으면 장착"),
+		TEXT("muévete hacia un tintero   ·   suelta para cargarlo"), TEXT("déplace-toi vers un godet   ·   relâche pour charger"), TEXT("muoviti verso un contenitore   ·   rilascia per caricarlo"), TEXT("in Richtung eines Napfs bewegen   ·   loslassen zum Laden"),
+		TEXT("mova na direção de um pote   ·   solte para carregar"), TEXT("двинь в сторону стаканчика   ·   отпусти, чтобы набрать"), TEXT("bir kaba doğru hareket et   ·   bırakınca yüklenir"), TEXT("حرّك باتجاه كوب   ·   أفلت للتحميل") } },
+	// TraySwitchNeedle
+	{ { TEXT("Q to switch"), TEXT("Q で切替"), TEXT("Q 換筆"), TEXT("Q 换笔"),
+		TEXT("Q 로 전환"), TEXT("Q para cambiar"), TEXT("Q pour changer"), TEXT("Q per cambiare"), TEXT("Q zum Wechseln"),
+		TEXT("Q para trocar"), TEXT("Q — сменить"), TEXT("değiştir: Q"), TEXT("اضغط Q للتبديل") } },
+	// HudOutOfReach
+	{ { TEXT("out of reach — lean closer (WASD to stand up)"), TEXT("届かない — もっと近づく（WASD で立つ）"), TEXT("搆不到 — 靠近一點（WASD 起身）"), TEXT("够不到 — 靠近一点（WASD 起身）"),
+		TEXT("닿지 않는다 — 더 가까이 (WASD 로 일어서기)"), TEXT("fuera de alcance — acércate (WASD para levantarte)"), TEXT("hors de portée — approche-toi (WASD pour te lever)"), TEXT("fuori portata — avvicinati (WASD per alzarti)"), TEXT("außer Reichweite — näher ran (WASD zum Aufstehen)"),
+		TEXT("fora de alcance — chegue mais perto (WASD para levantar)"), TEXT("не дотянуться — придвинься (WASD — встать)"), TEXT("erişemiyorsun — yaklaş (kalkmak için WASD)"), TEXT("بعيد عن المتناول — اقترب (WASD للوقوف)") } },
+	// HudFlipAsk
+	{ { TEXT("FLIP the body? — F to agree ({0}/{1})"), TEXT("体を裏返す？ — F で賛成（{0}/{1}）"), TEXT("把他翻過來？ — F 同意（{0}/{1}）"), TEXT("把他翻过来？ — F 同意（{0}/{1}）"),
+		TEXT("몸을 뒤집을까? — F 로 찬성 ({0}/{1})"), TEXT("¿Darle la vuelta? — F para aceptar ({0}/{1})"), TEXT("Le retourner ? — F pour accepter ({0}/{1})"), TEXT("Girarlo? — F per accettare ({0}/{1})"), TEXT("Umdrehen? — F zum Zustimmen ({0}/{1})"),
+		TEXT("Virar o corpo? — F para concordar ({0}/{1})"), TEXT("Перевернуть его? — F — согласиться ({0}/{1})"), TEXT("Çevirelim mi? — kabul için F ({0}/{1})"), TEXT("نقلبه؟ — اضغط F للموافقة ({0}/{1})") } },
+	// HudFlipWait
+	{ { TEXT("flipping — waiting for the others ({0}/{1})"), TEXT("裏返し — 他の人を待っている（{0}/{1}）"), TEXT("翻身中 — 等其他人（{0}/{1}）"), TEXT("翻身中 — 等其他人（{0}/{1}）"),
+		TEXT("뒤집는 중 — 다른 사람 기다리는 중 ({0}/{1})"), TEXT("dándole la vuelta — esperando a los demás ({0}/{1})"), TEXT("retournement — en attente des autres ({0}/{1})"), TEXT("ribaltamento — in attesa degli altri ({0}/{1})"), TEXT("Umdrehen — warte auf die anderen ({0}/{1})"),
+		TEXT("virando — esperando os outros ({0}/{1})"), TEXT("переворот — ждём остальных ({0}/{1})"), TEXT("çevriliyor — diğerleri bekleniyor ({0}/{1})"), TEXT("جارٍ القلب — بانتظار الآخرين ({0}/{1})") } },
+	// HudShakeBought
+	{ { TEXT("DREAM SHAKEN   -$500"), TEXT("夢を揺らした   -$500"), TEXT("夢被搖晃了   -$500"), TEXT("梦被摇晃了   -$500"),
+		TEXT("꿈을 흔들었다   -$500"), TEXT("SUEÑO SACUDIDO   -$500"), TEXT("RÊVE SECOUÉ   -$500"), TEXT("SOGNO SCOSSO   -$500"), TEXT("TRAUM GESCHÜTTELT   -$500"),
+		TEXT("SONHO SACUDIDO   -$500"), TEXT("СОН ВСТРЯХНУТ   -$500"), TEXT("RÜYA SARSILDI   -$500"), TEXT("اهتزّ الحلم   -$500") } },
+	// HudShakeRefused
+	{ { TEXT("SHAKE REFUSED (cash / cooldown)"), TEXT("揺らせない（所持金／クールダウン）"), TEXT("搖不了（現金／冷卻）"), TEXT("摇不了（现金／冷却）"),
+		TEXT("흔들 수 없다 (자금／쿨다운)"), TEXT("NO SE PUDO (dinero / enfriamiento)"), TEXT("REFUSÉ (argent / recharge)"), TEXT("RIFIUTATO (soldi / attesa)"), TEXT("ABGELEHNT (Geld / Abklingzeit)"),
+		TEXT("RECUSADO (dinheiro / recarga)"), TEXT("НЕ ВЫШЛО (деньги / откат)"), TEXT("OLMADI (para / bekleme)"), TEXT("مرفوض (المال / التبريد)") } },
+	// HudStandingDrawing
+	{ { TEXT("F — propose a flip   ·   G — shake his dream (-$500)"), TEXT("F — 裏返しを提案   ·   G — 夢を揺らす（-$500）"), TEXT("F — 提議翻身   ·   G — 搖他的夢（-$500）"), TEXT("F — 提议翻身   ·   G — 摇他的梦（-$500）"),
+		TEXT("F — 뒤집기 제안   ·   G — 꿈 흔들기 (-$500)"), TEXT("F — proponer darle la vuelta   ·   G — sacudir su sueño (-$500)"), TEXT("F — proposer de le retourner   ·   G — secouer son rêve (-$500)"), TEXT("F — proponi di girarlo   ·   G — scuoti il suo sogno (-$500)"), TEXT("F — Umdrehen vorschlagen   ·   G — seinen Traum schütteln (-$500)"),
+		TEXT("F — propor virar   ·   G — sacudir o sonho dele (-$500)"), TEXT("F — предложить переворот   ·   G — встряхнуть его сон (-$500)"), TEXT("F — çevirmeyi öner   ·   G — rüyasını sars (-$500)"), TEXT("F — اقترح قلبه   ·   G — هزّ حلمه (-$500)") } },
+	// ActFlip
+	{ { TEXT("propose a flip"), TEXT("裏返しを提案"), TEXT("提議翻身"), TEXT("提议翻身"),
+		TEXT("뒤집기 제안"), TEXT("proponer voltear"), TEXT("proposer un retournement"), TEXT("proponi il giro"), TEXT("Umdrehen vorschlagen"),
+		TEXT("propor virar"), TEXT("предложить переворот"), TEXT("çevirmeyi öner"), TEXT("اقتراح القلب") } },
+	// ActInk
+	{ { TEXT("ink"), TEXT("彫る"), TEXT("上墨"), TEXT("上墨"),
+		TEXT("새기기"), TEXT("tatuar"), TEXT("encrer"), TEXT("inchiostrare"), TEXT("tätowieren"),
+		TEXT("tatuar"), TEXT("колоть"), TEXT("mürekkep"), TEXT("وشم") } },
+	// ActCups
+	{ { TEXT("ink cups"), TEXT("インクカップ"), TEXT("墨杯"), TEXT("墨杯"),
+		TEXT("잉크 컵"), TEXT("tinteros"), TEXT("godets"), TEXT("colori"), TEXT("Farbnäpfe"),
+		TEXT("potes de tinta"), TEXT("стаканчики"), TEXT("kaplar"), TEXT("أكواب الحبر") } },
+	// ActWash
+	{ { TEXT("wash"), TEXT("濃さ"), TEXT("濃淡"), TEXT("浓淡"),
+		TEXT("농도"), TEXT("dilución"), TEXT("dilution"), TEXT("diluizione"), TEXT("Verdünnung"),
+		TEXT("diluição"), TEXT("разбавка"), TEXT("seyreltme"), TEXT("تخفيف") } },
+	// ActNeedle
+	{ { TEXT("needle"), TEXT("針"), TEXT("換針"), TEXT("换针"),
+		TEXT("바늘"), TEXT("aguja"), TEXT("aiguille"), TEXT("ago"), TEXT("Nadel"),
+		TEXT("agulha"), TEXT("игла"), TEXT("iğne"), TEXT("إبرة") } },
+	// ActShake
+	{ { TEXT("shake his dream"), TEXT("夢を揺らす"), TEXT("搖他的夢"), TEXT("摇他的梦"),
+		TEXT("꿈 흔들기"), TEXT("sacudir su sueño"), TEXT("secouer son rêve"), TEXT("scuoti il suo sogno"), TEXT("seinen Traum schütteln"),
+		TEXT("sacudir o sonho"), TEXT("встряхнуть сон"), TEXT("rüyasını sars"), TEXT("هزّ حلمه") } },
+	// ActStand
+	{ { TEXT("stand up"), TEXT("立つ"), TEXT("起身"), TEXT("起身"),
+		TEXT("일어서기"), TEXT("levantarse"), TEXT("se lever"), TEXT("alzarsi"), TEXT("aufstehen"),
+		TEXT("levantar"), TEXT("встать"), TEXT("kalk"), TEXT("وقوف") } },
+	// HudLeanIn
+	{ { TEXT("RMB — lean in"), TEXT("右クリック — 身を寄せる"), TEXT("右鍵 — 湊近"), TEXT("右键 — 凑近"),
+		TEXT("오른쪽 버튼 — 몸을 기울인다"), TEXT("clic der. — acércate"), TEXT("clic droit — approche-toi"), TEXT("tasto dx — avvicinati"), TEXT("rechte Maustaste — heranbeugen"),
+		TEXT("botão dir. — chegue perto"), TEXT("ПКМ — придвинуться"), TEXT("sağ tuş — yaklaş"), TEXT("الزر الأيمن — انحنِ") } },
+	// HudFeignSleep
+	{ { TEXT("feigning sleep — release SHIFT to open your eyes"), TEXT("寝たふり中 — SHIFT を離すと目を開ける"), TEXT("裝睡中 — 放開 SHIFT 睜眼"), TEXT("装睡中 — 松开 SHIFT 睁眼"),
+		TEXT("자는 척 — SHIFT 를 놓으면 눈을 뜬다"), TEXT("haciéndote el dormido — suelta SHIFT para abrir los ojos"), TEXT("tu fais semblant de dormir — relâche MAJ pour ouvrir les yeux"), TEXT("fingi di dormire — rilascia MAIUSC per aprire gli occhi"), TEXT("du stellst dich schlafend — UMSCHALT loslassen zum Augenöffnen"),
+		TEXT("fingindo dormir — solte SHIFT para abrir os olhos"), TEXT("притворяешься спящим — отпусти SHIFT, чтобы открыть глаза"), TEXT("uyuyormuş gibi yapıyorsun — gözlerini açmak için SHIFT bırak"), TEXT("تتظاهر بالنوم — أفلت SHIFT لتفتح عينيك") } },
+	// HudEyesOpen
+	{ { TEXT("eyes open — hold SHIFT to feign sleep   ·   WASD stands you up and ends the drawing"), TEXT("目を開けている — SHIFT 長押しで寝たふり   ·   WASD で起き上がり彫りを終える"), TEXT("睜著眼 — 按住 SHIFT 裝睡   ·   WASD 起身結束作畫"), TEXT("睁着眼 — 按住 SHIFT 装睡   ·   WASD 起身结束作画"),
+		TEXT("눈을 뜬 상태 — SHIFT 를 누르면 자는 척   ·   WASD 로 일어나 작업을 끝낸다"), TEXT("ojos abiertos — mantén SHIFT para fingir   ·   WASD te levanta y termina el tatuaje"), TEXT("yeux ouverts — maintiens MAJ pour faire semblant   ·   WASD te lève et met fin au tatouage"), TEXT("occhi aperti — tieni MAIUSC per fingere   ·   WASD ti alza e chiude il tatuaggio"), TEXT("Augen offen — UMSCHALT halten zum Vortäuschen   ·   WASD steht auf und beendet das Tätowieren"),
+		TEXT("olhos abertos — segure SHIFT para fingir   ·   WASD levanta você e encerra a tatuagem"), TEXT("глаза открыты — зажми SHIFT, чтобы притвориться   ·   WASD поднимет тебя и закончит работу"), TEXT("gözler açık — numara için SHIFT basılı tut   ·   WASD seni kaldırır ve işi bitirir"), TEXT("عيناك مفتوحتان — اضغط SHIFT للتظاهر   ·   WASD ينهضك وينهي الوشم") } },
 	};
+
+	// 表的大小寫在兩個地方必有一邊會舊：改成推導長度＋編譯期對賬。
+	// 舊寫法 GTable[COUNT] 在少一列時**照樣編得過**（缺的列補 nullptr），
+	// 然後在執行期給出空字串——無聲失敗。
+	static_assert(UE_ARRAY_COUNT(GTable) == static_cast<int32>(ENiLocKey::COUNT),
+		"NiLoc: ENiLocKey 與字串表列數不一致——每加一個鍵就要加一列 13 語");
 
 	static const TCHAR* GNativeNames[NiLoc::NumLangs] = {
 		TEXT("English"), TEXT("日本語"), TEXT("繁體中文"), TEXT("简体中文"), TEXT("한국어"),
@@ -550,6 +649,11 @@ FString T(const UObject* Ctx, ENiLocKey Key)
 FString TFmt(const UObject* Ctx, ENiLocKey Key, const FString& Arg0)
 {
 	return T(Ctx, Key).Replace(TEXT("{0}"), *Arg0);
+}
+
+FString TFmt(const UObject* Ctx, ENiLocKey Key, const FString& Arg0, const FString& Arg1)
+{
+	return T(Ctx, Key).Replace(TEXT("{0}"), *Arg0).Replace(TEXT("{1}"), *Arg1);
 }
 
 FString LangNativeName(int32 LangIndex)

@@ -57,6 +57,39 @@ enum class ENiLocKey : uint8
 	Unlimited,            // 幀率上限的「無上限」值
 	OptionOn,             // 通用二態：開
 	OptionOff,            // 通用二態：關
+
+	// --- 作畫相位（2026-09-02）：局內 HUD 的第一批進表字串 ---
+	// 此前作畫/巡禮/指認/醉夢全是寫死英文（全 HUD 只有 4 條走本地化、且全在大廳），
+	// 玩家選了語言只有選單與大廳會變、開局就跳回英文。本批＝作畫相位全清；
+	// 其餘相位待排。防再犯的閘門＝Tools/UiCheck/hud_loc_lint.py。
+	PhaseDrawing,         // 上方橫幅：相位名
+	SubjectAsleep,        // 上方橫幅副標「{0} 睡著了」
+	NeedleStencil,        // 筆名：打稿麥克筆
+	NeedleLiner,          // 筆名：割線針
+	NeedleShader,         // 筆名：打霧針
+	TrayRelease,          // 墨杯盤底部提示：放開沾杯／盤外取消
+	TraySwitchNeedle,     // 墨杯盤抬頭：Q 換筆
+	HudOutOfReach,        // 搆不到（琥珀色；持續 >1s 才出現）
+	HudFlipAsk,           // 翻身表決：徵求同意 {0}/{1}
+	HudFlipWait,          // 翻身表決：已投票、等其他人 {0}/{1}
+	HudShakeBought,       // 搖夢成功回執
+	HudShakeRefused,      // 搖夢被拒（現金/冷卻）
+	HudStandingDrawing,   // 作畫相位、站著時的提示（F 翻身／G 搖夢）
+	// 常駐操作提示的**動詞**（2026-09-02 四修，照 Meccha 實物）：鍵位由鍵帽圖形
+	// 表達，文字只講「做什麼」——他們的 UI 是 `鍵帽＋圖示＋2~5 字動詞`，不是句子。
+	// 一次性教學卡退役：我先前把「形式」的問題（句子）誤診成「時機」的問題（常駐）。
+	ActFlip,
+	ActInk,
+	ActCups,
+	ActWash,
+	ActNeedle,
+	ActShake,
+	ActStand,
+	// 作畫相位其餘常駐句（09-02 二補：由 Tools/UiCheck/hud_loc_lint.py 抓出來的，
+	// 我自己走查時漏了——這正是閘門存在的理由）
+	HudLeanIn,            // 站在受害者旁：RMB 湊近入鎖
+	HudFeignSleep,        // 受害者裝睡中
+	HudEyesOpen,          // 受害者無聲甦醒中
 	COUNT
 };
 
@@ -69,6 +102,9 @@ namespace NiLoc
 
 	// 帶一個 {0} 參數的字串
 	NICEINK_API FString TFmt(const UObject* Ctx, ENiLocKey Key, const FString& Arg0);
+
+	// 帶 {0} 與 {1} 兩個參數（翻身表決的 n/N）
+	NICEINK_API FString TFmt(const UObject* Ctx, ENiLocKey Key, const FString& Arg0, const FString& Arg1);
 
 	// 語言原生名（設定列顯示用）／culture 代碼（字體分流＋SetCurrentCulture）
 	NICEINK_API FString LangNativeName(int32 LangIndex);

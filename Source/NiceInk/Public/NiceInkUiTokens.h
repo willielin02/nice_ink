@@ -20,6 +20,11 @@ namespace NiHudColor
 	// 白卡＋墨字）：白面板上的文字色階與深酒金
 	// 2026-08-12 加深（原 122,111,97＝對紙色 3.4:1＝小字不及格；現值 5.0:1
 	// 過 WCAG 4.5 標準——字越小對比要越高，小又淡=雙重削弱是反向操作）
+	// 透明度棋盤的暗格（2026-09-02）：**紙色的陰影版，不是黑**——地對比 66 個 sRGB
+	// 階（Photoshop 自己的棋盤 ~51；一版用紙/墨＝218 階＝四倍超標，格子壓過顏色、
+	// 每一杯都讀成髒的）。同色相＝讀成「同一張紙的陰影」而不是外來的灰。
+	static const FLinearColor PaperShade = FLinearColor::FromSRGBColor(FColor(176, 168, 153));
+
 	static const FLinearColor InkDim    = FLinearColor::FromSRGBColor(FColor(94, 85, 72));
 	static const FLinearColor AmberDeep = FLinearColor::FromSRGBColor(FColor(191, 122, 24));
 }

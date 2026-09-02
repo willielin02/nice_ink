@@ -46,8 +46,46 @@ TOOL_HDR = re.compile(
     r"TodoWrite|WebFetch|WebSearch|Agent|Skill|NotebookEdit|Artifact)"
     r"(?:\s+\S.*)?$"
 )
-EDIT_SUMMARY = re.compile(r"^(Added|Removed|Updated|Changed|Applied|Wrote)\b")
+EDIT_SUMMARY = re.compile(
+    r"^(Added|Removed|Updated|Changed|Applied|Wrote|Modified|Created|Deleted|Renamed)\b")
 LINE_COUNT = re.compile(r"^(\d+)\s+lines?$")
+# Grep/Glob 的結果摘要行：「59 lines of output」「3 files」——內容不進匯出檔
+RESULT_COUNT = re.compile(r"^\d+\s+\w+(\s+of\s+output)?$")
+
+# 網頁工具的標頭沒有空白：「Web SearchTikTok Display API…」「Web Fetchhttps://…」
+WEB_HDR = re.compile(r"^Web (Search|Fetch)\S")
+WEB_FETCHED = re.compile(r"^Fetched from \S")
+# Web Search 區塊的結束標記＝搜尋工具塞給模型的那句指示
+WEB_SEARCH_END = re.compile(r"^REMINDER: You MUST include the sources")
+
+
+# 匯出檔裡的 harness 區塊：背景任務通知、過大輸出的落檔通知。整塊丟掉。
+XML_BLOCKS = {
+    "<task-notification>": "</task-notification>",
+    "<persisted-output>": "</persisted-output>",
+}
+
+
+def any_header(line):
+    return bool(TOOL_HDR.match(line) or WEB_HDR.match(line))
+
+
+def starts_tool_block(lines, i):
+    """lines[i] 是不是一個工具區塊的開頭。
+
+    只有標頭還不夠——敘述文字也可能以 Read／Update 開頭。要求下一行是該工具
+    自己的第二行（IN／N lines／Added…）或另一個標頭，才算數。用在 Write 內容
+    的邊界上：自報行數實測會差一行，光靠計數會把下一個區塊的標頭吃掉。
+    """
+    if i >= len(lines):
+        return False
+    if WEB_HDR.match(lines[i]):
+        return True
+    if not TOOL_HDR.match(lines[i]):
+        return False
+    nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+    return bool(nxt == "IN" or LINE_COUNT.match(nxt) or EDIT_SUMMARY.match(nxt)
+                or any_header(nxt))
 
 # ------------------------------------------------------------ 敘述文字判準
 
@@ -77,12 +115,19 @@ HARD_SIGNATURE = re.compile(
     r"->|=>"                                # 箭頭：判定結果／對應
     r"|/[A-Za-z_][\w.\-]*/"                 # 路徑（反斜線路徑另在程式碼裡查）
     r"|^\S+\s*=\s*\S"                       # 賦值／鍵值
-    r"|^\d+:"                               # grep -n 的行號前綴
+    r"|^\d+[-:]"                            # grep -n 的行號前綴（-C 的脈絡行用 `-`）
     r"|^\d{4}-\d{2}-\d{2}\b"                # 日期開頭＝git log／檔案列表
+    r"|^[0-9a-f]{7,40}\s"                   # git log 的 commit hash 開頭
+    r"|^\d+\.\s+\*\*"                       # 「26. **題材改制**…」＝被 cat 出來的文件條目
+    r"|^[a-z][a-z0-9_]*:\s"                 # 「description: …」＝被 cat 出來的 YAML frontmatter
     r"|^[A-Za-z_]\w*\s+\d+\s*[:：]"         # 「loop 0:」這種進度標籤
     r"|\[[^\]]*\]"                          # ASCII 方括號＝陣列／標籤，敘述用「」
     r"|[:：]\s*[-+]?\d[\d.,%]*\s*$"         # 「標籤: 數字」結尾
+    r"|\S {3,}\S"                           # 行內多重空白＝欄位對齊的表頭／資料列
+    r"|\d+\s*/\s*\d+\s*$"                   # 「202 / 241」比值結尾
 )
+# 註：曾試過把「2192..2314」這種範圍表示法也列為機器簽名，撤掉了——敘述句
+# 本來就會引數字範圍（「主要筆劃在 y 2192..2314…。看那一段。」），代價大於收益。
 # 詞彙性簽名：只在中文佔比低時採信
 SOFT_SIGNATURE = re.compile(
     r"\bp\d{2}\b"                           # p50 / p90 / p99 分位數
@@ -101,7 +146,10 @@ def looks_like_prose(line):
     if not line or line[:1] in " \t":            # 縮排＝輸出或程式碼
         return False
     s = line.strip()
-    if len(s) < 4 or s[0] in LEADING_JUNK:
+    if len(s) < 4:
+        return False
+    # 例外：行首 ** 是粗體，不是項目符號——本語料的敘述常以「**驗證**：…」開頭。
+    if s[0] in LEADING_JUNK and not s.startswith("**"):
         return False
     if LEADING_TAG.match(s) or LEADING_CALL.match(s):
         return False
@@ -135,6 +183,36 @@ def looks_like_prose(line):
 def extract(lines, report=None):
     kept, i, n = [], 0, len(lines)
     while i < n:
+        close = XML_BLOCKS.get(lines[i].strip())
+        if close:
+            start = i
+            i += 1
+            while i < n and lines[i].strip() != close:
+                i += 1
+            i = min(n, i + 1)                     # 連結束標籤一起吃掉
+            if report is not None:
+                report.append((start + 1, i, "harness",
+                               lines[i] if i < n else "<EOF>"))
+            continue
+
+        web = WEB_HDR.match(lines[i])
+        if web:
+            start = i
+            i += 1
+            if web.group(1) == "Fetch":
+                if i < n and WEB_FETCHED.match(lines[i]):
+                    i += 1                        # 抓取內容沒有進匯出檔，只有這兩行
+            else:
+                while i < n and not any_header(lines[i]):
+                    end = WEB_SEARCH_END.match(lines[i])
+                    i += 1
+                    if end:                       # REMINDER 那行就是結束標記
+                        break
+            if report is not None:
+                report.append((start + 1, i, "Web" + web.group(1),
+                               lines[i] if i < n else "<EOF>"))
+            continue
+
         m = TOOL_HDR.match(lines[i])
         if not m:
             kept.append(lines[i])
@@ -148,6 +226,10 @@ def extract(lines, report=None):
             if i < n and EDIT_SUMMARY.match(lines[i]):
                 i += 1                            # 只有一行「Added N lines」摘要
 
+        elif tool in ("Grep", "Glob"):
+            if i < n and RESULT_COUNT.match(lines[i]):
+                i += 1                            # 只有一行「59 lines of output」摘要
+
         elif tool in ("Write", "Read", "NotebookEdit"):
             lc = LINE_COUNT.match(lines[i]) if i < n else None
             if lc:
@@ -155,17 +237,16 @@ def extract(lines, report=None):
                 stop = min(n, i + int(lc.group(1)))
                 while i < stop:
                     # 自報行數是邊界提示、實測會差一行；看到下一個工具區塊就收手
-                    if (TOOL_HDR.match(lines[i]) and i + 1 < n
-                            and lines[i + 1].strip() == "IN"):
+                    if starts_tool_block(lines, i):
                         break
                     i += 1
 
         else:                                     # Bash / PowerShell
-            while i < n and lines[i].strip() != "OUT" and not TOOL_HDR.match(lines[i]):
+            while i < n and lines[i].strip() != "OUT" and not any_header(lines[i]):
                 i += 1                            # IN 區：結構性，無條件跳到 OUT
             if i < n and lines[i].strip() == "OUT":
                 i += 1
-                while (i < n and not TOOL_HDR.match(lines[i])
+                while (i < n and not any_header(lines[i])
                        and not looks_like_prose(lines[i])):
                     i += 1                        # OUT 區：唯一靠判斷的邊界
 
@@ -174,15 +255,21 @@ def extract(lines, report=None):
     return kept
 
 
-# 夾在敘述段落裡、但不是文字的雜訊：貼圖附件標記
-ATTACHMENT_NOISE = re.compile(
-    r"^([\w.\-]+\.(png|jpg|jpeg|gif|webp)|\d+\s*[×x]\s*\d+)$", re.IGNORECASE)
+# 夾在敘述段落裡、但不是文字的雜訊：貼圖附件標記與匯出介面殘跡
+UI_NOISE = re.compile(
+    r"^([\w.\-]+\.(png|jpg|jpeg|gif|webp)"      # 附件檔名
+    r"|\d+\s*[×x]\s*\d+"                        # 附件尺寸
+    r"|Show (less|more)"                        # 折疊按鈕
+    r"|Shell cwd was reset to .*"
+    r"|Sources: .*[·、].*"              # 搜尋工具產生的出處腳註
+    r"|.{0,40}safeguards flagged this message.*"  # 平台安全提示
+    r"|Details: `\[\w+\]`)$", re.IGNORECASE)
 
 
 def squeeze_blanks(lines):
     out, blank = [], False
     for ln in lines:
-        if ATTACHMENT_NOISE.match(ln.strip()):
+        if UI_NOISE.match(ln.strip()):
             continue
         if ln.strip():
             out.append(ln.rstrip())

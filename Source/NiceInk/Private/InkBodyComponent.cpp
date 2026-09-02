@@ -115,7 +115,10 @@ void UInkBodyComponent::ApplyInkLayerTextures(UInkCanvasComponent* Canvas)
 	};
 	DynamicBodyMaterial->SetTextureParameterValue(MarkerRTParam, Pick(Canvas->GetMarkerRenderTarget()));
 	DynamicBodyMaterial->SetTextureParameterValue(TattooRTParam, Pick(Canvas->GetTattooRenderTarget()));
-	DynamicBodyMaterial->SetTextureParameterValue(MistRTParam, Pick(Canvas->GetMistRenderTarget()));
+	// 霧層（09-02 CPU 光柵制）：綁的是 CPU 上傳貼圖（缺席同樣走替身）
+	DynamicBodyMaterial->SetTextureParameterValue(MistRTParam,
+		Canvas->GetMistLayerTexture() ? static_cast<UTexture*>(Canvas->GetMistLayerTexture())
+		                              : static_cast<UTexture*>(Empty));
 }
 
 void UInkBodyComponent::HandleInkLayersChanged()

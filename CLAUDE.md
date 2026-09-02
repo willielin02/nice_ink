@@ -69,6 +69,18 @@ canvas 做不到毛玻璃半透明）**。
 - 測試 API：GameMode 上有 `DebugRoboStroke/DebugRoboKick/DebugRoboAccuse(bool)/DebugRoboSpray` 等
   timer-deferred hooks（0.1s timer 讓 RPC 逃出 python 執行 guard）——robo 測 RPC 流程一律走這些。
 - log 位置：`Saved/Logs/NiceInk.log`；robo 結果檔寫在腳本裡指定的絕對路徑。
+- **離線閘門（不開引擎、一輪一秒）＝`Tools/UiCheck/`**：`tray_layout_check.py`
+  （墨杯盤/chip 版面＋透明度地對比工作區間＋方向選擇的鉗位）、`tray_cursor_check.py`
+  （游標增益：FOV 無關／桌面指標對齊／跟 UI 縮放／玩家設定生效）、`hud_loc_lint.py`
+  （作畫相位不准出現裸英文字面量）。**改 HUD 或輸入增益一律先跑這三支。**
+- **`Tools/RoboTest/robo_fps_by_stage.py`＝分辨「我弄壞了」與「機器被餓死」**：
+  離線讀 log 算出每個 STAGE 的實際幀率。directdraw 有一整族牆鐘×頻率敏感的契約
+  （superfast 針數／cruise tipSpd／sweeping 排數／movement gate 殘留針），幀率一塌
+  就**集體假 FAIL 而且看起來像真的迴歸**。**某段掉到 20~30 而鄰段 80~115＝那段被餓死，
+  該段的失敗不可歸因於程式改動**（09-02 實測：superfast 23.1 fps、鄰段 88~115）。
+- **迴歸的通過判準是「沒有已知集合以外的失敗」，不是「失敗集逐字相同」**——
+  基線裡至少兩項（`cruise tipSpd` 2.00~2.02、`shader deposits while sweeping`
+  dn 88~104 對上限 90）本身就會跳。拿會跳的集合當逐字基準＝把 flake 追認成規格。
 
 ## 除錯方法論（弱項補強，照著走）
 
@@ -319,7 +331,8 @@ canvas 做不到毛玻璃半透明）**。
   ghost 穿透、**鎖定靈敏度 FOV 縮放**（07-24 開鏡定律 ×0.33＋DrawSensitivity 旋鈕——
   不縮放=游標三倍速））/
   **刺青機伸縮針**（LMB=伸針=墨流出因果、伸長量針/握管分帳）/**三工具制**（07-25 打稿制：
-  滾輪三檔 **Stencil 麥克筆（預設）**→Liner→Shader；Stencil=結晶紫 #703593 稿線
+  **Q 三檔**（09-02 定案；此前是滾輪——最低頻的軸不該佔最快的輸入）
+  **Stencil 麥克筆（預設）**→Liner→Shader；Stencil=結晶紫 #703593 稿線
   （手速自由直畫、甦醒收束 EnterTour 全洗=不進巡禮不可指認、旁人 3D 拉伸筆+本人
   2D 貼圖筆 T_UI_MarkerPen；**07-31 六版制＝自由滑鼠＋凍結相機**（帳本=DIRECT_DRAW_PLAN
   07-31 各節、user 六輪逐字定案）：滑鼠→aim 純積分零否決（游標類輸入不做「狀態機+
@@ -380,7 +393,30 @@ canvas 做不到毛玻璃半透明）**。
   收斂制**（平頂＋線性羽化剖面=塗均勻構造保證、單趟 55% 疊趟收斂實墨、軟橢圓
   章 COLA 疊平、暈開烘製鏈=高解烘→高斯→箱式下取樣 1:1；流量恆定、
   FInkStroke.PointFlow byte 鏈保留）＋**Crayola 官方十色調色盤**（user 驗收
-  定案；1-9,0 換色即時生效＋HUD 常駐色票列））/程式化走路/ESC 系統選單）、
+  定案；1-9,0 換色即時生效）＋**墨杯盤／灰洗三檔（09-02 全制，見下）**）/
+  程式化走路/ESC 系統選單）、
+
+  **作畫操作與 HUD 現制（2026-09-02，user 逐輪定案；帳本＝SHIP_PLAN 追記104~113、
+  畫面清單＝`Docs/DRAW_HUD_INVENTORY.md`）**：
+  - **墨杯盤＝按住 RMB**（此前 RMB＝起身，與 WASD 重複＝浪費最貴的輸入；起身現在
+    只有 WASD）。10 欄（顏色，序＝數字鍵 1-0）× 3 列（稀釋度，上濃下淡）。
+    **方向選擇、無游標**：位移鉗在盤內、取最近格 ⇒ 任何位移都落在某一格，
+    不必對準；不動＝維持原杯＝天然的取消。放開＝沾杯。
+  - **滾輪＝稀釋度**（填色中最高頻）、**Q＝切筆**（最低頻）。檔位＝`77/153/255`
+    ＝**30%/60%/100%**（153 才是剛好 0.600；顯示一律走 `TierLabel()` 單一來源）。
+  - **透明度只能靠變化的地顯示**：墨杯＝2×2 粗棋盤（紙色/`PaperShade`）＋真半透明墨。
+    單一底色上 `α·色+(1−α)·白` 與摻白**逐像素相等**＝不可能顯示透明度。
+    地對比有工作區間（15~70 sRGB 階；紙/墨＝218 階會壓過顏色）。
+  - **HUD 常駐只剩三件**：相位橫幅、**一枚墨杯 chip**（當前色×濃度＋百分比）、
+    **右緣鍵帽縱列**（鍵帽圖形＋2~5 字動詞，隨狀態增減——形式照 Meccha 實物）。
+    針尖的筆名標籤、底部十色票列、一行六項的英文提示**全部退役**。
+    **按住 LMB 時 chrome 全部淡下去**（`ChromeAlphaMul` 掛最底層原語＋TGuardValue）。
+  - **托盤游標增益走螢幕空間**（`TrayCursorPixelsPerCount`）：把引擎的軸靈敏度與
+    **FOV 縮放**除掉（`GetInputMouseDelta` 回的是被乘過的值，鎖定 FOV36 ⇒ ×0.400
+    ＝比桌面指標慢 22 倍）、乘玩家的 `MouseSensitivityScale`、乘 UI 縮放。
+  - **作畫相位字串已全數進 `NiceInkLocText`**（13 語）；閘門＝表列數
+    `static_assert` ＋ `Tools/UiCheck/hud_loc_lint.py`（作畫相位出現裸英文＝失敗）。
+    其餘相位（巡禮／指認／醉夢／結算）仍是英文＝已記帳的 backlog。
   `InkCanvasComponent`（筆劃=真相、**三層 RT 快取**：線層 4096+Valve 銳化／霧層 4096
   軟半透明（銳化不咬）／刺青層；作者 ID/碳黑/雷射/洗掉；批次蓋章＋預烘 stipple 條帶＋
   縫區表面補丁逐點落墨；**08-25 改惰性配置**＝4096² RGBA8 每張 64 MiB×最多 4 層×
@@ -722,7 +758,7 @@ canvas 做不到毛玻璃半透明）**。
   長跪作畫姿/雙臂 IK/平面畫布全退役）**＋**操作優化與轉印打稿制（07-24~25：割線
   「難操作」診斷鏈=靈敏度三倍速（FOV 縮放修）→拉桿→皮繩追趕（畫面歸針）→真病根
   =手勢矛盾（恆速針殺手勢肌肉記憶）→**轉印打稿制**（現實刺青工作流：紫麥克筆
-  打稿→機器沿稿上墨；user 定案預設紫筆+滾輪三檔）；robo_directdraw_test.py=**72
+  打稿→機器沿稿上墨；user 定案預設紫筆（切筆 09-02 由滾輪改 Q））；robo_directdraw_test.py=**72
   檢查**常駐套件（含真人手速探針＋流量恆定＋紅墨像素＋稿線/沿稿契約），迴歸組
   =orbit/feign/maze；**編輯器背景節流=假 FAIL 元凶**（user 用機時編輯器失焦被壓到
   3~6fps——harness 已自動關 bThrottleCPUWhenNotForeground，見陷阱年鑑）**。

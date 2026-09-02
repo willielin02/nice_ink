@@ -71,7 +71,7 @@ protected:
 	float DrawFaceTok(const class APlayerState* PS, float X, float Y, float Size);
 
 	// 圓角半透明面板／按鈕底（9-slice 取樣 RoundedTex；素色簡約風的唯一面元件）
-	void DrawRoundedBox(float X, float Y, float W, float H, float Radius, const FLinearColor& Color);
+	void DrawRoundedBox(float X, float Y, float W, float H, float Radius, const FLinearColor& ColorIn);
 
 	// ---- AR 版面鏡像（2026-08-07 SPEC v4.0e）----
 	// 文化=ar 時整個 UI chrome 水平鏡像：座標一律以 LTR 邏輯空間書寫，
@@ -80,13 +80,20 @@ protected:
 	// 致盲潑漬/調色盤數字鍵序）以 TGuardValue 掛起豁免。
 	bool bRTLLayout = false;        // DrawHUD 每幀跟語言設定刷新
 	bool bMirrorSuspended = false;  // 原語內部與豁免區掛起（防雙重鏡像）
+
+	// ---- chrome 淡出（2026-09-02 畫面清單）----
+	// 落筆時上方橫幅/現金淡到 35%：它們是「兩筆之間才會看」的環境資訊，落筆當下
+	// 只是亮的東西在視野邊緣。乘數掛在**最底層原語**（DrawTok/DrawRoundedBox/
+	// DrawIconTok/K2_DrawTexture 路徑），用 TGuardValue 圈住要淡的區塊——與
+	// bMirrorSuspended 同一個 pattern，呼叫端不必逐個 colour 改。
+	float ChromeAlphaMul = 1.0f;
 	bool IsMirrored() const { return bRTLLayout && !bMirrorSuspended; }
 	float FlipX(float X) const;              // 錨點鏡像
 	float FlipXW(float X, float W) const;    // 矩形左緣鏡像
 
 	// ---- 繪製 helper（全 HUD 只准經過這組，樣式不得繞道自畫）----
 	FVector2D DrawTok(const FString& Text, float X, float Y, ETextTier Tier,
-		const FLinearColor& Color, EHAlign Align = EHAlign::Left, bool bBold = false);
+		const FLinearColor& ColorIn, EHAlign Align = EHAlign::Left, bool bBold = false);
 	FVector2D MeasureTok(const FString& Text, ETextTier Tier, bool bBold);
 	// 寬度截斷（名字類自由文字的顯示保險）：超寬裁字尾補「…」。
 	// SanitizePlayerName 的 16 字上限是碼元數——CJK 全形 16 字≈拉丁 32 字寬，
@@ -134,9 +141,27 @@ protected:
 	void DrawPostGamePanel(class ANiceInkCharacter* MyChar);
 	void DrawBottomHint(const FString& Text, const FLinearColor& Color);
 
-	// 鎖定中常駐色票列（十六版追修：hotbar 慣例的補完——十色可視＋數字標＋
-	// 當前色高亮；選項不可視=「不知道有十色/拿什麼色/按哪鍵」三重盲）
-	void DrawPaletteStrip(const class ANiceInkCharacter* MyChar);
+	// 鎖定中唯一的常駐狀態（09-02 畫面清單＝Docs/DRAW_HUD_INVENTORY.md）：
+	// 一枚墨杯 chip（當前色×濃度＋百分比）。筆名與色票列全部退役——筆在針尖
+	// 的視覺本來就不同、顏色在落點指示上已經有了，只有濃度需要持久記憶
+	//（誤用濃度是單向不可逆的）。
+	void DrawInkChip(const class ANiceInkCharacter* MyChar);
+
+	// 鍵帽圖形（Meccha 實物語言）：小圓角方塊＋鍵名。**鍵位要畫成鍵盤上的樣子**，
+	// 寫成句子裡的一個英文詞玩家不會把它讀成「一顆可以按的鍵」。回傳寬度。
+	float DrawKeycap(float X, float Y, const FString& Key, bool bAccent = false);
+
+	// 常駐操作列（右緣縱列，鍵帽＋動詞，隨狀態增減）——形式照 Meccha 實物：
+	// 它是常駐的，但小、圖像化、貼邊；差別不在常駐與否，在句子 vs 鍵帽。
+	void DrawControlStrip(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
+
+	// 墨杯盤（09-02）：10 色 × 3 稀釋度的杯陣＋托盤游標——版面與角色端命中測試
+	// 共用 FNiInkTrayLayout::Compute（版面寫兩份必有一邊會舊）
+	void DrawInkTray(const class ANiceInkCharacter* MyChar);
+
+	// 一枚墨杯（雙色地＋真半透明墨）——cluster 與托盤共用同一套透明度語言
+	void DrawInkCup(float X, float Y, float W, float H,
+		const FLinearColor& Base, int32 TierIdx);
 
 	// （07-29：可畫域標記改制為皮膚上的 veil 殼——角色端 UpdateReachVeilShell；
 	// 螢幕空間版 DrawReachVeil 退役：蓋到地板/與收筆閘兩套來源互相說謊）

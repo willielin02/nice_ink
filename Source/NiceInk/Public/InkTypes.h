@@ -94,6 +94,27 @@ struct FInkStroke
 	// 空陣列或缺項＝滿濃度（舊存檔與液線針零遷移；Liner 恆不寫=機器擁有速度）。
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
 	TArray<uint8> PointFlow;
+
+	// 整條筆劃的**濃度檔**（2026-09-02 灰洗分檔；只有 Shader 消費）：真實 black &
+	// grey 的灰洗就是離散稀釋杯（light/medium/dark），這裡＝per-stroke 濃度上限。
+	// 密度＝Tier×Flow×剖面，合成＝max（見 FInkMistSurface）⇒ 同檔重疊恆均勻、
+	// 深壓淺生效、淺壓深無事。預設 255＝實檔＝舊行為（舊存檔／Liner 零遷移）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
+	uint8 TierAlpha = 255;
+
+	// 逐點的**稿線牆**（2026-09-01 擋墨制、09-02 v2 半平面；只有 Shader 用）：
+	// **每點 4 位元組**（stride=4），編碼至多 2 個裁切半平面
+	//（[角度, 距離]×2；角度相對該點行進方向 1.4° 解析度、距離以章半徑 R/254 量化、
+	// 距離位元組 0xFF＝該平面缺席）。編解碼＝InkCanvasComponent 的
+	// Encode/DecodeWallPlanes。空陣列或缺項＝不截斷（舊存檔／Liner／稿筆零遷移）。
+	//
+	// **為什麼要存下來、不能每次現算**：牆是從稿線算出來的，而稿線在 EnterTour
+	// 會被全洗 ⇒ 之後任何一次畫布重建（洗稿／轉碳黑／雷射／晚到者補圖）都會查不到
+	// 稿線 ⇒ 已經裁好的填色會**在巡禮那一刻膨脹回沒裁的樣子**（正好是遊戲的高潮）。
+	// 落墨當下算一次、寫進筆劃＝重建逐位可重現。不必複製：每一端的畫布狀態同源
+	//（同一串 multicast、同順序），各自算出的值必然相同。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Ink")
+	TArray<uint8> PointWall;
 };
 
 // 傑作：一位作者在一個回合畫下的全部筆劃。

@@ -29,6 +29,60 @@ struct FReferenceSkeleton;
 // （相位／身分／目標）後由「被畫的角色」multicast 重播到所有端；
 // 向量資料在每端獨立重建 RT。規則操作（碳黑轉換、洗墨）同路徑。
 //
+// 墨杯盤（2026-09-02 定案；取代 C 選擇面板——三版排版全數退役）。
+// **顏色×稀釋度＝單一物件「墨杯」**：規格自己寫的灰洗＝稀釋杯制，刺青師不會
+// 「先選顏色再選透明度」，他沾一個杯。所以正確的物件數不是 10+3 個控制項，
+// 是一格 10×3 的杯盤——欄＝顏色（**與數字鍵 1..9,0 空間同構**；舊面板的 2×5
+// 是在主動教錯的地圖）、列＝稀釋度（**上濃下淡，與滾輪方向同構**）。
+//
+// **透明度只能靠「變化的底」顯示**（2026-09-02 二修，血價：一版我主張「十欄同時
+// 用同一個方式變淡＝平行性就是標籤」而拿掉了棋盤與百分比，user 當場問
+// 「我要怎麼看出這是透明度還是粉度」——**那個主張是錯的，而且是數學上的錯**：
+// 在單一底色上 `α·色 + (1−α)·白` 與「摻 (1−α) 的白」逐像素相等，十欄一起摻白
+// 看起來就是十欄粉彩色。平行性能講清楚「這是同一個軸」，講不清楚「這個軸是什麼」。）
+// ⇒ 每一格的底＝**左半淺右半深的雙色地**：半透明的墨會讓兩半透出不同結果
+//（＝看得見它是透過來的），不透明的墨兩半一致 ⇒ **「兩色」本身就是透明的證據**。
+// 選淺/深兩大塊而非細棋盤：黑墨在細棋盤上兩格都暗＝低對比（追記106 已記過的弱點）。
+// 再加**左側 100%/60%/30% 的列標＝軸**——格陣沒有軸就只是一張色表。
+//
+// 呼出＝**按住 RMB**（此前綁「起身」＝與 WASD 重複的浪費），杯盤浮在**螢幕中心
+// ／針尖**＝眼睛已經在的地方，滑到一格、放開＝沾好了。零眼睛位移、方向即肌肉
+// 記憶（輪盤家族的真正價值；舊版抄 Meccha 的靠左停靠＝把這個好處整個丟掉）。
+// 版面＝HUD 繪製與角色命中測試**共用同一份計算**（版面寫兩份必有一邊會舊）。
+struct FNiInkTrayLayout
+{
+	static constexpr int32 Cols = 10;  // 顏色（序＝數字鍵 1..9,0）
+	static constexpr int32 Rows = 3;   // 稀釋度（列 0=實、1=中、2=淡）
+
+	float S = 1.0f;               // UI 縮放（=ViewH/1080，與 HUD UiScale 同式）
+	FVector2D Origin = FVector2D::ZeroVector;  // 格陣左上（不含卡片留白與列標欄）
+	FVector2D Cell = FVector2D::ZeroVector;
+	float Gap = 0.0f;
+	float Pad = 0.0f;
+	float Gutter = 0.0f;          // 左側列標欄（100%/60%/30%）
+	float HeadRoom = 0.0f;        // 格陣上方的抬頭字空間
+	float FootRoom = 0.0f;        // 格陣下方的數字鍵標空間
+	FVector2D CardPos = FVector2D::ZeroVector;   // 底卡（HUD 直接畫這個，不自己再算）
+	FVector2D CardSize = FVector2D::ZeroVector;
+
+	static FNiInkTrayLayout Compute(float ViewW, float ViewH);
+	FVector2D GridSize() const;
+	FVector2D CellPos(int32 Col, int32 Row) const;
+	// **方向選擇（2026-09-02 user 定案）**：位移先鉗在盤內，再取最近的格＝
+	// **永遠落在某一格**。沒有游標、沒有「落在縫上」、沒有「落在盤外」——
+	// 玩家只要往那個方向推一段，不必對準；不動＝維持原本那一杯（＝天然的取消）。
+	void SnapCell(const FVector2D& P, int32& OutCol, int32& OutRow) const;
+
+	// 盤內鉗位（累積位移的可行域＝格陣矩形；貼邊會「卡住」，往回推立刻回來）
+	FVector2D ClampToGrid(const FVector2D& P) const;
+	static const TCHAR* TierLabel(int32 Row);  // 列標（100%/60%/30%）
+
+	// 列 ↔ 檔位索引（ShaderTierAlphaFor 的 0=淡/1=中/2=實）：上濃下淡
+	//（滾輪上＝更濃＝往上走，兩者同構＝高亮跟著手指的方向動）
+	static int32 TierFromRow(int32 Row) { return FMath::Clamp(Rows - 1 - Row, 0, Rows - 1); }
+	static int32 RowFromTier(int32 Tier) { return FMath::Clamp(Rows - 1 - Tier, 0, Rows - 1); }
+};
+
 // 輸入為輪詢制（不依賴輸入綁定資產）：WASD 走動、滑鼠視角、
 // 左鍵作畫、1-0 選色。受害者沉睡時輸入被鎖，按 WASD＝現身（定案 #17）。
 UCLASS()
@@ -524,6 +578,81 @@ public:
 	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
 	int32 SelectedColorIndex = 0;
 
+	// --- 灰洗分檔（2026-09-02；真實 black & grey 的稀釋杯＝離散檔位）---
+	// **滾輪＝稀釋度**（09-02 定案：填色過程中最高頻的軸、手指本來就在滾輪上、
+	// 完全不中斷作畫；此前滾輪綁「切筆」＝最低頻的軸佔了最快的輸入，正好倒過來）。
+	// 上滾＝更濃、下滾＝更稀，**鉗位不環繞**（強度軸有兩端，從實跳回淡＝意外）。
+	// per-stroke 取樣（與換色同語義：中筆劃換檔重開筆劃）。預設實檔＝舊行為。
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
+	int32 ShaderTierIdx = 2;
+
+	// 檔位表 server/client 共用（RPC 只送索引）：淡 30%／中 60%／實 100%。
+	// **值要對得起它的名字**（2026-09-02 三修，user：「為什麼有他媽的 61%」）：
+	// 舊值 156/255＝61.18% ⇒ chip 從位元組除出來就顯示 61%，而托盤列標寫的是 60%
+	//——同一個東西的名字寫在兩個地方，必有一邊不一樣。153/255＝**剛好 0.600**，
+	// 三檔取整後全部等於列標（30／60／100）。感知差 0.5 個 sRGB 階＝看不出來。
+	// 顯示端一律走 FNiInkTrayLayout::TierLabel()，不准再自己算。
+	static uint8 ShaderTierAlphaFor(int32 TierIdx)
+	{
+		constexpr uint8 Alphas[3] = { 77, 153, 255 }; // 30.2% / 60.0% / 100%
+		return Alphas[FMath::Clamp(TierIdx, 0, 2)];
+	}
+
+	// --- 墨杯盤（2026-09-02 定案；C 面板退役）：**按住 RMB** 呼出、放開＝沾杯。
+	// 模態期間畫墨暫停、滑鼠變托盤游標、chrome 全部讓開。約 0.3 秒的動作——
+	// 這階段的張力是「每一秒都是賭」，所以選擇動作要嘛低於一秒、要嘛要有戲，
+	// 中間地帶（看不見、沒有戲、純粹刪時間的模態面板）不合法。 ---
+	UPROPERTY(BlueprintReadOnly, Category = "Nice Ink|Paint")
+	bool bInkTrayOpen = false;
+
+	// 托盤游標（螢幕像素；**開盤時落在當前墨杯的格心**＝輕點一下 RMB＝沾回同一杯
+	// ＝零副作用，這是 hold-to-pick 的標準安全語義）
+	FVector2D InkTrayCursor = FVector2D::ZeroVector;
+
+	// 托盤武裝旗標：進鎖那一次 RMB **放開之後**才允許開盤——listen server 的
+	// Server RPC 同幀執行，入鎖的那顆 RMB 在同一 tick 仍是按著的（陷阱年鑑：
+	// 「只有主機視窗壞」幾乎都是這類同幀問題）
+	bool bInkTrayArmed = false;
+
+	// 托盤游標增益＝**相對桌面滑鼠指標的倍率**（1.0＝跟你 Windows 的指標同速；
+	// 2.0＝兩倍快）。刻意不是「像素/單位」那種沒有基準的魔術數字——UI 游標唯一
+	// 有肌肉記憶的參考物就是桌面指標。
+	//
+	// 為什麼要有 `TrayCursorPixelsPerCount()` 那一整套換算（2026-09-02 三修，
+	// user：「按右鍵的滑鼠靈敏度是正常的嗎」）：**UI 游標與瞄準是不同單位的東西**
+	//（游標＝像素/單位、瞄準＝度/單位），而 `GetInputMouseDelta()` 交回來的**不是
+	// 原始滑鼠位移**，是引擎 `MassageAxisInput` 加工過的 `KeyState.Value`
+	//（軸靈敏度 × FOVScale×FOV）。直接拿它當像素用＝托盤游標吃到了**開鏡補償**：
+	// 作畫鎖定 FOV 36 ⇒ ×0.400（站姿 FOV 90 是 ×1.000）⇒ 實測 0.0448 像素/單位
+	// ＝比桌面指標**慢 22 倍**、橫越杯陣要移動 47cm（800 DPI）。而 FOV 縮放存在的
+	// 理由是「鏡頭拉近時保持角速度一致」——**一張大小固定的面板沒有 zoom 可以補償**。
+	// ⇒ 現制：把 FOV 那層原樣除掉（用引擎自己的參數，不寫死）、乘玩家的
+	// `MouseSensitivityScale`（此前托盤是全遊戲唯一不理會該設定的地方）、乘 UI 縮放
+	//（格子隨解析度變大，游標不跟＝1440p 慢 1.33 倍、4K 慢 2 倍）。
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.2", ClampMax = "4.0"))
+	float InkTrayCursorGain = 1.0f;
+
+	// 托盤游標的螢幕空間增益（像素／每一單位 GetInputMouseDelta 回傳值）。
+	// 把引擎加工過的量換算回「桌面指標當量」——見 InkTrayCursorGain 的註解。
+	float TrayCursorPixelsPerCount(const APlayerController* PC, float UiScale) const;
+
+	// --- 收筆淡出（2026-09-02 建制、同日 user 裁決**預設關**）：流量隨手速衰減
+	//（甩筆＝淡尾＝無筆壓輸入的 taper 標準替代軸）。裁決理由：功能要靠反覆解釋
+	// 才成立＝派對遊戲裡不成立；且快速填色誤觸發＝墨突然變淡＝必被讀成 bug。
+	// **Floor=1.0＝關**（任何速度恆濃）；要開＝Floor 降回 ~0.10——Start 以下恆滿、
+	// Start→End 線性淡到 Floor，max 合成下淡掉的尾巴可被慢掃補滿。 ---
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "5", ClampMax = "200"))
+	float MistFadeStartCmS = 22.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "10", ClampMax = "400"))
+	float MistFadeEndCmS = 60.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Nice Ink|Paint", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MistFadeFloor = 1.0f;
+
+	// 筆尖皮膚速度 EMA（cm/s；τ≈2~3 tick）——ComputeMistFlowByte 的輸入
+	float MistTipSpeedCmS = 0.0f;
+
 	// 作者槽位（2026-08-31 防作弊 P0-1；帳本=Docs/ANTICHEAT_PLAN.md §3）：每回合洗牌的
 	// 不透明分組鍵——落墨多播的線上識別只走 slot，slot→真名對照只活在 server
 	//（受害者的改裝客戶端從此讀不到「這筆是誰畫的」）。COND_OwnerOnly＝只發本人：
@@ -793,8 +922,10 @@ public:
 	// 空陣列=全滿濃度——液線針恆走空陣列省頻寬）
 	// StrokeSeq（07-26 本地預測）：作畫者客戶端遞增的筆劃序號——回播對消用；
 	// 0＝非玩家路徑（robo/GameMode 直呼），永不對消
+	// TierIdx（09-02 灰洗分檔）：0=淡/1=中/2=實——只送索引、server 查共用表
+	//（改裝客戶端塞不進任意濃度；非 Shader 針忽略恆實檔）
 	UFUNCTION(Server, Reliable)
-	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq);
+	void ServerPaintBegin(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq, uint8 TierIdx);
 
 	UFUNCTION(Server, Reliable)
 	void ServerPaintPoints(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
@@ -810,7 +941,7 @@ public:
 	// StrokeSeq≠0＝作畫者客戶端已本地預測整條筆劃——該端跳過自己的回播（見實作）
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintBegin(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke,
-		EInkNeedle Needle, uint8 Flow, int32 StrokeSeq);
+		EInkNeedle Needle, uint8 Flow, int32 StrokeSeq, uint8 TierAlpha);
 
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastPaintPoints(int32 AuthorId, const TArray<FVector2D>& UVs, const TArray<uint8>& Flows);
@@ -1766,6 +1897,12 @@ private:
 	void PollMove(APlayerController* PC);
 	void PollTrapDial(APlayerController* PC);
 	void PollPalette(APlayerController* PC);
+	// 墨杯盤（09-02）：開盤（游標歸當前杯）＋盤內輸入（游標移動、放開＝沾杯）
+	void OpenInkTray(APlayerController* PC);
+	void PollInkTray(APlayerController* PC, float DeltaSeconds, bool bRmbDown);
+	// 切工具的共同路徑（原 PollLockedDraw 的區域 lambda 抽出——面板點選也要用）：
+	// 視野不跳歸位＋抬針重開＋RepNeedle 上服
+	void ApplyNeedleSwitchLocal(EInkNeedle NewNeedle);
 	void StopPaintingLocal();
 	void ApplySleepVisual();
 

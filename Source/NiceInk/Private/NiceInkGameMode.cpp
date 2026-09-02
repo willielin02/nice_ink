@@ -2024,8 +2024,34 @@ void ANiceInkGameMode::BeginVictimSleep(bool bAlreadyLying)
 
 void ANiceInkGameMode::OnSeatingDone()
 {
+	// 開作畫相位前替全體非受害者**預發本回合 slot**（2026-09-02，P0-1 補遺）：
+	// slot 每回合重洗，但角色身上那份是 COND_OwnerOnly 複製、慢一個 net tick，
+	// 且只會在首針當下被 GetOrAssignDrawSlot 覆寫——不預發的話，第二回合起遠端
+	// 客戶端首針的本地預測用的是上一回合的 slot ⇒ 畫布上長出 server 永遠不認識
+	// 的幽靈作品＋MulticastPaintBegin 對消比對失敗＝整條筆劃二次蓋章（半透明針
+	// 直接變深）。順帶補掉第一回合首針「INDEX_NONE ⇒ 無預測 ⇒ 白吃一個來回」。
+	// 受害者本回合不作畫＝清 INDEX_NONE（擋掉沉睡中任何殘路徑用舊 slot 預測）。
+	// slot 是 OwnerOnly，提早發不多洩漏任何身分資訊。
+	ANiceInkGameState* GS = NIState();
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		ANiceInkCharacter* Ch = PS ? Cast<ANiceInkCharacter>(PS->GetPawn()) : nullptr;
+		if (!Ch)
+		{
+			continue;
+		}
+		if (PS->GetPlayerId() == GS->VictimPlayerId)
+		{
+			Ch->DrawSlotId = INDEX_NONE;
+		}
+		else
+		{
+			GetOrAssignDrawSlot(Ch);
+		}
+	}
+
 	// 作畫階段：無計時器——收束時機在受害者手上（WASD 現身）
-	NIState()->SetPhase(ENiceInkPhase::Drawing, 0.0f);
+	GS->SetPhase(ENiceInkPhase::Drawing, 0.0f);
 	SetPhaseTimer(0.0f, nullptr);
 }
 
@@ -2322,7 +2348,7 @@ void ANiceInkGameMode::DebugRoboStroke(FVector2D FromUV, FVector2D ToUV, int32 C
 		// robo 線畫維持折線語義（bDotStroke=false）＋液線針＋滿流量（空陣列）；
 		// StrokeSeq=0＝server 發起、無任何端預畫＝回播對消永不觸發
 		Victim->MulticastPaintBegin(WireId, Color, FromUV, /*bDotStroke=*/false,
-			EInkNeedle::Liner, /*Flow=*/255, /*StrokeSeq=*/0);
+			EInkNeedle::Liner, /*Flow=*/255, /*StrokeSeq=*/0, /*TierAlpha=*/255);
 		TArray<FVector2D> Points;
 		for (int32 Step = 1; Step <= 10; ++Step)
 		{

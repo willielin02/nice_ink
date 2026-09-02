@@ -18,6 +18,7 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/InputSettings.h" // 托盤游標：把引擎的 FOV 縮放原樣除掉
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/ProjectileMovementComponent.h"
 #include "GameFramework/WorldSettings.h" // FNetViewer（P0-2 沉睡期複製過濾）
@@ -1446,6 +1447,10 @@ void ANiceInkCharacter::PollPalette(APlayerController* PC)
 			break;
 		}
 	}
+
+	// 濃度不在這裡（09-02 定案）：C 循環→C 面板→**墨杯盤**三代演化的終點是
+	// 「顏色×稀釋度＝一個物件」——滾輪直接調稀釋度（見 PollLockedDraw），
+	// 按住 RMB 的 10×3 杯盤一次選好兩者。數字鍵只管顏色＝老手快捷層原樣。
 }
 
 FString ANiceInkCharacter::DebugRoboLeanEnterFromEye(ANiceInkCharacter* Target, FVector AimPoint, bool bEnter)
@@ -2696,20 +2701,247 @@ void ANiceInkCharacter::ReapplyCanonicalMaterials()
 
 // --- 貼臉鎖定：鎖定中的游標作畫／偷瞄／起身 ---
 
+void ANiceInkCharacter::ApplyNeedleSwitchLocal(EInkNeedle NewNeedle)
+{
+	if (SelectedNeedle == NewNeedle)
+	{
+		return;
+	}
+	// 切工具視野不跳（08-02 user 定案「以切換時視野在哪為準」）：aim 先歸位到
+	// 當前相機朝向——稿筆（凍結相機）與機器（畫面歸針）的參考系差全部收進
+	// 「游標歸中」（小、恆可預期），視野凍在原地。兩個方向都成立：稿筆→機器
+	// =相機續讀 aim（=舊凍結朝向）；機器→稿筆=凍結相機從 aim 重播種（=舊畫面）。
+	// robo 角度命令同 tick 在後（PollDrawAim 消化）照舊覆寫＝角度契約原樣。
+	//（09-02 從 PollLockedDraw 的區域 lambda 抽出＝逐字搬移；面板點選共用同路）
+	const bool bFrozenCamNow = SelectedNeedle == EInkNeedle::Stencil && bDrawCamInit;
+	const float CamAzNow = bTattooChaseActive ? TattooNeedleAz
+		: (bFrozenCamNow ? DrawCamAz : DrawAimAzLocal);
+	const float CamTiltNow = bTattooChaseActive ? TattooNeedleTilt
+		: (bFrozenCamNow ? DrawCamTilt : DrawAimTiltLocal);
+	DrawAimAzLocal = FMath::UnwindDegrees(CamAzNow);
+	DrawAimTiltLocal = FMath::Clamp(CamTiltNow, DrawTiltMinDeg, DrawTiltMaxDeg);
+	bMistPrevAimValid = false; // 歸位是傳送不是手速——不進霧針移動閘量測
+	SelectedNeedle = NewNeedle;
+	StopPaintingLocal();
+	bDrawCursorRelatch = true; // 切到稿筆＝游標從當前 aim 命中點再生（機器檔不消化）
+	if (HasAuthority())
+	{
+		RepNeedle = NewNeedle;
+	}
+	else
+	{
+		ServerSetNeedle(NewNeedle);
+	}
+}
+
+// --- 墨杯盤（09-02 定案；C 選擇面板三版全數退役）---
+// 顏色×稀釋度合成單一物件「墨杯」；按住 RMB 呼出於螢幕中心、放開＝沾杯。
+// 全部理由與血價寫在 NiceInkCharacter.h 的 FNiInkTrayLayout 註解。
+
+FNiInkTrayLayout FNiInkTrayLayout::Compute(float ViewW, float ViewH)
+{
+	FNiInkTrayLayout L;
+	L.S = FMath::Max(ViewH / 1080.0f, 0.25f); // 與 HUD UiScale 同式（ClipY/1080）
+	L.Gap = 6.0f * L.S;
+	L.Pad = 18.0f * L.S;
+	L.Cell = FVector2D(46.0f, 46.0f) * L.S;
+	L.Gutter = 48.0f * L.S;      // 列標欄（"100%" 的寬度）
+	// 文字高度預算＝字級 × 1.4（FCanvasTextItem 的 Y＝**行框頂端**，字身比字級矮、
+	// 位置比字級低——用「高度＝字級」編版會目測起來貼在一起；截圖反推證實）
+	L.HeadRoom = 34.0f * L.S;    // 抬頭字（筆名）
+	L.FootRoom = 26.0f * L.S;    // 數字鍵標
+	const FVector2D G = L.GridSize();
+	// **置中的是卡片不是格陣**（加了列標欄之後兩者不同心；置中格陣會讓整張卡歪一邊）。
+	// 卡片中心＝畫面中心＝針尖／眼睛已經在的地方；只在按住期間存在 ⇒ 蓋住畫布的
+	// 代價只付 0.3 秒。
+	L.CardSize = FVector2D(L.Gutter + G.X + 2.0f * L.Pad,
+		L.HeadRoom + G.Y + L.FootRoom + 2.0f * L.Pad);
+	L.CardPos = FVector2D((ViewW - L.CardSize.X) * 0.5f, (ViewH - L.CardSize.Y) * 0.5f);
+	L.Origin = FVector2D(L.CardPos.X + L.Pad + L.Gutter, L.CardPos.Y + L.Pad + L.HeadRoom);
+	return L;
+}
+
+const TCHAR* FNiInkTrayLayout::TierLabel(int32 Row)
+{
+	// 列標＝軸。沒有軸的格陣只是一張色表——而「這個軸是什麼」正是 user 問的問題
+	// （百分比是唯一不會被讀成別的概念的寫法：濃/淡是形容詞、圖示會被自由解讀）。
+	static const TCHAR* Labels[Rows] = { TEXT("100%"), TEXT("60%"), TEXT("30%") };
+	return Labels[FMath::Clamp(Row, 0, Rows - 1)];
+}
+
+FVector2D FNiInkTrayLayout::GridSize() const
+{
+	return FVector2D(Cols * Cell.X + (Cols - 1) * Gap,
+		Rows * Cell.Y + (Rows - 1) * Gap);
+}
+
+FVector2D FNiInkTrayLayout::CellPos(int32 Col, int32 Row) const
+{
+	return FVector2D(Origin.X + Col * (Cell.X + Gap),
+		Origin.Y + Row * (Cell.Y + Gap));
+}
+
+FVector2D FNiInkTrayLayout::ClampToGrid(const FVector2D& P) const
+{
+	const FVector2D G = GridSize();
+	return FVector2D(FMath::Clamp(P.X, Origin.X, Origin.X + G.X),
+		FMath::Clamp(P.Y, Origin.Y, Origin.Y + G.Y));
+}
+
+void FNiInkTrayLayout::SnapCell(const FVector2D& P, int32& OutCol, int32& OutRow) const
+{
+	// 位移→格的線性對應＋取整。命中判定（矩形＋死區＋盤外）整套退役——
+	// **沒有游標就沒有「對不準」這件事**：任何位移都會落在某一格上。
+	const FVector2D Q = ClampToGrid(P);
+	const float StepX = Cell.X + Gap;
+	const float StepY = Cell.Y + Gap;
+	OutCol = FMath::Clamp(FMath::RoundToInt((Q.X - Origin.X - Cell.X * 0.5f) / StepX), 0, Cols - 1);
+	OutRow = FMath::Clamp(FMath::RoundToInt((Q.Y - Origin.Y - Cell.Y * 0.5f) / StepY), 0, Rows - 1);
+}
+
+void ANiceInkCharacter::OpenInkTray(APlayerController* PC)
+{
+	int32 VW = 0, VH = 0;
+	PC->GetViewportSize(VW, VH);
+	if (VW <= 0 || VH <= 0)
+	{
+		return;
+	}
+	bInkTrayOpen = true;
+	StopPaintingLocal(); // 開盤＝畫墨暫停（模態；筆劃收乾淨、不留半條）
+	// 針也要收：開盤期間走的是早退路徑，bWantsPaint 不再被算 ⇒ 不主動送這一發
+	// 就會停在「伸針」狀態＝他端看到的針一直伸著（本地墨已停＝畫面自相矛盾）。
+	// 省寫只能省 I/O 不能省記帳的同族：狀態機的出口要自己把鏡像關乾淨。
+	if (bPenTriggerLocal)
+	{
+		bPenTriggerLocal = false;
+		ServerSetPenTrigger(false);
+	}
+	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH);
+	const int32 Col = FMath::Clamp(SelectedColorIndex, 0, FNiInkTrayLayout::Cols - 1);
+	const int32 Row = FNiInkTrayLayout::RowFromTier(ShaderTierIdx);
+	// 游標出生在「當前這一杯」的格心 ⇒ 輕點一下 RMB＝沾回同一杯＝零副作用
+	//（hold-to-pick 的標準安全語義；出生在盤心會讓誤觸變成換色）
+	InkTrayCursor = L.CellPos(Col, Row) + L.Cell * 0.5f;
+	NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+}
+
+float ANiceInkCharacter::TrayCursorPixelsPerCount(const APlayerController* PC, float UiScale) const
+{
+	// `GetInputMouseDelta()` 回的是 UPlayerInput::MassageAxisInput 加工過的
+	// `KeyState.Value`＝原始滑鼠 × 軸靈敏度 × (FOVScale × 相機 FOV)。要得到
+	// 「桌面指標當量」就把那兩層原樣除掉——**用引擎自己的參數讀，不寫死**
+	//（ini 改了 0.07 或 FOVScale，這裡自動跟上；寫死＝下一個踩到的人不會知道）。
+	const UInputSettings* IS = GetDefault<UInputSettings>();
+	float AxisSens = 1.0f;
+	if (IS)
+	{
+		for (const FInputAxisConfigEntry& E : IS->AxisConfig)
+		{
+			if (E.AxisKeyName == EKeys::MouseX.GetFName())
+			{
+				AxisSens = E.AxisProperties.Sensitivity;
+				break;
+			}
+		}
+	}
+	// FOV 補償：只在引擎真的開著時才除（關掉時 MassageAxisInput 乘的是 1.0）
+	float FovMul = 1.0f;
+	if (IS && IS->bEnableFOVScaling && PC && PC->PlayerCameraManager)
+	{
+		FovMul = IS->FOVScale * PC->PlayerCameraManager->GetFOVAngle();
+	}
+	const float Undo = FMath::Max(AxisSens, KINDA_SMALL_NUMBER) * FMath::Max(FovMul, KINDA_SMALL_NUMBER);
+	// 玩家的靈敏度設定（設定頁那一列）——此前托盤是全遊戲唯一不理它的地方；
+	// UI 縮放：格子隨解析度變大，游標不跟就會愈高解析度愈鈍（1440p 1.33 倍、4K 2 倍）
+	const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
+	const float PlayerScale = GI ? GI->GetMouseScale() : 1.0f;
+	return (1.0f / Undo) * InkTrayCursorGain * PlayerScale * FMath::Max(UiScale, 0.25f);
+}
+
+void ANiceInkCharacter::PollInkTray(APlayerController* PC, float DeltaSeconds, bool bRmbDown)
+{
+	int32 VW = 0, VH = 0;
+	PC->GetViewportSize(VW, VH);
+	if (VW <= 0 || VH <= 0)
+	{
+		bInkTrayOpen = false;
+		return;
+	}
+	// 滑鼠＝托盤游標（純積分、系統只讀不控——與稿筆同一條「輸入所有權歸玩家」）。
+	// 增益走螢幕空間（像素/單位）而非瞄準的角度域——UI 游標與瞄準是不同單位的東西。
+	const float UiScale = FMath::Max(VH / 1080.0f, 0.25f); // 與 FNiInkTrayLayout::S 同式
+	const float PxPerCount = TrayCursorPixelsPerCount(PC, UiScale);
+	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH);
+	float MX = 0.0f, MY = 0.0f;
+	PC->GetInputMouseDelta(MX, MY);
+	// **累積位移鉗在盤內**（不是整個畫面）：貼邊會卡住，往回推立刻回來——
+	// 自由游標會跑出去，回程要走一樣的距離才回得來＝「對不準」的來源。
+	InkTrayCursor = L.ClampToGrid(FVector2D(
+		InkTrayCursor.X + MX * PxPerCount, InkTrayCursor.Y - MY * PxPerCount));
+
+	if (bRmbDown)
+	{
+		return; // 還按著＝繼續挑（滾輪在盤內閒置＝位移與高亮永不分家）
+	}
+
+	// 放開＝沾杯。**恆有一格**（SnapCell 鉗位＋取最近），所以沒有「取消」這個狀態
+	//——不動就是維持原本那一杯（開盤時位移從當前杯的格心起算）＝天然的取消。
+	bInkTrayOpen = false;
+	int32 Col = INDEX_NONE, Row = INDEX_NONE;
+	L.SnapCell(InkTrayCursor, Col, Row);
+	// 欄數的真相是調色盤，不是格陣的 Cols——HUD 只畫 min(Cols, Num()) 欄；
+	// 未繪製的欄夾回最後一個真的有畫的欄（表的大小寫在兩個地方，必有一邊會舊）
+	const int32 NewColor = FMath::Min(Col, FNiceInkPalette::Num() - 1);
+	const int32 NewTier = FNiInkTrayLayout::TierFromRow(Row);
+	if (NewColor != SelectedColorIndex || NewTier != ShaderTierIdx)
+	{
+		SelectedColorIndex = NewColor;
+		ShaderTierIdx = NewTier;
+		StopPaintingLocal(); // 色與濃度都是 per-stroke 屬性（與數字鍵同語義）
+	}
+	NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+}
+
 void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds)
 {
 	if (!bLeanLocked)
 	{
 		StopPaintingLocal();
 		bPenTriggerLocal = false; // 伺服器端由 ForceExitLean 清；這裡只清本地鏡像
+		bInkTrayOpen = false;     // 出鎖＝托盤一併收
+		bInkTrayArmed = false;    // 下次入鎖重新武裝（見下）
 		return;
 	}
 
-	// 起身：右鍵或 WASD。進鎖後 0.25s 內不受理——
-	// (1) 主機的 Server RPC 同幀直接執行，進鎖的那次 RMB 在同一 tick 仍是 just-pressed，
-	//     會被誤讀成起身（鎖定只活一幀、畫面永遠不切）；
-	// (2) 按著 W 走近時按 RMB，殘留的 W 也會讓所有端秒退。
-	const bool bWantsExit = PC->WasInputKeyJustPressed(EKeys::RightMouseButton) ||
+	// 墨杯盤（09-02 定案）：**按住 RMB** 呼出、放開＝沾杯。模態——所有輸入先歸它，
+	// 放在起身判定之前＝開盤期間不會誤退鎖。
+	// 武裝閘：入鎖那一次 RMB **放開之後**才允許開盤。listen server 的 Server RPC
+	// 同幀執行 ⇒ 入鎖的那顆 RMB 在同一 tick 仍按著（陷阱年鑑：「只有主機視窗壞」
+	// 幾乎都是這類同幀問題；遠端客戶端因 RPC 延遲天然免疫＝更難發現）。
+	const bool bRmbDown = PC->IsInputKeyDown(EKeys::RightMouseButton);
+	if (!bRmbDown)
+	{
+		bInkTrayArmed = true;
+	}
+	if (bInkTrayOpen)
+	{
+		PollInkTray(PC, DeltaSeconds, bRmbDown);
+		return;
+	}
+	if (bInkTrayArmed && bRmbDown &&
+		GetWorld()->GetTimeSeconds() - LeanLockTime > 0.25f)
+	{
+		OpenInkTray(PC);
+		PollInkTray(PC, DeltaSeconds, bRmbDown);
+		return;
+	}
+
+	// 起身＝**只有 WASD**（09-02：RMB 讓給墨杯盤）。走開本來就是離開的天然手勢，
+	// 而 RMB 是這個遊戲裡最貴的一顆輸入——它此前在做一件 WASD 已經在做的事，
+	// 且誤觸代價是丟掉鎖定點、重新走位重新鎖（好幾秒）。
+	// 進鎖後 0.25s 內不受理：按著 W 走近時按 RMB 入鎖，殘留的 W 會讓所有端秒退。
+	const bool bWantsExit =
 		PC->IsInputKeyDown(EKeys::W) || PC->IsInputKeyDown(EKeys::A) ||
 		PC->IsInputKeyDown(EKeys::S) || PC->IsInputKeyDown(EKeys::D);
 	if (bWantsExit && GetWorld()->GetTimeSeconds() - LeanLockTime > 0.25f)
@@ -2732,50 +2964,17 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		ServerSetPenTrigger(bWantsPaint);
 	}
 
-	// 滾輪切工具（07-23 雙針制；07-25 打稿制 user 定案三檔）：Stencil 麥克筆（預設，
-	// 打稿）→ Liner（割線）→ Shader（打霧）循環，下滾=下一件、上滾=上一件
-	//（08-02 user 定案對齊主流慣例：Minecraft/FPS 換武器皆下滾前進）；
-	// 鎖定中滾輪閒置（轉盤=受害者迷宮情境）、數字鍵=調色盤。
+	// **Q＝切筆**（09-02 定案；此前是滾輪）：筆＝工作階段（打稿→割線→填色，
+	// SPEC #45 自己就是這樣定義的），一局只變 2~4 次——**最低頻的軸不該佔最快的
+	// 輸入**，而稀釋度是填色過程中一直在動的軸。兩者對調＝把倒過來的映射轉正。
 	// 換工具=抬針重開筆劃（渲染屬性是 per-stroke）；狀態跟選色同壽命；
 	// RepNeedle 上服=他端 3D 手持模型跟著換（麥克筆 vs 刺青機）。
-	auto SetNeedleLocal = [&](EInkNeedle NewNeedle)
-	{
-		if (SelectedNeedle == NewNeedle)
-		{
-			return;
-		}
-		// 切工具視野不跳（08-02 user 定案「以切換時視野在哪為準」）：aim 先歸位到
-		// 當前相機朝向——稿筆（凍結相機）與機器（畫面歸針）的參考系差全部收進
-		// 「游標歸中」（小、恆可預期），視野凍在原地。兩個方向都成立：稿筆→機器
-		// =相機續讀 aim（=舊凍結朝向）；機器→稿筆=凍結相機從 aim 重播種（=舊畫面）。
-		// robo 角度命令同 tick 在後（PollDrawAim 消化）照舊覆寫＝角度契約原樣。
-		const bool bFrozenCamNow = SelectedNeedle == EInkNeedle::Stencil && bDrawCamInit;
-		const float CamAzNow = bTattooChaseActive ? TattooNeedleAz
-			: (bFrozenCamNow ? DrawCamAz : DrawAimAzLocal);
-		const float CamTiltNow = bTattooChaseActive ? TattooNeedleTilt
-			: (bFrozenCamNow ? DrawCamTilt : DrawAimTiltLocal);
-		DrawAimAzLocal = FMath::UnwindDegrees(CamAzNow);
-		DrawAimTiltLocal = FMath::Clamp(CamTiltNow, DrawTiltMinDeg, DrawTiltMaxDeg);
-		bMistPrevAimValid = false; // 歸位是傳送不是手速——不進霧針移動閘量測
-		SelectedNeedle = NewNeedle;
-		StopPaintingLocal();
-		bDrawCursorRelatch = true; // 切到稿筆＝游標從當前 aim 命中點再生（機器檔不消化）
-		if (HasAuthority())
-		{
-			RepNeedle = NewNeedle;
-		}
-		else
-		{
-			ServerSetNeedle(NewNeedle);
-		}
-	};
 	if (bHasPendingDebugNeedle)
 	{
 		bHasPendingDebugNeedle = false;
-		SetNeedleLocal(PendingDebugNeedle);
+		ApplyNeedleSwitchLocal(PendingDebugNeedle);
 	}
-	const bool bScrollUp = PC->WasInputKeyJustPressed(EKeys::MouseScrollUp);
-	if (bScrollUp || PC->WasInputKeyJustPressed(EKeys::MouseScrollDown))
+	if (PC->WasInputKeyJustPressed(EKeys::Q))
 	{
 		constexpr int32 ToolCount = 3; // Stencil→Liner→Shader（EInkNeedle 值 2/0/1）
 		auto CycleOrder = [](EInkNeedle N) -> int32
@@ -2784,9 +2983,29 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		};
 		static constexpr EInkNeedle Order[ToolCount] =
 			{ EInkNeedle::Stencil, EInkNeedle::Liner, EInkNeedle::Shader };
-		const int32 Next = (CycleOrder(SelectedNeedle) + (bScrollUp ? ToolCount - 1 : 1)) % ToolCount;
-		SetNeedleLocal(Order[Next]);
+		const int32 Next = (CycleOrder(SelectedNeedle) + 1) % ToolCount;
+		ApplyNeedleSwitchLocal(Order[Next]);
 		NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+	}
+
+	// **滾輪＝稀釋度**（09-02 定案）：上滾更濃、下滾更稀，**鉗位不環繞**——強度軸
+	// 有兩端，從實一格跳回淡＝意外。方向與墨杯盤的列同構（上濃下淡）⇒ 高亮跟著
+	// 手指的方向動。濃度是 per-stroke 屬性 ⇒ 中筆劃改要重開筆劃（不重開＝要抬針
+	// 才變＝「按了沒反應」讀感；與換色走同一條）。
+	{
+		const int32 TierDelta =
+			(PC->WasInputKeyJustPressed(EKeys::MouseScrollUp) ? 1 : 0) -
+			(PC->WasInputKeyJustPressed(EKeys::MouseScrollDown) ? 1 : 0);
+		if (TierDelta != 0)
+		{
+			const int32 NewTier = FMath::Clamp(ShaderTierIdx + TierDelta, 0, 2);
+			if (NewTier != ShaderTierIdx)
+			{
+				ShaderTierIdx = NewTier;
+				StopPaintingLocal();
+				NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+			}
+		}
 	}
 
 	// 滑鼠＝臉指向或方向拉桿。巡航=液線針專屬（慢而穩=割線手法）；
@@ -3092,6 +3311,17 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 				(L > KINDA_SMALL_NUMBER) ? (Walked / L) : 1.0f));
 		}
 	}
+	// 筆尖皮膚速度 EMA（收筆淡出的輸入；τ≈2~3 tick 平掉幀噪）——量的是「這一 tick
+	// 筆尖真的走了多遠」，與 aim 角速度無關（貼近皮膚時同角速度的皮膚速度更小）
+	if (bHasLastPaintTip && DeltaSeconds > KINDA_SMALL_NUMBER)
+	{
+		const float InstCmS = static_cast<float>(FVector::Dist(TipNow, LastPaintTipWorld)) / DeltaSeconds;
+		MistTipSpeedCmS = FMath::Lerp(MistTipSpeedCmS, InstCmS, 0.35f);
+	}
+	else
+	{
+		MistTipSpeedCmS = 0.0f;
+	}
 	LastPaintTipWorld = TipNow;
 	bHasLastPaintTip = true;
 
@@ -3114,15 +3344,19 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 		PendingFlows.Reset();
 		PointFlushTimer = 0.0f;
 		++LocalStrokeSeq;
+		// 灰洗分檔（09-02）：per-stroke 濃度檔（預測與 server 走同一張表＝對消同構）
+		const uint8 EchoTierAlpha = (SelectedNeedle == EInkNeedle::Shader)
+			? ShaderTierAlphaFor(ShaderTierIdx) : 255;
 		if (bLocalEcho && Target->InkCanvas)
 		{
 			// 開筆預測：Stencil 強制紫與 server 端同式（稿不吃調色盤）
 			const FLinearColor EchoColor = (SelectedNeedle == EInkNeedle::Stencil)
 				? NiceInkStencil::Color() : FNiceInkPalette::Get(SelectedColorIndex);
 			Target->InkCanvas->BeginStroke(DrawSlotId, EchoColor, DotUVs[0],
-				/*bDotStroke=*/true, SelectedNeedle, FlowByte);
+				/*bDotStroke=*/true, SelectedNeedle, FlowByte, EchoTierAlpha);
 		}
-		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte, LocalStrokeSeq);
+		ServerPaintBegin(Target, SelectedColorIndex, DotUVs[0], SelectedNeedle, FlowByte, LocalStrokeSeq,
+			static_cast<uint8>(ShaderTierIdx));
 		DotUVs.RemoveAt(0);
 	}
 	// 筆劃保持開著（節拍未到/原地冪等/空扎都不是抬針）——抬針只由放開左鍵/
@@ -3190,9 +3424,17 @@ void ANiceInkCharacter::FlushPendingPoints()
 
 uint8 ANiceInkCharacter::ComputeMistFlowByte() const
 {
-	// 十六版填色制：流量恆滿——Shader=塗色工具，濃度屬於機器（塗均勻契約）。
-	// 手速→濃淡映射（十二版）退役；byte 資料鏈保留（存檔/RPC 格式不動）。
-	return 255;
+	// 收筆淡出（09-02）：流量隨手速衰減＝whip shading 的物理（墨量∝針的停留時間）。
+	// MistFadeStartCmS 以下＝十六版「流量恆滿」原樣（正常填色的均勻性不受影響）；
+	// 只有「甩」的速度才進淡出域 ⇒ 快甩＋放開＝自然淡尾。max 合成下淡掉的尾巴
+	// 可被慢掃補滿＝「多掃一趟保險」的直覺恆正確。
+	if (SelectedNeedle != EInkNeedle::Shader || MistTipSpeedCmS <= MistFadeStartCmS)
+	{
+		return 255;
+	}
+	const float T = FMath::Clamp((MistTipSpeedCmS - MistFadeStartCmS)
+		/ FMath::Max(MistFadeEndCmS - MistFadeStartCmS, 1.0f), 0.0f, 1.0f);
+	return static_cast<uint8>(FMath::RoundToInt(FMath::Lerp(1.0f, FMath::Clamp(MistFadeFloor, 0.0f, 1.0f), T) * 255.0f));
 }
 
 bool ANiceInkCharacter::ResolveCursorToTargetUV(APlayerController* PC, const FVector2D& ScreenPx, FVector2D& OutUV) const
@@ -6814,7 +7056,7 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 
 // --- 畫墨 RPC ---
 
-void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq)
+void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Target, int32 ColorIndex, FVector2D UV, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq, uint8 TierIdx)
 {
 	ANiceInkGameMode* GM = GetWorld() ? GetWorld()->GetAuthGameMode<ANiceInkGameMode>() : nullptr;
 	if (!GM || !Target || !GM->CanPaintOn(this, Target))
@@ -6834,10 +7076,13 @@ void ANiceInkCharacter::ServerPaintBegin_Implementation(ANiceInkCharacter* Targe
 	// 也塞不進彩色稿）
 	const FLinearColor InkColor = (Needle == EInkNeedle::Stencil)
 		? NiceInkStencil::Color() : FNiceInkPalette::Get(ColorIndex);
+	// 灰洗分檔（09-02）：索引→濃度走 server 端共用表（客戶端塞不進任意值）；
+	// 只有 Shader 消費，其餘針型恆實檔
+	const uint8 TierAlpha = (Needle == EInkNeedle::Shader) ? ShaderTierAlphaFor(TierIdx) : 255;
 	// P0-1：線上識別＝每回合洗牌的 slot——受害者端讀不到真作者；slot→真名只活在
 	// server（multicast 落地時由 ResolveDrawSlot 換回真名寫 server 畫布＝判定/存檔不變）
 	Target->MulticastPaintBegin(GM->GetOrAssignDrawSlot(this), InkColor, UV,
-		/*bDotStroke=*/true, Needle, Flow, StrokeSeq);
+		/*bDotStroke=*/true, Needle, Flow, StrokeSeq, TierAlpha);
 }
 
 void ANiceInkCharacter::ServerPaintPoints_Implementation(const TArray<FVector2D>& UVs, const TArray<uint8>& Flows)
@@ -6898,7 +7143,7 @@ void ANiceInkCharacter::ServerPaintEnd_Implementation()
 
 // --- 畫墨重播 ---
 
-void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq)
+void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLinearColor Color, FVector2D UV, bool bDotStroke, EInkNeedle Needle, uint8 Flow, int32 StrokeSeq, uint8 TierAlpha)
 {
 	// 本地預測對消（07-26）：StrokeSeq≠0＝作畫者客戶端已預畫整條筆劃——該端
 	// 跳過自己的 Begin/Points/End（半透明針重播=重複蓋章變深）。server 世界
@@ -6922,7 +7167,7 @@ void ANiceInkCharacter::MulticastPaintBegin_Implementation(int32 AuthorId, FLine
 	ReplaySkipAuthors.Remove(AuthorId);
 	if (InkCanvas)
 	{
-		InkCanvas->BeginStroke(ResolveCanvasAuthorKey(AuthorId), Color, UV, bDotStroke, Needle, Flow);
+		InkCanvas->BeginStroke(ResolveCanvasAuthorKey(AuthorId), Color, UV, bDotStroke, Needle, Flow, TierAlpha);
 	}
 }
 
