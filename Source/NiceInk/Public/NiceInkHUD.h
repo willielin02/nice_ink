@@ -62,6 +62,13 @@ protected:
 	UPROPERTY() TObjectPtr<UTexture2D> IconNose;
 	// runtime 生成的圓角方塊（SDF alpha＝抗鋸齒；canvas 三角形零 AA 的繞道）
 	UPROPERTY() TObjectPtr<UTexture2D> RoundedTex;
+	// runtime 生成的**暈衰減曲線**（64×1，alpha 走指數）。Canvas 的頂點顏色只能
+	// 線性插值，而線性衰減有一個看得出來的終點 ⇒ 讀成「一條有邊界的帶」而不是
+	// 「從線滲出去的光」（user：「太像一圈亮圈、一圈暗圈」）。把曲線放進貼圖，
+	// **三角形數量完全不變**就能得到任意非線性——這一點很重要，因為每幀成本已經
+	// 被 cruise tipSpd 那條契約抓過兩次。
+	// t=0（貼著主線）alpha=1 ⇒ 主線自己也用這張貼圖的 t=0，一張圖服務兩者。
+	UPROPERTY() TObjectPtr<UTexture2D> GlowTex;
 	void EnsureUiAssets();
 
 	// 臉像＝全 UI 身分載體（2026-08-06 SPEC #52 臉制定案：名字退出畫面）
@@ -151,6 +158,7 @@ protected:
 	// 寫成句子裡的一個英文詞玩家不會把它讀成「一顆可以按的鍵」。回傳寬度。
 	float DrawKeycap(float X, float Y, const FString& Key, bool bAccent = false);
 
+
 	// 常駐操作列（右緣縱列，鍵帽＋動詞，隨狀態增減）——形式照 Meccha 實物：
 	// 它是常駐的，但小、圖像化、貼邊；差別不在常駐與否，在句子 vs 鍵帽。
 	void DrawControlStrip(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
@@ -173,7 +181,8 @@ protected:
 	void DrawTrapDial(const class ANiceInkCharacter* MyChar);
 
 	void DrawBlindOverlay(const class ANiceInkCharacter* MyChar);
-	void DrawInkCrosshair(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS);
+	// MyPS 參數已於 09-03 移除：唯一的消費者是「湊近」提示，而那份已併進控制列
+	void DrawInkCrosshair(const class ANiceInkGameState* GS);
 	void DrawDebugPanel(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS, class ANiceInkCharacter* MyChar);
 
 	FString GetPhaseLabel(ENiceInkPhase Phase) const;

@@ -661,7 +661,6 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	PollShakeAttack(PC);
 	PollAccusation(PC);
 	PollLobby(PC);
-	PollPalette(PC);
 	PollLeanEnter(PC);
 	PollLockedDraw(PC, DeltaSeconds);
 	UpdateCinematicCamera(PC);
@@ -1425,33 +1424,17 @@ void ANiceInkCharacter::PollTrapDial(APlayerController* PC)
 	}
 }
 
-void ANiceInkCharacter::PollPalette(APlayerController* PC)
-{
-	static const FKey DigitKeys[10] = {
-		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
-		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine, EKeys::Zero
-	};
-
-	for (int32 Index = 0; Index < 10 && Index < FNiceInkPalette::Num(); ++Index)
-	{
-		if (PC->WasInputKeyJustPressed(DigitKeys[Index]))
-		{
-			if (SelectedColorIndex != Index)
-			{
-				SelectedColorIndex = Index;
-				// 中筆劃換色即時生效：顏色是 per-stroke 屬性（開筆時取樣）——
-				// 按住左鍵中換色若不重開筆劃，要抬針才變色=「按了沒反應」讀感
-				//（割線/打霧同一條路；與換針 StopPaintingLocal 同款處理）
-				StopPaintingLocal();
-			}
-			break;
-		}
-	}
-
-	// 濃度不在這裡（09-02 定案）：C 循環→C 面板→**墨杯盤**三代演化的終點是
-	// 「顏色×稀釋度＝一個物件」——滾輪直接調稀釋度（見 PollLockedDraw），
-	// 按住 RMB 的 10×3 杯盤一次選好兩者。數字鍵只管顏色＝老手快捷層原樣。
-}
+// `PollPalette`（數字鍵 1-0 直選顏色）**已於 2026-09-03 退役**（user 定案）。
+// 理由不是「多一顆鍵」，是**顏色↔數字是任意映射**：紅色是 1 還是 7 沒有任何道理，
+// 只能死背。它是一條「熟練度分級」通道——而這是派對遊戲，沒有人會玩到練成。
+// 對照組：滾輪→濃度**留著**，因為那是**自然映射**（有序手勢配有序軸，第一次滾就懂）。
+// 兩者的差別是「要不要背」，不是「快不快」。
+//
+// 它也是三個 bug 的來源：①站著時照樣生效，而 chip 只在鎖定時畫＝改了沒有任何回饋
+// ②拿稿筆時改了色，落墨仍是結晶紫，換筆時顏色才「突然」變＝延遲生效的假選擇
+// ③十色的順序（Crayola 官方序）是唯一需要被記住的理由，刪掉它就沒人需要記了。
+//
+// 選色的唯一入口＝按住 RMB 的墨杯盤（`PollInkTray`）。
 
 FString ANiceInkCharacter::DebugRoboLeanEnterFromEye(ANiceInkCharacter* Target, FVector AimPoint, bool bEnter)
 {
@@ -2738,26 +2721,52 @@ void ANiceInkCharacter::ApplyNeedleSwitchLocal(EInkNeedle NewNeedle)
 // 顏色×稀釋度合成單一物件「墨杯」；按住 RMB 呼出於螢幕中心、放開＝沾杯。
 // 全部理由與血價寫在 NiceInkCharacter.h 的 FNiInkTrayLayout 註解。
 
-FNiInkTrayLayout FNiInkTrayLayout::Compute(float ViewW, float ViewH)
+FNiInkTrayLayout FNiInkTrayLayout::Compute(float ViewW, float ViewH, EInkNeedle Needle)
 {
 	FNiInkTrayLayout L;
+	// **盤的形狀＝這支筆真正擁有的維度**（09-03；全文見標頭）。兩個軸各自問
+	// 「落墨真的會因為它而不同嗎」——答案寫在 BeginStroke，不在這裡猜。
+	L.bColorAxis = (Needle != EInkNeedle::Stencil);          // 稿筆恆結晶紫
+	L.bTierAxis = (Needle == EInkNeedle::Shader);            // 濃度只有打霧吃得到
+	// 欄數的真相是調色盤，不是常數——表的大小寫在兩個地方必有一邊會舊
+	//（此前 HUD 自己再 min 一次＝就是第二個地方；現在算在這裡，消費端直接讀）
+	L.NumCols = L.bColorAxis ? FMath::Min<int32>(MaxCols, FNiceInkPalette::Num()) : 1;
+	// **盤永遠只有一排**（09-03 二修，user 定案）。打霧筆此前是 10×3＝一個手勢同時
+	// 選顏色與濃度，代價有三：①**二維方向選擇會讓「往右換個顏色」順手改掉濃度**，
+	// 而濃度誤用是單向不可逆的（要 30% 卻下了 100% 救不回來；反過來再掃一趟就補滿）
+	// ②盤有三種形狀＝三套肌肉記憶，而方向選擇的全部價值就在「往那邊推就對了」
+	// ③濃度已經有滾輪（自然映射、不開盤也能調）⇒ 盤再做一次就是**兩條通道做同一
+	// 件事**，與同日砍掉數字鍵快捷是一模一樣的理由。
+	// 教學沒有因此變弱、反而更強：滾輪一滾**整排十個杯子一起變淡**＝因果直連的
+	// 動態示範，比三列並排的靜態展示更難誤解（見 PollInkTray 的盤內滾輪）。
+	L.NumRows = 1;
 	L.S = FMath::Max(ViewH / 1080.0f, 0.25f); // 與 HUD UiScale 同式（ClipY/1080）
 	L.Gap = 6.0f * L.S;
 	L.Pad = 18.0f * L.S;
 	L.Cell = FVector2D(46.0f, 46.0f) * L.S;
-	L.Gutter = 48.0f * L.S;      // 列標欄（"100%" 的寬度）
+	// 左側列標欄已隨「三列」一起退役（09-03 二修）：盤只有一排 ⇒ 沒有列要標，
+	// 當前濃度改到抬頭行（與筆名同一行＝「我手上是什麼」講在同一個地方）。
+	L.Gutter = 0.0f;
 	// 文字高度預算＝字級 × 1.4（FCanvasTextItem 的 Y＝**行框頂端**，字身比字級矮、
 	// 位置比字級低——用「高度＝字級」編版會目測起來貼在一起；截圖反推證實）
 	L.HeadRoom = 34.0f * L.S;    // 抬頭字（筆名）
-	L.FootRoom = 26.0f * L.S;    // 數字鍵標
+	L.FootRoom = 0.0f;           // 數字鍵標已隨 PollPalette 一起退役（09-03）
 	const FVector2D G = L.GridSize();
 	// **置中的是卡片不是格陣**（加了列標欄之後兩者不同心；置中格陣會讓整張卡歪一邊）。
 	// 卡片中心＝畫面中心＝針尖／眼睛已經在的地方；只在按住期間存在 ⇒ 蓋住畫布的
 	// 代價只付 0.3 秒。
-	L.CardSize = FVector2D(L.Gutter + G.X + 2.0f * L.Pad,
+	// **抬頭行的寬度預算**（09-03 二修）：卡片不能比抬頭那一行還窄。稿筆的格陣只有
+	// 一格（46px），而抬頭是「筆名＋Q 鍵帽＋動詞」——不留這個下限，字會整條戳出卡片。
+	// 版面算在這裡、文字卻在 HUD 量 ⇒ 這裡放保守常數，由 `HeadMinWidth()` 對外公開，
+	// HUD 端量到真的超出就是閘門該抓的事（**兩邊各算一份必有一邊會舊**，所以只有
+	// 這一個來源）。
+	const float ContentW = FMath::Max(L.Gutter + G.X, HeadMinWidth() * L.S);
+	L.CardSize = FVector2D(ContentW + 2.0f * L.Pad,
 		L.HeadRoom + G.Y + L.FootRoom + 2.0f * L.Pad);
 	L.CardPos = FVector2D((ViewW - L.CardSize.X) * 0.5f, (ViewH - L.CardSize.Y) * 0.5f);
-	L.Origin = FVector2D(L.CardPos.X + L.Pad + L.Gutter, L.CardPos.Y + L.Pad + L.HeadRoom);
+	// 格陣**在卡片內水平置中**：卡片有了最小寬度之後，靠左貼齊會讓一格的盤歪在左邊
+	L.Origin = FVector2D(L.CardPos.X + (L.CardSize.X - G.X) * 0.5f,
+		L.CardPos.Y + L.Pad + L.HeadRoom);
 	return L;
 }
 
@@ -2771,8 +2780,8 @@ const TCHAR* FNiInkTrayLayout::TierLabel(int32 Row)
 
 FVector2D FNiInkTrayLayout::GridSize() const
 {
-	return FVector2D(Cols * Cell.X + (Cols - 1) * Gap,
-		Rows * Cell.Y + (Rows - 1) * Gap);
+	return FVector2D(NumCols * Cell.X + (NumCols - 1) * Gap,
+		NumRows * Cell.Y + (NumRows - 1) * Gap);
 }
 
 FVector2D FNiInkTrayLayout::CellPos(int32 Col, int32 Row) const
@@ -2795,8 +2804,8 @@ void FNiInkTrayLayout::SnapCell(const FVector2D& P, int32& OutCol, int32& OutRow
 	const FVector2D Q = ClampToGrid(P);
 	const float StepX = Cell.X + Gap;
 	const float StepY = Cell.Y + Gap;
-	OutCol = FMath::Clamp(FMath::RoundToInt((Q.X - Origin.X - Cell.X * 0.5f) / StepX), 0, Cols - 1);
-	OutRow = FMath::Clamp(FMath::RoundToInt((Q.Y - Origin.Y - Cell.Y * 0.5f) / StepY), 0, Rows - 1);
+	OutCol = FMath::Clamp(FMath::RoundToInt((Q.X - Origin.X - Cell.X * 0.5f) / StepX), 0, NumCols - 1);
+	OutRow = FMath::Clamp(FMath::RoundToInt((Q.Y - Origin.Y - Cell.Y * 0.5f) / StepY), 0, NumRows - 1);
 }
 
 void ANiceInkCharacter::OpenInkTray(APlayerController* PC)
@@ -2817,9 +2826,11 @@ void ANiceInkCharacter::OpenInkTray(APlayerController* PC)
 		bPenTriggerLocal = false;
 		ServerSetPenTrigger(false);
 	}
-	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH);
-	const int32 Col = FMath::Clamp(SelectedColorIndex, 0, FNiInkTrayLayout::Cols - 1);
-	const int32 Row = FNiInkTrayLayout::RowFromTier(ShaderTierIdx);
+	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH, SelectedNeedle);
+	// 出生格＝「當前這一杯」在**這支筆的盤上**的位置；顏色軸不存在就落在唯一那一格。
+	// 列恆 0（盤只有一排，09-03 二修）。
+	const int32 Col = L.bColorAxis ? FMath::Clamp(SelectedColorIndex, 0, L.NumCols - 1) : 0;
+	const int32 Row = 0;
 	// 游標出生在「當前這一杯」的格心 ⇒ 輕點一下 RMB＝沾回同一杯＝零副作用
 	//（hold-to-pick 的標準安全語義；出生在盤心會讓誤觸變成換色）
 	InkTrayCursor = L.CellPos(Col, Row) + L.Cell * 0.5f;
@@ -2872,7 +2883,7 @@ void ANiceInkCharacter::PollInkTray(APlayerController* PC, float DeltaSeconds, b
 	// 增益走螢幕空間（像素/單位）而非瞄準的角度域——UI 游標與瞄準是不同單位的東西。
 	const float UiScale = FMath::Max(VH / 1080.0f, 0.25f); // 與 FNiInkTrayLayout::S 同式
 	const float PxPerCount = TrayCursorPixelsPerCount(PC, UiScale);
-	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH);
+	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(VW, VH, SelectedNeedle);
 	float MX = 0.0f, MY = 0.0f;
 	PC->GetInputMouseDelta(MX, MY);
 	// **累積位移鉗在盤內**（不是整個畫面）：貼邊會卡住，往回推立刻回來——
@@ -2880,9 +2891,31 @@ void ANiceInkCharacter::PollInkTray(APlayerController* PC, float DeltaSeconds, b
 	InkTrayCursor = L.ClampToGrid(FVector2D(
 		InkTrayCursor.X + MX * PxPerCount, InkTrayCursor.Y - MY * PxPerCount));
 
+	// **盤開著時滾輪照樣調濃度**（09-03 二修）：整排十個杯子會**一起變淡**——這是
+	// 「濃度是另一個獨立的軸」的動態示範，因果直連，比三列並排的靜態展示更難誤解，
+	// 而且它同時說出「這一排是同一個東西的十個顏色」。作用域與 PollLockedDraw 的
+	// 滾輪完全一致（打霧筆限定＋讓路給兇手轉盤）——**同一顆鍵在兩條路徑上必須是
+	// 同一件事**，否則「開著盤能滾、關著不能滾」會被讀成 bug。
+	// 不必 StopPaintingLocal：開盤那一刻已經收筆（OpenInkTray）。
+	if (L.bTierAxis && !bTrapDialActive)
+	{
+		const int32 TierDelta =
+			(PC->WasInputKeyJustPressed(EKeys::MouseScrollUp) ? 1 : 0) -
+			(PC->WasInputKeyJustPressed(EKeys::MouseScrollDown) ? 1 : 0);
+		if (TierDelta != 0)
+		{
+			const int32 NewTier = FMath::Clamp(ShaderTierIdx + TierDelta, 0, 2);
+			if (NewTier != ShaderTierIdx)
+			{
+				ShaderTierIdx = NewTier;
+				NiAudio::Play(this, ENiSound::UiClick, 0.5f);
+			}
+		}
+	}
+
 	if (bRmbDown)
 	{
-		return; // 還按著＝繼續挑（滾輪在盤內閒置＝位移與高亮永不分家）
+		return; // 還按著＝繼續挑
 	}
 
 	// 放開＝沾杯。**恆有一格**（SnapCell 鉗位＋取最近），所以沒有「取消」這個狀態
@@ -2890,15 +2923,15 @@ void ANiceInkCharacter::PollInkTray(APlayerController* PC, float DeltaSeconds, b
 	bInkTrayOpen = false;
 	int32 Col = INDEX_NONE, Row = INDEX_NONE;
 	L.SnapCell(InkTrayCursor, Col, Row);
-	// 欄數的真相是調色盤，不是格陣的 Cols——HUD 只畫 min(Cols, Num()) 欄；
-	// 未繪製的欄夾回最後一個真的有畫的欄（表的大小寫在兩個地方，必有一邊會舊）
-	const int32 NewColor = FMath::Min(Col, FNiceInkPalette::Num() - 1);
-	const int32 NewTier = FNiInkTrayLayout::TierFromRow(Row);
-	if (NewColor != SelectedColorIndex || NewTier != ShaderTierIdx)
+	// **盤只決定顏色**（09-03 二修）：濃度整條歸滾輪，盤放開時永不寫 ShaderTierIdx。
+	// 稿筆＝連顏色都沒有（恆結晶紫）⇒ 盤是唯讀的「這支筆只有一種墨」，放開什麼都不改。
+	// 欄數的真相是調色盤（`NumCols` 已在 Compute 夾過），這裡再夾一次是防呆不是邏輯。
+	const int32 NewColor = L.bColorAxis
+		? FMath::Clamp(Col, 0, FNiceInkPalette::Num() - 1) : SelectedColorIndex;
+	if (NewColor != SelectedColorIndex)
 	{
 		SelectedColorIndex = NewColor;
-		ShaderTierIdx = NewTier;
-		StopPaintingLocal(); // 色與濃度都是 per-stroke 屬性（與數字鍵同語義）
+		StopPaintingLocal(); // 顏色是 per-stroke 屬性（開筆時取樣）
 	}
 	NiAudio::Play(this, ENiSound::UiClick, 0.5f);
 }
@@ -2992,6 +3025,17 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 有兩端，從實一格跳回淡＝意外。方向與墨杯盤的列同構（上濃下淡）⇒ 高亮跟著
 	// 手指的方向動。濃度是 per-stroke 屬性 ⇒ 中筆劃改要重開筆劃（不重開＝要抬針
 	// 才變＝「按了沒反應」讀感；與換色走同一條）。
+	//
+	// **兩道作用域閘（09-03）**：
+	// ①`bTrapDialActive`——兇手轉盤同樣讀滾輪（PollTrapDial），而它明文寫著
+	//   「兇手很可能正 lean-lock 作畫」。`WasInputKeyJustPressed` **不消耗事件**
+	//   ⇒ 兩處都收到 ⇒ 滾一格＝陷阱角度與稀釋度**同時**被轉（誰都沒察覺的雙寫）。
+	//   轉盤只活 5 秒且只有兇手有，讓路的是稀釋度。
+	// ②`SelectedNeedle == Shader`——濃度只有打霧筆吃得到（見 BeginStroke：
+	//   `(Needle == Shader) ? ShaderTierAlphaFor(...) : 255`）。此前拿稿筆／割線筆
+	//   滾輪照樣改值、chip 照樣跳百分比，**而落墨完全不變**＝最壞的一種「按了沒反應」
+	//   （有回饋、回饋是假的）。軸不存在的時候，它的輸入也不該存在。
+	if (!bTrapDialActive && SelectedNeedle == EInkNeedle::Shader)
 	{
 		const int32 TierDelta =
 			(PC->WasInputKeyJustPressed(EKeys::MouseScrollUp) ? 1 : 0) -

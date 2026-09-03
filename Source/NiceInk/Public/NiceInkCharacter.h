@@ -51,8 +51,25 @@ struct FReferenceSkeleton;
 // 版面＝HUD 繪製與角色命中測試**共用同一份計算**（版面寫兩份必有一邊會舊）。
 struct FNiInkTrayLayout
 {
-	static constexpr int32 Cols = 10;  // 顏色（序＝數字鍵 1..9,0）
-	static constexpr int32 Rows = 3;   // 稀釋度（列 0=實、1=中、2=淡）
+	// **盤的形狀＝當前這支筆真正擁有的維度**（2026-09-03 user 定案）。真相一直
+	// 寫在 `BeginStroke` 裡：稿筆恆結晶紫、濃度只有打霧筆吃得到
+	//（`(Needle == Shader) ? ShaderTierAlphaFor(...) : 255`）——而舊版**永遠畫
+	// 10×3**：拿稿筆時 29 格是假的（選了，落墨仍是紫，換筆時顏色才「突然」變
+	// ＝延遲生效的假選擇，比「按了沒反應」更糟）、拿割線筆時 20 格是重複的。
+	// **修法不是加提示說明哪些無效，是讓無效的格子不存在**——盤的形狀本身就在
+	// 教「這支筆有幾個軸」，零文字、一眼看完。（繪圖軟體的工具選項列隨工具變形
+	// 是同一個道理；那是這個領域的標準做法，不是我們的發明。）
+	static constexpr int32 MaxCols = 10;  // 顏色欄上限（＝調色盤大小）
+	static constexpr int32 MaxRows = 3;   // 稀釋度列上限（列 0=實、1=中、2=淡）
+	// `Rows` 留給 TierFromRow/RowFromTier：那兩個是**濃度軸本身**的檔位定義
+	//（永遠 3 檔），與「這支筆的盤畫幾列」無關——割線筆的盤只有一列，但它的
+	// ShaderTierIdx 仍是 3 檔裡的某一檔（換回打霧筆時原樣還在）。
+	static constexpr int32 Rows = MaxRows;
+
+	int32 NumCols = MaxCols;   // 這支筆真正可選的欄數（稿筆＝1）
+	int32 NumRows = MaxRows;   // 這支筆真正可選的列數（稿筆／割線＝1）
+	bool bColorAxis = true;    // 顏色軸存在嗎（稿筆＝false，恆結晶紫）
+	bool bTierAxis = true;     // 濃度軸存在嗎（只有打霧＝true）
 
 	float S = 1.0f;               // UI 縮放（=ViewH/1080，與 HUD UiScale 同式）
 	FVector2D Origin = FVector2D::ZeroVector;  // 格陣左上（不含卡片留白與列標欄）
@@ -65,7 +82,9 @@ struct FNiInkTrayLayout
 	FVector2D CardPos = FVector2D::ZeroVector;   // 底卡（HUD 直接畫這個，不自己再算）
 	FVector2D CardSize = FVector2D::ZeroVector;
 
-	static FNiInkTrayLayout Compute(float ViewW, float ViewH);
+	// 版面隨筆而變 ⇒ **命中測試與繪製都必須傳同一支筆**（版面算兩份必有一邊會舊，
+	// 這是這個結構存在的初衷；現在多了一個「筆」也要一起同源）
+	static FNiInkTrayLayout Compute(float ViewW, float ViewH, EInkNeedle Needle);
 	FVector2D GridSize() const;
 	FVector2D CellPos(int32 Col, int32 Row) const;
 	// **方向選擇（2026-09-02 user 定案）**：位移先鉗在盤內，再取最近的格＝
@@ -75,7 +94,11 @@ struct FNiInkTrayLayout
 
 	// 盤內鉗位（累積位移的可行域＝格陣矩形；貼邊會「卡住」，往回推立刻回來）
 	FVector2D ClampToGrid(const FVector2D& P) const;
-	static const TCHAR* TierLabel(int32 Row);  // 列標（100%/60%/30%）
+	static const TCHAR* TierLabel(int32 Row);  // 檔位標籤（100%/60%/30%）
+	// 抬頭行（筆名＋鍵帽＋動詞＋濃度）的寬度下限，未乘 UI 縮放。卡片不得比它窄——
+	// 稿筆的格陣只有一格，沒有這個下限抬頭字會戳出卡片。**單一來源**：版面用它算
+	// 卡片寬，離線閘門用它驗抬頭行放得下（兩邊各寫一份必有一邊會舊）。
+	static constexpr float HeadMinWidth() { return 240.0f; }
 
 	// 列 ↔ 檔位索引（ShaderTierAlphaFor 的 0=淡/1=中/2=實）：上濃下淡
 	//（滾輪上＝更濃＝往上走，兩者同構＝高亮跟著手指的方向動）
@@ -193,6 +216,14 @@ public:
 	}
 
 	bool IsDrawTipReachable() const { return bDrawTipReachable; }
+
+	// HUD 指示器的實體半徑 cm＝**這支筆真正的落墨半徑**（打霧＝圓章半徑、
+	// 稿筆／割線＝筆寬的一半）。指示器的大小因此就是筆寬本身，換筆時圈跟著變。
+	float GetNeedleRadiusCmForHud() const
+	{
+		return SelectedNeedle == EInkNeedle::Shader
+			? ShaderBrushRadiusCm : TattooNibDiameterCm * 0.5f;
+	}
 
 	// 搆不到已持續秒數（有目標但筆搆不著才累積；看向房間不算）——HUD 提示閘
 	float GetDrawUnreachableSeconds() const { return DrawUnreachSecs; }
@@ -1284,7 +1315,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboNeedle(int32 NeedleIndex);
 
-	// robo：直設調色盤選色（robo 無法注入數字鍵；走與 PollPalette 同一條
+	// robo：直設調色盤選色（robo 無法操作墨杯盤；走與 `PollInkTray` 沾杯同一條
 	// per-stroke 語義=換色即重開筆劃）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboColor(int32 ColorIndex);
@@ -1896,7 +1927,7 @@ private:
 	void PollLook(APlayerController* PC, float DeltaSeconds);
 	void PollMove(APlayerController* PC);
 	void PollTrapDial(APlayerController* PC);
-	void PollPalette(APlayerController* PC);
+	// `PollPalette`（數字鍵 1-0 選色）已退役 2026-09-03——理由見 .cpp 的同名註解。
 	// 墨杯盤（09-02）：開盤（游標歸當前杯）＋盤內輸入（游標移動、放開＝沾杯）
 	void OpenInkTray(APlayerController* PC);
 	void PollInkTray(APlayerController* PC, float DeltaSeconds, bool bRmbDown);

@@ -85,9 +85,12 @@ enum class ENiLocKey : uint8
 	ActNeedle,
 	ActShake,
 	ActStand,
+	// 站著時的「湊近」＝**動詞**（09-03 改：此前是整句 "RMB — lean in" 畫在螢幕
+	// 正中央下方，而 F/G 已經是右緣的鍵帽列 ⇒ 同一種東西兩種形式、兩個位置。
+	// 併進控制列後它與 F/G 同形式，位置也只剩一個。enum 位置不動＝表列不必重排。）
+	ActLeanIn,
 	// 作畫相位其餘常駐句（09-02 二補：由 Tools/UiCheck/hud_loc_lint.py 抓出來的，
 	// 我自己走查時漏了——這正是閘門存在的理由）
-	HudLeanIn,            // 站在受害者旁：RMB 湊近入鎖
 	HudFeignSleep,        // 受害者裝睡中
 	HudEyesOpen,          // 受害者無聲甦醒中
 	COUNT

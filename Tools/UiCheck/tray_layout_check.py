@@ -4,31 +4,57 @@ FNiInkTrayLayout::Compute 與 HUD 繪製常數的 1:1 重現。
 09-02 二修：①文字高度預算改 字級×1.4（FCanvasTextItem 的 Y＝行框頂端，
 字身比字級矮、位置比字級低——一版用 1.0 讓目測貼在一起的版面照樣過關）
 ②加入列標欄（Gutter）與雙色地的契約。"""
-COLS, ROWS = 10, 3
+import io as _io, os as _os, re as _re
+
+# 專案根（允許 NI_SRC_ROOT 覆蓋＝負向測試可以指著一份被弄壞的複本跑）
+ROOT = _os.environ.get("NI_SRC_ROOT",
+                       _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..")))
+def _src(rel):
+    return _io.open(_os.path.join(ROOT, rel), encoding="utf-8").read()
+
+MAX_COLS, MAX_ROWS = 10, 3
+# **盤的形狀＝這支筆真正擁有的維度**（2026-09-03）。真相在 BeginStroke：稿筆恆
+# 結晶紫、濃度只有打霧筆吃得到（`(Needle==Shader) ? ShaderTierAlphaFor(...) : 255`）
+# ⇒ 盤只畫這支筆真的有的軸。**閘門必須跟著改**：不改的話它會繼續對一個已經不
+# 存在的 10×3 版面亮綠燈——「閘門必須能看見它要擋的那種失敗」（專案鐵則）。
+# (欄數, 有沒有濃度軸)。**列數恆 1**——09-03 二修：打霧筆此前是 10×3，改成一排。
+# 理由＝①二維方向選擇會讓「往右換個顏色」順手改掉濃度，而濃度誤用單向不可逆
+# ②盤有三種形狀＝三套肌肉記憶 ③濃度已經有滾輪（自然映射），盤再做一次＝兩條
+# 通道做同一件事（與同日砍掉數字鍵快捷是同一個理由）。
+NEEDLES = {"stencil": (1, False), "liner": (MAX_COLS, False), "shader": (MAX_COLS, True)}
 SMALL_PX = 12.0          # NiType::HudSmall
 def text_h(S): return SMALL_PX * 1.4 * S   # 行框高度預算（**必須跟著 S**——
     # 一版寫成未縮放的常數，於是只有 1080p 那一列是誠實的：契約自己也要被查
 
-def layout(vw, vh):
+HEAD_MIN_W = 240.0    # FNiInkTrayLayout::HeadMinWidth()（未乘縮放）
+
+def layout(vw, vh, needle="shader"):
+    cols, tier_axis = NEEDLES[needle]
+    rows = 1                     # **盤永遠只有一排**
     S = max(vh / 1080.0, 0.25)
     gap, pad, cell = 6.0 * S, 18.0 * S, 46.0 * S
-    gutter, head, foot = 48.0 * S, 34.0 * S, 26.0 * S
-    gw = COLS * cell + (COLS - 1) * gap
-    gh = ROWS * cell + (ROWS - 1) * gap
-    cw = gutter + gw + 2 * pad
+    # 左側列標欄隨「三列」一起退役（沒有列要標，當前濃度移到抬頭行）；
+    # foot（欄標＝數字鍵帽）已隨數字鍵快捷退役
+    gutter, head, foot = 0.0, 34.0 * S, 0.0
+    gw = cols * cell + (cols - 1) * gap
+    gh = rows * cell + (rows - 1) * gap
+    # 卡片不得比抬頭行窄——稿筆的格陣只有一格（46px），沒有下限抬頭字會戳出卡片
+    content_w = max(gutter + gw, HEAD_MIN_W * S)
+    cw = content_w + 2 * pad
     ch = head + gh + foot + 2 * pad
     cx, cy = (vw - cw) / 2.0, (vh - ch) / 2.0
     return dict(S=S, gap=gap, pad=pad, cell=cell, gutter=gutter, head=head, foot=foot,
                 gw=gw, gh=gh, cx=cx, cy=cy, cw=cw, ch=ch,
-                ox=cx + pad + gutter, oy=cy + pad + head)
+                cols=cols, rows=rows, tier_axis=tier_axis, color_axis=(cols > 1),
+                ox=cx + (cw - gw) / 2.0, oy=cy + pad + head)   # 格陣在卡片內置中
 
 def cell_pos(L, c, r):
     return (L['ox'] + c * (L['cell'] + L['gap']), L['oy'] + r * (L['cell'] + L['gap']))
 
 def clamp_to_grid(L, px, py):
     """累積位移的可行域＝格陣矩形（ClampToGrid）"""
-    gw = COLS * L['cell'] + (COLS - 1) * L['gap']
-    gh = ROWS * L['cell'] + (ROWS - 1) * L['gap']
+    gw = L['cols'] * L['cell'] + (L['cols'] - 1) * L['gap']
+    gh = L['rows'] * L['cell'] + (L['rows'] - 1) * L['gap']
     return (min(max(px, L['ox']), L['ox'] + gw), min(max(py, L['oy']), L['oy'] + gh))
 
 
@@ -38,10 +64,12 @@ def hit(L, px, py):
     sx, sy = L['cell'] + L['gap'], L['cell'] + L['gap']
     c = int(round((qx - L['ox'] - L['cell'] * 0.5) / sx))
     r = int(round((qy - L['oy'] - L['cell'] * 0.5) / sy))
-    return (min(max(c, 0), COLS - 1), min(max(r, 0), ROWS - 1))
+    return (min(max(c, 0), L['cols'] - 1), min(max(r, 0), L['rows'] - 1))
 
-def tier_from_row(r): return ROWS - 1 - r
-def row_from_tier(t): return ROWS - 1 - t
+# 檔位對應是**濃度軸本身**的定義（永遠 3 檔），與盤畫幾列無關——割線筆的盤只有
+# 一列，但它的 ShaderTierIdx 仍是 3 檔裡的某一檔（換回打霧筆時原樣還在）
+def tier_from_row(r): return MAX_ROWS - 1 - r
+def row_from_tier(t): return MAX_ROWS - 1 - t
 TIER_A = {2: 1.00, 1: 156 / 255.0, 0: 77 / 255.0}   # ShaderTierAlphaFor
 
 fails, checks = [], 0
@@ -51,9 +79,32 @@ def ck(name, ok, detail=""):
     if not ok:
         fails.append("FAIL %s  %s" % (name, detail))
 
-for vw, vh in [(1280, 720), (1600, 900), (1920, 1080), (2559, 1398), (2560, 1440), (3840, 2160)]:
-    L = layout(vw, vh)
-    S, tag = L['S'], "%dx%d" % (vw, vh)
+RES = [(1280, 720), (1600, 900), (1920, 1080), (2559, 1398), (2560, 1440), (3840, 2160)]
+for needle in ("stencil", "liner", "shader"):
+  for vw, vh in RES:
+    L = layout(vw, vh, needle)
+    S, tag = L['S'], "%s %dx%d" % (needle, vw, vh)
+    COLS, ROWS = L['cols'], L['rows']
+
+    # 盤形狀的正確性**不在這個迴圈裡驗**——拿 NEEDLES 跟自己比是同義反覆
+    # （第一版就是這麼寫的，負向測試把 stencil 改回 (10,3) 照樣 ALL PASS）。
+    # 真相住在 C++，對賬在檔尾的 c0a~c0j。
+    # 盤恆一排（二維方向選擇會讓換顏色順手改掉不可逆的濃度）
+    ck("c0b tray is always a single row " + tag, ROWS == 1, "rows=%d" % ROWS)
+    # 抬頭行必須放得進卡片。**內容隨筆而異**（估算跟著實作走，不是抄一個大數字）：
+    #   所有筆：筆名（中文 4 字）＋ Q 鍵帽 ＋ 動詞（2 字）
+    #   打霧另加：SCROLL 鍵帽 ＋ "100%"
+    head_need = 4 * SMALL_PX + (19 + 12) + 2 * SMALL_PX + 20      # 名＋Q＋動詞＋間距
+    if L['tier_axis']:
+        head_need += (6 * SMALL_PX * 0.62 + 12) + 4 * SMALL_PX * 0.62 + 16
+    head_need *= S
+    ck("c0b2 header row fits inside the card " + tag,
+       head_need <= L['cw'] - 2 * L['pad'] + 1.0,
+       "need=%.1f avail=%.1f" % (head_need, L['cw'] - 2 * L['pad']))
+    # 格陣在卡片內水平置中（卡片有最小寬度之後，靠左貼齊會讓一格的盤歪在左邊）
+    ck("c0b3 grid centred in the card " + tag,
+       abs((L['ox'] - L['cx']) - (L['cx'] + L['cw'] - (L['ox'] + L['gw']))) < 0.01,
+       "left=%.2f right=%.2f" % (L['ox'] - L['cx'], L['cx'] + L['cw'] - (L['ox'] + L['gw'])))
 
     ck("c1 card on-screen " + tag,
        L['cx'] >= 0 and L['cy'] >= 0 and L['cx'] + L['cw'] <= vw and L['cy'] + L['ch'] <= vh,
@@ -64,23 +115,11 @@ for vw, vh in [(1280, 720), (1600, 900), (1920, 1080), (2559, 1398), (2560, 1440
     ck("c2 header clear of row0 " + tag, h0 + text_h(S) <= L['oy'] and h0 >= L['cy'],
        "head=%.1f..%.1f row0=%.1f" % (h0, h0 + text_h(S), L['oy']))
 
-    # c3 欄標（數字鍵）在末列之下、且在卡內
-    lx, ly = cell_pos(L, 0, ROWS - 1)
-    lab0 = ly + L['cell'] + 4.0 * S
-    ck("c3 col labels inside card " + tag, lab0 >= ly + L['cell'] and lab0 + text_h(S) <= L['cy'] + L['ch'],
-       "lab=%.1f..%.1f card_bot=%.1f" % (lab0, lab0 + text_h(S), L['cy'] + L['ch']))
+    # c3（欄標＝數字鍵帽在末列之下）**已刪除**：數字鍵快捷與那排鍵帽都在 09-03
+    # 退役了。留著一條測不存在元素的契約＝它永遠亮綠燈，而綠燈什麼都不保證。
 
-    # c4 列標（100%/60%/30%）完全落在左側 gutter 內、不壓格子也不出卡
-    lbl_w = 4 * SMALL_PX * 0.62 * S      # "100%" 四字元的保守寬度
-    for r in range(ROWS):
-        rx, ry = cell_pos(L, 0, r)
-        right = rx - 10.0 * S            # 右對齊錨點
-        ck("c4 row label in gutter r%d %s" % (r, tag),
-           right - lbl_w >= L['cx'] + L['pad'] * 0.25 and right <= rx,
-           "lbl=%.1f..%.1f gutter=[%.1f,%.1f]" % (right - lbl_w, right, L['cx'], rx))
-        ck("c5 row label vcentred r%d %s" % (r, tag),
-           ry <= ry + L['cell'] * 0.5 - 8.0 * S and
-           ry + L['cell'] * 0.5 - 8.0 * S + text_h(S) <= ry + L['cell'])
+    # c4/c5（左側列標在 gutter 內）**已刪除**：列標隨「三列」一起退役，當前濃度
+    # 移到抬頭行右端。抬頭行放不放得下由 c0b2 管。
 
     # c6/c7 命中無死區
     ok = all(hit(L, cell_pos(L, c, r)[0] + L['cell'] + L['gap'] * 0.5,
@@ -92,26 +131,29 @@ for vw, vh in [(1280, 720), (1600, 900), (1920, 1080), (2559, 1398), (2560, 1440
              for r in range(ROWS - 1))
     ck("c7 gap midpoint snaps to a neighbour " + tag, ok)
 
-    # c8 輕點 RMB 必沾回同一杯
+    # c8 輕點 RMB 必沾回同一杯（退化盤上＝唯一那格，同樣必須自己回自己）
+    #    ——注意「杯」現在只含顏色：濃度整條歸滾輪，盤放開時不寫 ShaderTierIdx
     ok = True
     for c in range(COLS):
-        for t in range(ROWS):
-            r = row_from_tier(t)
+        for r in range(ROWS):
             x, y = cell_pos(L, c, r)
             got = hit(L, x + L['cell'] * 0.5, y + L['cell'] * 0.5)
-            if got != (c, r) or tier_from_row(got[1]) != t:
+            if got != (c, r):
                 ok = False
     ck("c8 tap-RMB round-trip (no move = same cup) " + tag, ok)
 
     # c9 方向選擇的構造保證：**任何位移都落在某一格**，四個角落夾到四個角格。
     #（舊契約是「盤外＝取消」——那是有游標時代的語義，已隨游標一起退役。）
+    #  退化盤上四個角全部夾到同一格＝仍然「永遠有解」，這正是要保住的性質。
     corners = {(2, 2): (0, 0), (vw - 2, 2): (COLS - 1, 0),
                (2, vh - 2): (0, ROWS - 1), (vw - 2, vh - 2): (COLS - 1, ROWS - 1)}
     ck("c9 every input snaps to a cell " + tag,
        all(hit(L, px, py) == want for (px, py), want in corners.items()),
        str({k: hit(L, *k) for k in corners}))
 
-    # c10/c11 cluster
+# c10/c11 cluster（與筆無關 ⇒ 只跑一輪，不隨三支筆重複計數）
+for vw, vh in RES:
+    S, tag = max(vh / 1080.0, 0.25), "%dx%d" % (vw, vh)
     cell_c, gap_c = 18.0 * S, 3.0 * S
     colh = 3 * cell_c + 2 * gap_c
     col_y = (vh - 104.0 * S) + 20.0 * S - colh
@@ -122,8 +164,11 @@ for vw, vh in [(1280, 720), (1600, 900), (1920, 1080), (2559, 1398), (2560, 1440
     ck("c11 cluster above hint " + tag, col_y + colh <= vh - 46.0 * S)
 
 # c12 列↔檔位互為反函式（上濃下淡）
-ck("c12 row/tier inverse", all(row_from_tier(tier_from_row(r)) == r for r in range(ROWS))
-   and tier_from_row(0) == 2 and tier_from_row(ROWS - 1) == 0)
+# 用 MAX_ROWS：檔位對應是濃度軸本身的定義，不是「某支筆的盤畫幾列」
+# （此前這裡讀的是上面迴圈漏出來的 COLS/ROWS＝依賴「最後一輪剛好是 shader」＝
+#  偶然正確；把偶然寫成契約，下次改迴圈順序就會靜靜地測錯東西）
+ck("c12 row/tier inverse", all(row_from_tier(tier_from_row(r)) == r for r in range(MAX_ROWS))
+   and tier_from_row(0) == 2 and tier_from_row(MAX_ROWS - 1) == 0)
 
 # c13/c14 **地的對比有工作區間**（09-02 三修）。一版的閘門只有下限
 #（「半透明必須看得到格子」），所以「地深到格子壓過顏色」照樣亮綠燈——
@@ -232,19 +277,190 @@ def accumulate(L, start, deltas, do_clamp=True):
     return p
 
 for vw, vh in [(1280, 720), (1920, 1080), (2559, 1398)]:
-    L = layout(vw, vh)
+    L = layout(vw, vh, "shader")   # 推過頭再回一格＝只有完整盤上量得到的性質
     step = L['cell'] + L['gap']
     start = (cell_pos(L, 0, 0)[0] + L['cell'] * 0.5, cell_pos(L, 0, 0)[1] + L['cell'] * 0.5)
     # 往右狠推 20 格，再往回一格
     p = accumulate(L, start, [(step * 20, 0), (-step, 0)])
     got = hit(L, *p)
     ck("c26 overshoot then one step back " + ("%dx%d" % (vw, vh)),
-       got == (COLS - 2, 0), "landed on %s (want col %d)" % (str(got), COLS - 2))
-    # 往上狠推再回一格（列同理）
+       got == (L['cols'] - 2, 0), "landed on %s (want col %d)" % (str(got), L['cols'] - 2))
+    # 往上狠推再回一格：**單排盤上垂直無處可去**，鉗位後仍是同一格＝正確行為。
+    # （這條保留是為了驗 ClampToGrid 在 Y 上也真的有鉗——沒鉗的話累積位移會飛走，
+    #   回程要走一樣的距離才回得來＝「對不準」的來源。）
     p = accumulate(L, start, [(0, -step * 20), (0, step)])
     got = hit(L, *p)
-    ck("c26 overshoot vertical " + ("%dx%d" % (vw, vh)), got == (0, 1),
+    ck("c26 vertical overshoot stays clamped " + ("%dx%d" % (vw, vh)), got == (0, 0),
        "landed on %s" % str(got))
+    ck("c26b vertical clamp actually bites " + ("%dx%d" % (vw, vh)),
+       abs(accumulate(L, start, [(0, -step * 20)])[1] - L['oy']) < 0.01,
+       "y=%.2f oy=%.2f" % (accumulate(L, start, [(0, -step * 20)])[1], L['oy']))
+
+# ---------------------------------------------------------------------------
+# c0a~c0f **與 C++ 對賬**：盤的形狀是從 `EInkNeedle` 推出來的，而那個推導的真相
+# 住在 NiceInkCharacter.cpp。閘門若只是把結論抄一份到 python 再跟自己核對，就是
+# 同義反覆——本檔第一版正是如此：負向測試（把 stencil 改回 10×3）照樣 ALL PASS。
+# 這裡改成**從原始碼把那幾行抽出來**，所以「改了 C++ 沒改閘門」或反過來都會失敗。
+CH = _src("Source/NiceInk/Private/NiceInkCharacter.cpp")
+HD = _src("Source/NiceInk/Private/NiceInkHUD.cpp")
+
+m = _re.search(r"L\.bColorAxis\s*=\s*\(Needle\s*!=\s*EInkNeedle::(\w+)\)", CH)
+ck("c0a colour axis: only Stencil lacks it (from C++)", bool(m) and m.group(1) == "Stencil",
+   "matched=%s" % (m.group(0) if m else "<none>"))
+
+m = _re.search(r"L\.bTierAxis\s*=\s*\(Needle\s*==\s*EInkNeedle::(\w+)\)", CH)
+ck("c0b2 tier axis: only Shader has it (from C++)", bool(m) and m.group(1) == "Shader",
+   "matched=%s" % (m.group(0) if m else "<none>"))
+
+# 欄數／列數的式子：軸不存在 ⇒ 退化成 1
+ck("c0c NumCols degenerates to 1 without the colour axis",
+   bool(_re.search(r"L\.NumCols\s*=\s*L\.bColorAxis[\s\S]{0,120}?:\s*1;", CH)))
+ck("c0d NumRows is always 1 (single-row tray)",
+   bool(_re.search(r"L\.NumRows\s*=\s*1;", CH)))
+
+# 盤放開時**不寫** ShaderTierIdx——濃度整條歸滾輪。這條擋的是「盤又長回第二個維度」。
+_pick = CH[CH.index("bInkTrayOpen = false;\n\tint32 Col"):]
+_pick = _pick[:_pick.index("NiAudio::Play")]
+# **剝掉註解再檢查**：第一版直接搜字串，結果抓到的是這段自己的說明文字
+# （「盤放開時永不寫 ShaderTierIdx」）——閘門讀到的是散文不是程式碼。
+_pick_code = "\n".join(l.split("//")[0] for l in _pick.split("\n"))
+ck("c0k the tray writes colour only, never the tier",
+   "ShaderTierIdx" not in _pick_code, "沾杯段出現了 ShaderTierIdx ⇒ 濃度又回到盤上了")
+
+# 盤開著時滾輪要能調濃度（整排一起變淡＝這一版的教學機制本身）
+ck("c0l scroll works while the tray is open (same scope as outside)",
+   bool(_re.search(r"if\s*\(L\.bTierAxis\s*&&\s*!bTrapDialActive\)", CH)))
+
+# c0n~c0t **針尖指示器**（09-03 六版終案：實體環帶 ＋ 內暗外亮雙向暈）。
+# 這一批 user 連打回六次、全是外觀，而外觀我自驗不了 ⇒ **能寫成契約的部分一定要
+# 寫滿**，剩下的才交給 viewport。
+# 切片錨點**不可以是某條契約要驗的字串**——否則破壞那條契約會讓這裡拋 ValueError、
+# 整支腳本崩潰，而**崩潰不產生 FAIL 訊號**（負向測試因此看起來「沒開火」＝空洞契約
+# 的另一種形式；09-03 六版負向測試當場抓到）。錨點取 RadiusCm 那行、外加 try 保護：
+# 找不到就讓 _ring 為空 ⇒ 依賴它的契約**失敗**而不是消失。
+try:
+    _ring = HD[HD.index("const float RadiusCm = MyChar->GetNeedleRadiusCmForHud();"):]
+    _ring = _ring[:_ring.index("// 巡航導引")]
+except ValueError:
+    _ring = ""
+_ring_code = chr(10).join(l.split("//")[0] for l in _ring.split(chr(10)))
+
+# c0n **不准再用線段拼圓**。DrawLine 有兩個各自獨立的斷法：平頭端點在轉角留楔形
+# 缺口；sub-pixel 寬度在無抗鋸齒的光柵化下整段被跳過（user：「為什麼會斷斷續續」）。
+# 環帶是實體填充、相鄰段共用頂點 ⇒ 接縫在數學上不存在。
+ck("c0n the ring is a solid triangle band, not stitched line segments",
+   ("FCanvasTriangleItem RingItem(Tris," in _ring_code
+    and "SE_BLEND_Translucent" in _ring_code
+    and "DrawLine(" not in _ring_code),
+   "圈又用 DrawLine 拼了 ⇒ 會回到斷斷續續")
+
+# c0o **主線帶顏色資訊**（當前這杯墨；稿筆恆結晶紫）
+ck("c0o the main line carries the current ink colour",
+   ("CrosshairColor" in _ring_code and "NiceInkStencil::Color()" in _ring_code),
+   "主線不再是當前墨色 ⇒ 顏色資訊沒了")
+
+# c0p **雙向暈：內暗外亮**。這是「自己製造背景」那一類手段——不需要知道底色。
+# 四種情況全涵蓋（底亮／底暗／墨與底同暗／墨與底同亮），最差是中灰底、兩側各有
+# 約 0.5 的亮度差＝不讀畫面所能達到的下界。
+ck("c0p the ring has a dark inner glow and a light outer glow",
+   ("GlowDark" in _ring_code and "GlowLight" in _ring_code
+    and "NiHudColor::Ink.CopyWithNewOpacity" in _ring_code
+    and "NiHudColor::Paper.CopyWithNewOpacity" in _ring_code),
+   "雙向暈少了一側 ⇒ 某一類底色上會整個消失")
+
+# c0q 暈必須是**漸層**（外緣 alpha=0）——不然是三條並排的線，不是一條帶柔邊的線
+# c0q **衰減曲線由貼圖驅動，不是頂點的線性插值**（09-03 六版三修，user：「暈感
+# 不夠重，太像一圈亮圈、一圈暗圈」）。Canvas 的頂點顏色只能線性插值，而線性衰減
+# 有一個看得出來的終點 ⇒ 讀成「一條有邊界的帶」而不是「從線滲出去的光」。
+# 把曲線放進 64×1 的貼圖（alpha 走 e^-3t、扣尾正規化到 0）⇒ **三角形數量不變**
+# 就能得到任意非線性，而每幀成本已經被 cruise tipSpd 抓過兩次，這一點是硬條件。
+ck("c0q the falloff curve lives in a texture, not in vertex lerp",
+   ("GlowTex" in _ring_code and "FMath::Exp(-K * T)" in HD
+    and "GlowDark, GlowDark, 1.0f, 0.0f" in _ring_code
+    and "GlowLight, GlowLight, 0.0f, 1.0f" in _ring_code),
+   "暈又回到頂點線性插值 ⇒ 邊緣會出現看得見的終點")
+
+# c0x 暈的峰值要對得起「總視覺重量」：user 要的是把線性版 0.55 降到 0.275
+#（平均覆蓋 0.1375），而指數曲線平均覆蓋只有 0.281 ⇒ 峰值 0.489 才是同樣的重量。
+# **換了衰減曲線就必須重算峰值**，照抄舊數字會讓暈整個消失（0.275×0.281=0.077）。
+# 兩側都要驗：只驗「有 0.49」的話，破壞其中一個顏色照樣亮綠燈（負向測試抓到）。
+ck("c0x the glow peak is recomputed for the exponential curve",
+   ("NiHudColor::Ink.CopyWithNewOpacity(0.49f)" in _ring_code
+    and "NiHudColor::Paper.CopyWithNewOpacity(0.49f)" in _ring_code),
+   "峰值沒有跟著曲線重算 ⇒ 暈的總重量會偏掉一倍")
+
+# c0r 主線維持細（1.5px）。三版曾把圈加粗一倍（user：「好醜」）。
+ck("c0r the main line stays thin", "const float LW = 1.5f * UiScale;" in HD)
+
+# c0s 圈內沒有填色（濃度回歸 chip）
+ck("c0s the ring has no tier fill",
+   ("FCanvasNGonItem" not in HD and "K2_DrawPolygon(nullptr, Aim," not in HD))
+
+# c0t 三支筆共用一個指示器，半徑＝真實落墨半徑
+_hh = _src("Source/NiceInk/Public/NiceInkCharacter.h")
+ck("c0t all three pens share one indicator, sized by the real nib radius",
+   ("GetNeedleRadiusCmForHud()" in HD and "DrawRect(DotCol," not in HD
+    and "if (bShaderNeedle && bReach)" not in HD
+    and "ShaderBrushRadiusCm" in _hh and "TattooNibDiameterCm * 0.5f" in _hh))
+
+# c0u **段數隨半徑**（09-03 五版血價）：`cruise tipSpd` 契約 1.50~2.00、基線 1.99
+# ＝只有 0.5% 餘裕；我對 4~5px 的小圈也畫 28 段把它推到 2.02（兩輪穩定重現、
+# stash 驗基線復現 1.99）。**每幀成本會沿著離散步進洩漏進手感**——針以 v_max
+# 逐幀追趕，幀率一降每幀就走更遠。
+# c0w **暈寬隨半徑、小圈不畫內暈**（09-03 六版二修）。設計理由＝4px 半徑的圈內側
+# 只有 2px，2.5px 的內暈會把中心填成一坨；成本理由＝三環帶每段 6 個三角形（線段版
+# 4 個）把 cruise tipSpd 從 1.98 推到 2.01，省掉小圈的內暈才回到 1.98。
+ck("c0w the glow scales with the radius and small rings skip the inner glow",
+   ("FMath::Min(2.5f * UiScale, Rpx * 0.3f)" in _ring_code
+    and "const bool bInnerGlow = Rpx > 10.0f * UiScale;" in _ring_code
+    and "if (bInnerGlow)" in _ring_code),
+   "小圈又在畫內暈 ⇒ 中心糊成一坨，而且成本會推移 cruise tipSpd")
+
+ck("c0u the segment count scales with the radius",
+   "FMath::Clamp(FMath::RoundToInt(Rpx * 0.9f), 8, 28)" in HD,
+   "小圈又在畫 28 段 ⇒ 每幀成本會推移 cruise tipSpd")
+
+# c0v **底色亮度圖那一整套必須保持拆除**（09-03 六版）：雙向暈不需要知道底色 ⇒
+# 逐段取樣／Jacobian／64KB 的圖／每針記帳／洗墨重算全部沒有消費者。留著＝死碼，
+# 而且它的每幀成本正是上一條血價的來源。
+_cc = _src("Source/NiceInk/Private/InkCanvasComponent.cpp")
+_ch2 = _src("Source/NiceInk/Private/NiceInkCharacter.cpp")
+ck("c0v the luminance-grid machinery stays removed",
+   not any(k in (HD + _cc + _ch2) for k in
+           ("SurfaceLum", "SolveEdgeColor", "GetTipRingLumForHud", "NoteSurfaceLum")),
+   "亮度圖又回來了 ⇒ 沒有消費者的基礎設施＋每幀成本")
+
+# 抬頭寬度下限是**單一來源**：閘門的 HEAD_MIN_W 必須等於 C++ 的 HeadMinWidth()
+_hd = _src("Source/NiceInk/Public/NiceInkCharacter.h")
+m = _re.search(r"HeadMinWidth\(\)\s*\{\s*return\s*([0-9.]+)f;\s*\}", _hd)
+ck("c0m header width floor matches C++", bool(m) and abs(float(m.group(1)) - HEAD_MIN_W) < 1e-6,
+   "C++=%s  gate=%s" % (m.group(1) if m else "<none>", HEAD_MIN_W))
+
+# **軸存在與否的最終真相＝落墨**：BeginStroke 只在打霧筆送分檔 alpha，其餘恆 255。
+# 盤的形狀若與這一行不一致，玩家就會看到「選了但落墨沒變」（09-03 修掉的原始 bug）。
+ck("c0e tier alpha reaches the canvas only for Shader (from C++)",
+   bool(_re.search(r"SelectedNeedle\s*==\s*EInkNeedle::Shader\)[\s\S]{0,80}?ShaderTierAlphaFor\(ShaderTierIdx\)\s*:\s*255", CH)),
+   "BeginStroke 的分檔 alpha 條件變了 ⇒ 盤的形狀要跟著重新推導")
+
+# 稿筆恆結晶紫＝顏色軸不存在的真相來源
+ck("c0f stencil forces crystal violet at BeginStroke (from C++)",
+   bool(_re.search(r"SelectedNeedle\s*==\s*EInkNeedle::Stencil\)[\s\S]{0,60}?NiceInkStencil::Color\(\)", CH)))
+
+# c0g chip 與盤看的是同一個條件（HUD 端）：此前 chip 無條件畫「顏色＋百分比」
+# ＝拿稿筆時顯示藍色 60% 而落墨是紫色 100%（HUD 說謊）。
+ck("c0g chip hides the percentage off-Shader (from HUD)",
+   bool(_re.search(r"bShowPct\s*=\s*\(MyChar->SelectedNeedle\s*==\s*EInkNeedle::Shader\)", HD)))
+ck("c0h chip shows crystal violet for the stencil (from HUD)",
+   bool(_re.search(r"bStencil\s*=\s*\(MyChar->SelectedNeedle\s*==\s*EInkNeedle::Stencil\)", HD)))
+
+# c0i 滾輪的作用域＝濃度軸的作用域（PollLockedDraw）；順帶驗轉盤讓路（A1）
+ck("c0i scroll wheel is scoped to Shader and yields to the trap dial (from C++)",
+   bool(_re.search(r"if\s*\(!bTrapDialActive\s*&&\s*SelectedNeedle\s*==\s*EInkNeedle::Shader\)", CH)))
+
+# c0j 數字鍵快捷確實不見了（B4）——留著一顆會改狀態卻沒有回饋的鍵，比沒刪更糟
+ck("c0j the 1-0 colour shortcut is gone (from C++)",
+   "PollPalette(PC);" not in CH and "void ANiceInkCharacter::PollPalette" not in CH)
+
 
 print(chr(10).join(fails) if fails else "ALL PASS")
 print("checks=%d  fail=%d" % (checks, len(fails)))

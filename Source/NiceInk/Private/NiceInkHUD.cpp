@@ -202,6 +202,37 @@ void ANiceInkHUD::EnsureUiAssets()
 		Tex->UpdateResource();
 		RoundedTex = Tex;
 	}
+
+	// 暈的衰減曲線（64×1）：alpha = (e^-kt - e^-k)/(1 - e^-k)，k=3。
+	// t=0 → 1（貼著主線，也是主線自己取的那一格）、t=1 → 0（尾巴真的收乾淨；
+	// 不減尾值的話最外緣會留 5% 的殘影＝又一條看得見的邊界）。
+	// **為什麼是指數**：真實的陰影／光暈是貼著源頭很濃、很快掉下來、再拖一條長淡
+	// 尾巴；線性衰減等速下降，邊緣有一個可辨識的終點，眼睛會把它讀成一條帶的邊界。
+	if (!GlowTex)
+	{
+		constexpr int32 N = 64;
+		constexpr float K = 3.0f;
+		UTexture2D* Tex = UTexture2D::CreateTransient(N, 1, PF_B8G8R8A8);
+		Tex->SRGB = false;
+		Tex->NeverStream = true;
+		Tex->Filter = TF_Bilinear;
+		Tex->AddressX = TA_Clamp;
+		Tex->AddressY = TA_Clamp;
+		FTexture2DMipMap& Mip = Tex->GetPlatformData()->Mips[0];
+		uint8* Data = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+		const float Tail = FMath::Exp(-K);
+		for (int32 x = 0; x < N; ++x)
+		{
+			const float T = x / static_cast<float>(N - 1);
+			const float A = (FMath::Exp(-K * T) - Tail) / (1.0f - Tail);
+			uint8* Px4 = Data + x * 4;
+			Px4[0] = 255; Px4[1] = 255; Px4[2] = 255; // BGRA、白底吃頂點 tint
+			Px4[3] = static_cast<uint8>(FMath::Clamp(A, 0.0f, 1.0f) * 255.0f + 0.5f);
+		}
+		Mip.BulkData.Unlock();
+		Tex->UpdateResource();
+		GlowTex = Tex;
+	}
 }
 
 void ANiceInkHUD::DrawRoundedBox(float X, float Y, float W, float H, float Radius, const FLinearColor& ColorIn)
@@ -779,7 +810,7 @@ void ANiceInkHUD::DrawHUD()
 			MyChar->bLastShakeAckBought ? NiHudColor::Amber : NiHudColor::Red, EHAlign::Center, true);
 	}
 
-	DrawInkCrosshair(GS, MyPS);
+	DrawInkCrosshair(GS);
 	DrawControlStrip(GS, MyChar); // 常駐操作列（右緣鍵帽縱列；隨狀態增減）
 	DrawDebugPanel(GS, MyPS, MyChar);
 }
@@ -1297,12 +1328,21 @@ void ANiceInkHUD::DrawInkChip(const ANiceInkCharacter* MyChar)
 	const float Cell = 26.0f * UiScale;
 	const float PadX = 10.0f * UiScale;
 	const float PadY = 7.0f * UiScale;
+	// **chip 只講這支筆真的擁有的軸**（09-03 修）：此前它無條件畫「顏色＋百分比」，
+	// 不看是哪支筆 ⇒ 拿稿筆時顯示「藍色 60%」而落墨是**結晶紫 100%**＝HUD 在說謊。
+	// 這比「按了沒反應」嚴重：玩家有回饋，而回饋是假的。
+	const bool bStencil = (MyChar->SelectedNeedle == EInkNeedle::Stencil);
+	const bool bShowPct = (MyChar->SelectedNeedle == EInkNeedle::Shader);
+	const FLinearColor ChipColor = bStencil
+		? NiceInkStencil::Color() : FNiceInkPalette::Get(MyChar->SelectedColorIndex);
+	const int32 ChipTier = bShowPct ? MyChar->ShaderTierIdx : 2; // 非打霧＝恆實墨
 	// 百分比＝**與托盤列標同一個來源**（TierLabel），不要自己從位元組除。
 	// 舊寫法除出 61%、托盤卻寫 60%＝同一個東西兩個名字（user 09-02 抓到）。
-	const FString Pct = FNiInkTrayLayout::TierLabel(
-		FNiInkTrayLayout::RowFromTier(MyChar->ShaderTierIdx));
-	const FVector2D PctSize = MeasureTok(Pct, ETextTier::Small, true);
-	const float CardW = PadX * 2.0f + Cell + 8.0f * UiScale + PctSize.X;
+	const FString Pct = bShowPct
+		? FNiInkTrayLayout::TierLabel(FNiInkTrayLayout::RowFromTier(MyChar->ShaderTierIdx))
+		: FString();
+	const FVector2D PctSize = bShowPct ? MeasureTok(Pct, ETextTier::Small, true) : FVector2D::ZeroVector;
+	const float CardW = PadX * 2.0f + Cell + (bShowPct ? 8.0f * UiScale + PctSize.X : 0.0f);
 	const float CardH = PadY * 2.0f + Cell;
 	const float CardX = Canvas->ClipX * 0.5f - CardW * 0.5f;
 	const float CardY = Canvas->ClipY - 46.0f * UiScale - 14.0f * UiScale - CardH;
@@ -1310,10 +1350,12 @@ void ANiceInkHUD::DrawInkChip(const ANiceInkCharacter* MyChar)
 	// 全站卡片語言（DrawPanelBox＝圓角＋墨底）——此前 cluster 是裸字漂在皮膚上，
 	// 壓到地板/牆交界時對比完全失控，而且跟正上方的圓角相位橫幅不像同一款遊戲
 	DrawPanelBox(CardX, CardY, CardW, CardH, 0.62f);
-	DrawInkCup(CardX + PadX, CardY + PadY, Cell, Cell,
-		FNiceInkPalette::Get(MyChar->SelectedColorIndex), MyChar->ShaderTierIdx);
-	DrawTok(Pct, CardX + PadX + Cell + 8.0f * UiScale, CardY + PadY + Cell * 0.5f - 8.0f * UiScale,
-		ETextTier::Small, NiHudColor::Paper, EHAlign::Left, true);
+	DrawInkCup(CardX + PadX, CardY + PadY, Cell, Cell, ChipColor, ChipTier);
+	if (bShowPct)
+	{
+		DrawTok(Pct, CardX + PadX + Cell + 8.0f * UiScale, CardY + PadY + Cell * 0.5f - 8.0f * UiScale,
+			ETextTier::Small, NiHudColor::Paper, EHAlign::Left, true);
+	}
 }
 
 float ANiceInkHUD::DrawKeycap(float X, float Y, const FString& Key, bool bAccent)
@@ -1349,13 +1391,28 @@ void ANiceInkHUD::DrawControlStrip(const ANiceInkGameState* GS, ANiceInkCharacte
 	{
 		Rows.Add({ TEXT("LMB"),    ENiLocKey::ActInk,    true });
 		Rows.Add({ TEXT("RMB"),    ENiLocKey::ActCups,   false });
-		Rows.Add({ TEXT("SCROLL"), ENiLocKey::ActWash,   false });
+		// **SCROLL 只在打霧筆列出**（09-03）：濃度只有打霧吃得到（BeginStroke），
+		// 滾輪的作用域已經跟著收（PollLockedDraw）——**操作表必須跟著作用域收**，
+		// 不然它就在列一顆按了不會有事的鍵，而玩家會以為是自己弄錯了。
+		if (MyChar->SelectedNeedle == EInkNeedle::Shader)
+		{
+			Rows.Add({ TEXT("SCROLL"), ENiLocKey::ActWash, false });
+		}
 		Rows.Add({ TEXT("Q"),      ENiLocKey::ActNeedle, false });
 		Rows.Add({ TEXT("G"),      ENiLocKey::ActShake,  false });
 		Rows.Add({ TEXT("WASD"),   ENiLocKey::ActStand,  false });
 	}
 	else if (GS->CurrentPhase == ENiceInkPhase::Drawing && !MyChar->bAsleep)
 	{
+		// 「湊近」＝這個相位站著時**唯一要學的動作**，排第一並用強調鍵帽。
+		// 此前它是螢幕正中央下方的一整句話（舊鍵名 HudLeanIn）＝與 F/G 兩種形式兩個位置；
+		// 併進來之後形式一致、位置只剩一個（畫面清單：一件事只講一次）。
+		// 受害者本人無畫可下 ⇒ 與舊提示同一條閘（bCanLeanPrompt）。
+		const ANiceInkPlayerState* MyPS = MyChar->GetPlayerState<ANiceInkPlayerState>();
+		if (!MyPS || GS->VictimPlayerId != MyPS->GetPlayerId())
+		{
+			Rows.Add({ TEXT("RMB"), ENiLocKey::ActLeanIn, true });
+		}
 		Rows.Add({ TEXT("F"), ENiLocKey::ActFlip,  false });
 		Rows.Add({ TEXT("G"), ENiLocKey::ActShake, false });
 	}
@@ -1392,9 +1449,11 @@ void ANiceInkHUD::DrawInkTray(const ANiceInkCharacter* MyChar)
 	{
 		return;
 	}
-	// AR 鏡像豁免：欄序＝數字鍵 1..9,0 的物理順序、列序＝滾輪方向（皆非版面域）
+	// AR 鏡像豁免：欄序＝調色盤的物理順序、列序＝滾輪方向（皆非版面域）
 	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
-	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(Canvas->ClipX, Canvas->ClipY);
+	// **版面隨筆而變**（09-03）：與角色端的命中測試傳同一支筆＝同一份計算
+	const FNiInkTrayLayout L = FNiInkTrayLayout::Compute(Canvas->ClipX, Canvas->ClipY,
+		MyChar->SelectedNeedle);
 	const FVector2D Cur = MyChar->InkTrayCursor;
 
 	// 方向選擇（09-02 user 定案）：沒有游標，**位移直接決定待選格**。
@@ -1424,32 +1483,47 @@ void ANiceInkHUD::DrawInkTray(const ANiceInkCharacter* MyChar)
 		KX += DrawKeycap(KX, HeadY - 3.0f * L.S, TEXT("Q")) + 6.0f * L.S;
 		DrawTok(NiLoc::T(this, ENiLocKey::ActNeedle), KX, HeadY, ETextTier::Small,
 			NiHudColor::PaperDim, EHAlign::Left, false);
+		// **當前濃度＋SCROLL 鍵帽貼在同一行的右端**（09-03 二修）：左側三個列標隨
+		// 「三列」一起退役——盤只有一排就沒有列要標。濃度是「我手上是什麼」的一部分，
+		// 跟筆名同一行＝同一件事講在同一個地方；而 SCROLL 鍵帽就在它旁邊，玩家看到
+		// 「60% ⟵ SCROLL」再滾一下，整排一起變淡＝**因果直連的動態教學**。
+		if (L.bTierAxis)
+		{
+			const FString Pct = FNiInkTrayLayout::TierLabel(
+				FNiInkTrayLayout::RowFromTier(MyChar->ShaderTierIdx));
+			const FVector2D PctSize = MeasureTok(Pct, ETextTier::Small, true);
+			const float RightX = L.CardPos.X + L.CardSize.X - L.Pad;
+			DrawTok(Pct, RightX, HeadY, ETextTier::Small, NiHudColor::Paper,
+				EHAlign::Right, true);
+			const FVector2D CapSize = MeasureTok(TEXT("SCROLL"), ETextTier::Small, true);
+			const float CapW = FMath::Max(19.0f * L.S, CapSize.X + 12.0f * L.S);
+			DrawKeycap(RightX - PctSize.X - 8.0f * L.S - CapW, HeadY - 3.0f * L.S,
+				TEXT("SCROLL"));
+		}
 		// 「放開沾杯」只畫在螢幕底部那一行（畫面清單：一件事只講一次）。
 		// 我先前在這裡又畫了一份＝與筆名撞成 "needlerelease"——**加了沒拆，第三次**。
 	}
 
-	// 列標＝**軸**（user 問「我要怎麼看出這是透明度還是粉度」＝格陣沒有軸的直接後果）
-	for (int32 R = 0; R < FNiInkTrayLayout::Rows; ++R)
+	// 杯陣＝**一排顏色**（09-03 二修）。每格＝紙色/PaperShade 雙色地 ＋ 該欄顏色以
+	// **當前這一檔**的 alpha 真半透明疊上＝所見即所得：你看到的就是你會畫出來的。
+	// 滾輪一滾整排一起變淡 ⇒「濃度是另一個軸」由**變化**講完，而不是靠並排展示
+	//（並排是靜態的，玩家得先假設那三列是同一個東西的三種樣子才讀得懂）。
+	// 欄數已由 Compute 依當前的筆決定（`NumCols`）——HUD 不再自己 min 一次調色盤
+	// 大小（那就是「表的大小寫在兩個地方」的第二個地方）
+	const int32 TrayTier = L.bTierAxis ? MyChar->ShaderTierIdx : 2; // 非打霧＝恆實墨
+	for (int32 C = 0; C < L.NumCols; ++C)
 	{
-		const FVector2D RowPos = L.CellPos(0, R);
-		const bool bRowSel = (MyChar->ShaderTierIdx == FNiInkTrayLayout::TierFromRow(R));
-		DrawTok(FNiInkTrayLayout::TierLabel(R), RowPos.X - 10.0f * L.S,
-			RowPos.Y + L.Cell.Y * 0.5f - 8.0f * L.S, ETextTier::Small,
-			bRowSel ? NiHudColor::Paper : NiHudColor::PaperDim, EHAlign::Right, bRowSel);
-	}
-
-	// 杯陣：欄＝顏色（序＝數字鍵）、列＝稀釋度（上濃下淡）。每格＝紙色底＋
-	// 該欄顏色以該列的 alpha **真半透明**疊上＝所見即所得。十欄同時用同一個方式
-	// 變淡 ⇒ 這個軸是什麼由平行性自己講完（不需要棋盤/百分比/任何解釋文字）。
-	const int32 NumColors = FMath::Min<int32>(FNiInkTrayLayout::Cols, FNiceInkPalette::Num());
-	for (int32 C = 0; C < NumColors; ++C)
-	{
-		const FLinearColor Base = FNiceInkPalette::Get(C);
-		for (int32 R = 0; R < FNiInkTrayLayout::Rows; ++R)
+		// 稿筆不吃調色盤＝恆結晶紫（與 BeginStroke 同式；盤上那唯一一格就是它）
+		const FLinearColor Base = L.bColorAxis
+			? FNiceInkPalette::Get(C) : NiceInkStencil::Color();
+		for (int32 R = 0; R < L.NumRows; ++R)   // NumRows 恆 1；保留迴圈＝版面單一來源
 		{
-			const int32 Tier = FNiInkTrayLayout::TierFromRow(R);
+			const int32 Tier = TrayTier;
 			const FVector2D Pos = L.CellPos(C, R);
-			const bool bSel = (MyChar->SelectedColorIndex == C && MyChar->ShaderTierIdx == Tier);
+			// 「手上這杯」＝只比對顏色（濃度已不是盤的軸）。稿筆沒有顏色軸 ⇒ 唯一
+			// 那格永遠就是手上這杯，否則它會因為 SelectedColorIndex 不是 0 而顯示成
+			// 「沒選中」。
+			const bool bSel = L.bColorAxis ? (MyChar->SelectedColorIndex == C) : true;
 			const bool bHov = (HovCol == C && HovRow == R);
 			// 待選格＝**畫面上唯一的選擇回饋**（游標已退役）⇒ 框要夠粗才看得到；
 			// 已裝在手上的那一杯用紙色細框，兩者不衝突。
@@ -1460,16 +1534,10 @@ void ANiceInkHUD::DrawInkTray(const ANiceInkCharacter* MyChar)
 			DrawRect(Frame, Pos.X - B, Pos.Y - B, L.Cell.X + 2.0f * B, L.Cell.Y + 2.0f * B);
 			DrawInkCup(Pos.X, Pos.Y, L.Cell.X, L.Cell.Y, Base, Tier);
 		}
-		// 欄標＝數字鍵（1..9,0）：托盤與快捷鍵是**同一張地圖**
-		//（舊面板的 2×5 與鍵盤的 1×10 不同構＝在主動教錯的空間映射）
-		// 欄標＝**鍵帽**，不是裸數字。裸數字沒有任何東西告訴玩家那是鍵盤上的鍵
-		// （user 09-02：「這樣有人可以知道要怎麼操作嗎」）。
-		const FVector2D Last = L.CellPos(C, FNiInkTrayLayout::Rows - 1);
-		const FString KeyName = FString::Printf(TEXT("%d"), (C + 1) % 10);
-		const FVector2D KeySize = MeasureTok(KeyName, ETextTier::Small, true);
-		const float CapW = FMath::Max(19.0f * L.S, KeySize.X + 12.0f * L.S);
-		DrawKeycap(Last.X + L.Cell.X * 0.5f - CapW * 0.5f, Last.Y + L.Cell.Y + 5.0f * L.S,
-			KeyName, MyChar->SelectedColorIndex == C);
+		// **欄標（數字鍵帽 1..9,0）已於 09-03 隨數字鍵快捷一起退役**：那排鍵帽的
+		// 唯一用途是教「哪個數字＝哪個顏色」，而顏色↔數字是任意映射（只能背）。
+		// 快捷沒了，這排鍵帽就從「教學」變成「指向不存在的東西」——**刪掉快捷卻
+		// 留著它的標示，比兩者都留更糟**。
 	}
 
 	// 托盤游標已退役（09-02 user 定案方向選擇）：畫一個要對準的游標，
@@ -1713,7 +1781,7 @@ void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
 		Center.X, Center.Y + Radius + 56.0f * UiScale, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
 
-void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPlayerState* MyPS)
+void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS)
 {
 	if (!Canvas)
 	{
@@ -1783,12 +1851,10 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 				DrawLine(Aim.X - A, Aim.Y - A, Aim.X + A, Aim.Y + A, XCol, 2.5f * UiScale);
 				DrawLine(Aim.X - A, Aim.Y + A, Aim.X + A, Aim.Y - A, XCol, 2.5f * UiScale);
 			}
-			if (bReach && !bShaderNeedle)
-			{
-				const float B = UiScale;
-				const FLinearColor DotCol = bStencilPen ? NiceInkStencil::Color() : CrosshairColor;
-				DrawRect(DotCol, Aim.X - 2.5f * B, Aim.Y - 2.5f * B, 5.0f * B, 5.0f * B);
-			}
+			// **落點指示的實心小方點已於 09-03 四版退役**：三支筆改用同一個指示器
+			// （見下方 `bReach` 區塊）。它是方的只因為 `DrawRect` 最好寫，而落墨是
+			// 圓的；它是實心的，蓋住的正好就是「墨會落在哪」那個位置；而且它與打霧
+			// 的圈用了兩套不同的對比手法解同一個問題。三個不一致，全是堆出來的。
 			if (bStencilPen)
 			{
 				// 2D 麥克筆 viewmodel（07-25 二修 user 定案「與機器同構：旁人 3D＋本人
@@ -1838,28 +1904,157 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 					// 稿筆針尖標籤已刪除（畫面清單 2026-09-02）：紫色 2D 麥克筆不可能認錯
 				}
 			}
-			if (bShaderNeedle && bReach)
+			// **三支筆共用的落點指示器**（09-03 四版，user 定案）。此前打霧是圓圈、
+			// 另外兩支是實心小方點——那不是設計，是兩次不同動機的改動疊出來的。
+			// 現制＝同一個畫法，**半徑就是那支筆真正的落墨半徑**（打霧 1cm、稿筆／
+			// 割線 1.5mm）⇒ **換筆時圈的大小直接告訴你這支筆多粗**；小到極限時它
+			// 自然看起來就是一個點，那是連續的退化，不是換一種圖形。
+			if (bReach)
 			{
 				FVector TipW;
 				if (MyChar->GetPenTipWorldForHud(TipW))
 				{
+					const float RadiusCm = MyChar->GetNeedleRadiusCmForHud();
 					const FVector P1 = Project(TipW);
-					const FVector P2 = Project(TipW + FVector(0.0f, 0.0f, MyChar->ShaderBrushRadiusCm));
+					const FVector P2 = Project(TipW + FVector(0.0f, 0.0f, RadiusCm));
 					if (P1.Z > 0.0f && P2.Z > 0.0f)
 					{
+						// 下限 3px：3mm 的筆在遠處會投影成不到一個像素，圈要留得住
 						const float Rpx = FMath::Clamp(FVector2D::Distance(
-							FVector2D(P1.X, P1.Y), FVector2D(P2.X, P2.Y)), 8.0f, 600.0f);
-						FLinearColor RingCol = CrosshairColor;
-						RingCol.A = 0.55f;
-						constexpr int32 Segs = 28;
-						for (int32 i = 0; i < Segs; ++i)
+							FVector2D(P1.X, P1.Y), FVector2D(P2.X, P2.Y)), 3.0f, 600.0f);
+						// **段數隨半徑**（09-03 五版，robo 定罪後修）：4~5px 的小圈畫 28 段
+						// 是純浪費——弧長不到半個像素的線段，畫出來與 8 段沒有分別。
+						// 這不是為了通過契約的 hack：`cruise tipSpd` 基線 1.99 對上限 2.00
+						// **只有 0.5% 餘裕**，而我對 Liner 的小圈也做滿額工作（28 段＋三次
+						// UV 解算）把它推到 2.02。**每幀成本會沿著離散步進洩漏進手感**
+						// ——針以 v_max 逐幀追趕，幀率一降每幀就走更遠、實走距離變長。
+						const int32 Segs = FMath::Clamp(FMath::RoundToInt(Rpx * 0.9f), 8, 28);
+						// **圈內填色已於 09-03 四版拆除**（user：「不太懂圈圈內有不明顯
+						// 的顏色顯示透明度有什麼意義」——他是對的，而且那個需求是我
+						// 發明的）。兩條理由：
+						// ①**一團半透明的墨沒有絕對可讀性**：要三檔並排才知道這一團是
+						//   中間那檔，而三檔並排正是墨杯盤在做的事，圈裡一次只給一檔。
+						//   能回答「幾 %」的是數字，不是色塊——而數字已經在 chip 上。
+						// ②我把**狀態**（我現在在哪一檔／偶爾查一次／週邊的 chip 就夠）
+						//   誤當成**事件**（我剛改了一檔／每次滾輪／需要當場短暫回饋）
+						//   來解，於是用常駐顯示去解事件需求＝畫面永遠掛著一團東西，
+						//   而真正需要回饋的那一瞬間它給的還是猜不出數值的深淺。
+						//   **兩邊都沒解好。** 濃度回歸 chip（09-02 原制）。
+						//
+						// **輪廓＝當前墨色主線 ＋ 內暗外亮的雙向暈**（09-03 六版終案）。
+						//
+						// 病根（三版 user 回報「底色和筆顏色相同時看不清楚筆頭」）是**拿內容的顏色去
+						// 畫指示器**：圈用當前墨色 ⇒ 畫在剛塗好的同色墨上對比為零、整個消失，而
+						// 「在剛畫好的墨上繼續畫」正是打霧筆最常做的事——**最常見的使用情境剛好是這個
+						// 畫法的最壞情況**（乾淨皮膚上永遠看不到這個缺陷，所以做的時候不會發現）。
+						//
+						// 四版曾走「真的去讀底下是什麼」：畫布在落墨當下記一張亮度圖，描邊逐段查表、
+						// 用 WCAG 反解出剛好 3:1 的對比色。它是對的，但**代價太大**——64KB／人的圖、
+						// 每針的記帳、洗墨後的重算、每幀的 Jacobian，而那個每幀成本被 robo 抓到
+						//（`cruise tipSpd` 基線 1.99 → 2.02，兩輪穩定重現、stash 驗基線復現）。
+						//
+						// 六版換維度（user 追問「業界用什麼手段」後定案）：**顏色對比只是四類手段之一**，
+						// 另外三類是「自己製造背景」（陰影／暈／底板）、「運動」（marching ants）、
+						// 「形狀」（角括號）。暈屬於第二類——**不需要知道底色**，所以那整套取樣機制連同
+						// 它的每幀成本一起沒有存在理由了（已拆除，不留死碼）。
+						//
+						// 為什麼暈就夠：四種情況全涵蓋——底亮 ⇒ 內側暗暈拉開；底暗 ⇒ 外側亮暈拉開；
+						// 墨色與底同暗 ⇒ 外亮暈仍在；墨色與底同亮 ⇒ 內暗暈仍在。**最差是中灰底，兩側
+						// 各有約 0.5 的亮度差**，而那是不讀畫面所能達到的下界（黑與白之中，必有一個與
+						// 任何亮度相距 ≥0.5）。主線因此可以放心地帶當前這杯墨的顏色。
+						//
+						// 顏色只從全站 token 拿（三版我寫過裸數字＝冷調藍紫灰與純白，而畫面上其餘一切
+						// 都是暖調 ⇒ 讀成「貼上去的」；專案本來就禁裸顏色）。
+						const float LW = 1.5f * UiScale;
+						// **底色亮度圖那一整套已於 09-03 六版拆除**：雙向暈屬於「自己製造
+						// 背景」，**不需要知道底色** ⇒ 逐段取樣、Jacobian、64KB 的亮度圖、
+						// 每針的記帳、洗墨後的重算，全部沒有消費者了。留著就是死碼，而且
+						// 它的每幀成本正是把 cruise tipSpd 從 1.99 推到 2.02 的東西。
+						const FLinearColor MainCol =
+							(bStencilPen ? NiceInkStencil::Color() : CrosshairColor)
+								.CopyWithNewOpacity(0.95f);
+						// **實體三角形環帶，不是 N 條線段拼的圓**（user：「為什麼會斷斷續續的」）。
+						// 用 DrawLine 拼圓有兩個各自獨立的斷法：
+						//   ①每段兩端是**平頭**（Canvas 的線沒有 round cap）⇒ 相鄰段在轉角處露出楔形缺口
+						//   ②**0.75px 的描邊不足一個像素**，而 Canvas 的線沒有抗鋸齒 ⇒ 像素中心沒落進
+						//     那條細四邊形的段落，整段被跳過
+						// 環帶是實體填充、**相鄰段共用同一組頂點** ⇒ 接縫在數學上不存在（不是「接得很好」，
+						// 是根本沒有接縫）；不足一像素的部分被光柵化成部分覆蓋而不是消失。
+						// 成本不變：一條 thick line 本來也是兩個三角形。
+						// UIn/UOut＝在衰減貼圖上的取樣位置（0＝貼著主線最濃、1＝尾端全透明）。
+						// **曲線住在貼圖裡**，所以頂點只要給兩端的 t，三角形數量不變。
+						auto AddBand = [&](TArray<FCanvasUVTri>& Out, float RIn, float ROut, int32 i,
+							const FLinearColor& CIn, const FLinearColor& COut,
+							float UIn, float UOut)
 						{
 							const float A0 = 2.0f * PI * i / Segs;
 							const float A1 = 2.0f * PI * (i + 1) / Segs;
-							DrawLine(Aim.X + FMath::Cos(A0) * Rpx, Aim.Y + FMath::Sin(A0) * Rpx,
-								Aim.X + FMath::Cos(A1) * Rpx, Aim.Y + FMath::Sin(A1) * Rpx,
-								RingCol, 1.5f * UiScale);
+							const FVector2D D0(FMath::Cos(A0), FMath::Sin(A0));
+							const FVector2D D1(FMath::Cos(A1), FMath::Sin(A1));
+							const FVector2D UvIn(UIn, 0.5f), UvOut(UOut, 0.5f);
+							FCanvasUVTri T;
+							T.V0_Pos = Aim + D0 * RIn;  T.V0_Color = CIn;  T.V0_UV = UvIn;
+							T.V1_Pos = Aim + D0 * ROut; T.V1_Color = COut; T.V1_UV = UvOut;
+							T.V2_Pos = Aim + D1 * ROut; T.V2_Color = COut; T.V2_UV = UvOut;
+							Out.Add(T);
+							T.V0_Pos = Aim + D0 * RIn;  T.V0_Color = CIn;  T.V0_UV = UvIn;
+							T.V1_Pos = Aim + D1 * ROut; T.V1_Color = COut; T.V1_UV = UvOut;
+							T.V2_Pos = Aim + D1 * RIn;  T.V2_Color = CIn;  T.V2_UV = UvIn;
+							Out.Add(T);
+						};
+						// **內暗外亮的雙向暈**（09-03 六版，user 定案）。這是「自己製造背景」那一類手段
+						// ——**不需要知道底色**，所以比動態求對比色更穩健，也不必為取樣付每幀成本
+						//（那正是把 cruise tipSpd 從 1.99 推到 2.02 的東西）。四種情況全涵蓋：
+						//   底亮 ⇒ 內側暗暈拉開；底暗 ⇒ 外側亮暈拉開；
+						//   墨色與底同暗 ⇒ 外亮暈仍在；墨色與底同亮 ⇒ 內暗暈仍在。
+						// **最差情況是中灰底，兩側的暈各有約 0.5 的亮度差**——仍然可見，而且那是不讀
+						// 畫面所能達到的下界（黑與白之中，必有一個與任何亮度相距 ≥0.5）。
+						// 暈用漸層（外緣 alpha=0）⇒ 讀起來是「一條細線帶柔邊」，不是三條並排的線。
+						// **暈寬隨半徑、小圈不畫內暈**（09-03 六版二修）。兩個理由，
+						// 一個設計一個成本：
+						//   設計＝稿筆／割線的圈只有 4~5px 半徑，內側總共才 2~3px；
+						//     2.5px 的內暈會把中心填成一坨，那不是柔邊是污漬。
+						//   成本＝`cruise tipSpd` 契約 1.50~2.00、基線 1.99＝**0.5% 餘裕**。
+						//     三環帶版每段 6 個三角形（線段版 4 個）＝+50%，實測把它推到
+						//     2.01。小圈省掉內暈就回到 4 個。**每幀成本會沿著離散步進洩漏
+						//     進手感**——針以 v_max 逐幀追趕，幀率一降每幀就走更遠。
+						const float GW = FMath::Min(2.5f * UiScale, Rpx * 0.3f);
+						const bool bInnerGlow = Rpx > 10.0f * UiScale;
+						// 峰值 0.49（09-03 六版三修，user：「暈感不夠重，太像一圈亮圈、
+						// 一圈暗圈」，要求透明度降半、但**不要擴大範圍**）。
+						// **這個數字是算出來的，不是我改了他的要求**：他要的是把線性版的
+						// 0.55 降到 0.275，而換成指數衰減之後——
+						//   線性曲線在 [0,1] 上的平均覆蓋 = 0.500 ⇒ 他要的重量 = 0.1375
+						//   指數曲線（k=3、已扣尾正規化）平均覆蓋 = 0.281
+						//   ⇒ 要達到同樣的視覺重量，峰值 = 0.1375 / 0.281 = 0.489
+						// 也就是說：**總墨量與他要求的一致，但貼著線的那一圈濃了 78%**
+						//（0.49 vs 0.275）而尾巴掉得更快。對比保障因此留在真正需要它的
+						// 位置——緊貼輪廓那幾個像素——而不是攤平成一條看得見的帶。
+						const FLinearColor GlowDark = NiHudColor::Ink.CopyWithNewOpacity(0.49f);
+						const FLinearColor GlowLight = NiHudColor::Paper.CopyWithNewOpacity(0.49f);
+						const float MRi = Rpx - LW * 0.5f;   // 主線內緣
+						const float MRo = Rpx + LW * 0.5f;   // 主線外緣
+						TArray<FCanvasUVTri> Tris;
+						Tris.Reserve(Segs * 6);   // 上限（大圈三環帶）
+						for (int32 i = 0; i < Segs; ++i)
+						{
+							// 暈的兩端都給同一個顏色，**濃淡整個交給貼圖**（此前是用頂點
+							// alpha 從 0 線性升到峰值＝線性衰減）。內暈的 t 由外向內遞增
+							//（貼著主線的那一側 t=0）。
+							if (bInnerGlow)   // 內暈（小圈略過：內側放不下，且成本要還給 cruise）
+							{
+								AddBand(Tris, FMath::Max(MRi - GW, 0.0f), MRi, i,
+									GlowDark, GlowDark, 1.0f, 0.0f);
+							}
+							AddBand(Tris, MRi, MRo, i, MainCol, MainCol, 0.0f, 0.0f); // 主線（t=0＝不透明）
+							AddBand(Tris, MRo, MRo + GW, i, GlowLight, GlowLight, 0.0f, 1.0f); // 外暈
 						}
+						// 貼圖＝衰減曲線；缺席時退回白貼圖（＝退化成沒有暈的實心環帶，
+						// 仍然畫得出來，不會整個消失）
+						FCanvasTriangleItem RingItem(Tris,
+							GlowTex && GlowTex->GetResource() ? GlowTex->GetResource() : GWhiteTexture);
+						RingItem.BlendMode = SE_BLEND_Translucent;
+						Canvas->DrawItem(RingItem);
 					}
 				}
 			}
@@ -2005,15 +2200,10 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS, const ANiceInkPl
 			return;
 		}
 
-		// 未鎖定：作畫階段才給「湊上去」提示（受害者本人無畫可下，不提示）
-		const bool bCanLeanPrompt = GS && GS->CurrentPhase == ENiceInkPhase::Drawing &&
-			(!MyPS || GS->VictimPlayerId != MyPS->GetPlayerId());
-		if (bCanLeanPrompt)
-		{
-			// 提示放色塊下方（+30 會撞到準星右下的選色色塊）
-			DrawTok(NiLoc::T(this, ENiLocKey::HudLeanIn), Canvas->ClipX * 0.5f, Canvas->ClipY * 0.5f + 52.0f * UiScale,
-				ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
-		}
+		// 未鎖定：「湊上去」的提示**已移進右緣控制列**（09-03，`DrawControlStrip`）。
+		// 此前它是畫在螢幕正中央下方的一整句 "RMB — lean in"，而同一畫面右緣已經有
+		// F/G 的鍵帽列 ⇒ **同一類東西兩種形式、兩個位置**。句子裡的 "RMB" 不會被
+		// 讀成一顆可以按的鍵（09-02 已經為 Q 學過同一課），所以留下的是鍵帽那份。
 
 	}
 

@@ -591,10 +591,10 @@ namespace
 	{ { TEXT("stand up"), TEXT("立つ"), TEXT("起身"), TEXT("起身"),
 		TEXT("일어서기"), TEXT("levantarse"), TEXT("se lever"), TEXT("alzarsi"), TEXT("aufstehen"),
 		TEXT("levantar"), TEXT("встать"), TEXT("kalk"), TEXT("وقوف") } },
-	// HudLeanIn
-	{ { TEXT("RMB — lean in"), TEXT("右クリック — 身を寄せる"), TEXT("右鍵 — 湊近"), TEXT("右键 — 凑近"),
-		TEXT("오른쪽 버튼 — 몸을 기울인다"), TEXT("clic der. — acércate"), TEXT("clic droit — approche-toi"), TEXT("tasto dx — avvicinati"), TEXT("rechte Maustaste — heranbeugen"),
-		TEXT("botão dir. — chegue perto"), TEXT("ПКМ — придвинуться"), TEXT("sağ tuş — yaklaş"), TEXT("الزر الأيمن — انحنِ") } },
+	// ActLeanIn（09-03：句子→動詞。鍵位由鍵帽圖形表達，文字只講「做什麼」）
+	{ { TEXT("lean in"), TEXT("身を寄せる"), TEXT("湊近"), TEXT("凑近"),
+		TEXT("몸을 기울인다"), TEXT("acércate"), TEXT("approche-toi"), TEXT("avvicinati"), TEXT("heranbeugen"),
+		TEXT("chegue perto"), TEXT("придвинуться"), TEXT("yaklaş"), TEXT("انحنِ") } },
 	// HudFeignSleep
 	{ { TEXT("feigning sleep — release SHIFT to open your eyes"), TEXT("寝たふり中 — SHIFT を離すと目を開ける"), TEXT("裝睡中 — 放開 SHIFT 睜眼"), TEXT("装睡中 — 松开 SHIFT 睁眼"),
 		TEXT("자는 척 — SHIFT 를 놓으면 눈을 뜬다"), TEXT("haciéndote el dormido — suelta SHIFT para abrir los ojos"), TEXT("tu fais semblant de dormir — relâche MAJ pour ouvrir les yeux"), TEXT("fingi di dormire — rilascia MAIUSC per aprire gli occhi"), TEXT("du stellst dich schlafend — UMSCHALT loslassen zum Augenöffnen"),
