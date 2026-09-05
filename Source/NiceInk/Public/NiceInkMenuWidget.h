@@ -100,6 +100,7 @@ private:
 	FSlateBrush InsetBrush; // 卡內分組框（歸屬用「裝在同個盒子」表達，不靠間距）
 	FSlateBrush CardDividerBrush; // 卡上細分隔線（日常個人檔案頁：資產區/上傳區分家）
 	FButtonStyle PrimaryStyle, OnCardStyle, GhostStyle, RowStyle;
+	FButtonStyle DangerStyle;   // 毀滅性動作（Quit）＝ghost 但帶紅（2026-09-04 全站稽核）
 	FButtonStyle FaceTileStyle; // 臉庫縮圖鈕：平常無底（icon=頭形不能再被方塊裱起來）、hover 微亮
 	FEditableTextBoxStyle NameBoxStyle;
 

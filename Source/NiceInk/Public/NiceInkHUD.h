@@ -60,6 +60,12 @@ protected:
 	UPROPERTY() TObjectPtr<UTexture2D> IconTrap;
 	UPROPERTY() TObjectPtr<UTexture2D> IconSleep;
 	UPROPERTY() TObjectPtr<UTexture2D> IconNose;
+	// 輸入 glyph（Kenney Input Prompts 1.5, CC0；調色盤已烘進 PNG）
+	// **鍵盤有刻字所以寫字，滑鼠沒有刻字所以畫圖**——見 Docs/UI_SYSTEM.md §4.1
+	UPROPERTY() TObjectPtr<UTexture2D> InMouseLeft;
+	UPROPERTY() TObjectPtr<UTexture2D> InMouseRight;
+	UPROPERTY() TObjectPtr<UTexture2D> InMouseScroll;
+	UPROPERTY() TObjectPtr<UTexture2D> InMouseMove;
 	// runtime 生成的圓角方塊（SDF alpha＝抗鋸齒；canvas 三角形零 AA 的繞道）
 	UPROPERTY() TObjectPtr<UTexture2D> RoundedTex;
 	// runtime 生成的**暈衰減曲線**（64×1，alpha 走指數）。Canvas 的頂點顏色只能
@@ -108,6 +114,8 @@ protected:
 	FString FitTok(const FString& Text, ETextTier Tier, float MaxWidthPx, bool bBold = false);
 	void DrawPanelBox(float X, float Y, float W, float H, float Alpha = 0.72f);
 	void DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, const FLinearColor& Tint);
+	// 非方形圖示（輸入 glyph 裁過透明邊之後寬高比不是 1）
+	void DrawIconRect(class UTexture2D* Tex, float X, float Y, float W, float H, const FLinearColor& Tint);
 	void DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align = EHAlign::Left);
 
 	// ---- 即時模式 UI 互動（主選單／ESC 選單共用；每幀 BeginUiFrame 後才可用）----
@@ -186,4 +194,12 @@ protected:
 	void DrawDebugPanel(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS, class ANiceInkCharacter* MyChar);
 
 	FString GetPhaseLabel(ENiceInkPhase Phase) const;
+	// 2026-09-04（照抄 Meccha 的三段式）：上緣＝現在該做什麼、右下＝這個相位怎麼贏。
+	// 相位名從上緣搬到右下規則塊的標題——上緣講**動作**，名詞放在規則塊裡。
+	FString GetPhaseImperative(const class ANiceInkGameState* GS,
+		class ANiceInkCharacter* MyChar, bool bIsVictim) const;
+	void DrawRulesBlock(const class ANiceInkGameState* GS,
+		class ANiceInkCharacter* MyChar, bool bIsVictim);
+	// glyph＝鍵帽（有刻字）或滑鼠圖（沒有刻字）；回傳寬度
+	float DrawInputGlyph(float X, float Y, const TCHAR* Key, class UTexture2D* Tex, bool bAccent);
 };

@@ -68,6 +68,22 @@ linked or reproduced below. This file ships next to the game executable.
   resolves the "no macro tonal variation" defect measured on 2026-08-18
   (low-frequency std 0.0014 = implausibly uniform for real fabric).
 
+### Input prompt glyphs (mouse buttons / scroll)
+- Files: the derived `SourceAssets/InputPrompts/png/T_InMouse*.png` plus the engine textures
+  `Content/UI/Input/T_InMouseLeft` / `T_InMouseRight` / `T_InMouseScroll` /
+  `T_InMouseMove`.
+- Source: **Kenney — Input Prompts 1.5** (www.kenney.nl) —
+  `https://kenney.nl/assets/input-prompts`, upstream file `kenney_input-prompts_1.5.zip`.
+  The upstream pack itself is **not vendored** (`.gitignore` excludes `*.zip`); it lives
+  locally at `SourceAssets/InputPrompts/kenney_input.zip` and is re-downloadable from the
+  URL above. Only the four derived PNGs and the licence text are committed.
+- License: **CC0 1.0 Universal (public domain)** — commercial use permitted,
+  attribution **not required**; credited here anyway. Upstream license text kept
+  verbatim at `SourceAssets/InputPrompts/LICENSE_kenney.txt`.
+- Modification: recoloured to the project palette (`Paper` / `Red`) and cropped to
+  the alpha bounding box so the drawn box equals the ink box (see
+  `Docs/UI_SYSTEM.md` §8-5).
+
 ## Engine
 
 - Unreal Engine (c) Epic Games, Inc. — distributed under the Unreal Engine EULA.

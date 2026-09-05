@@ -66,6 +66,25 @@ namespace NiType
 	constexpr float HudSmall   = 12.0f;
 }
 
+// --- 局內 HUD 尺度（2026-09-04；user 定案「照抄 Meccha」）---
+// **基準 U = 4px @1080p，所有尺寸與間距都是 U 的整數倍**（大小、間距互相呼應）。
+// 下面三個常數**不是挑的，是量 Meccha 1080p 實物**（meccha_2.jpg 右緣暗磚背景，
+// 白色連通帶）：元件高 47~48px／列距 61~70px／右邊距 21px ⇒ 48 / 64 / 24。
+// 儀器＝Tools/UiCheck/hud_mock.py（離線全畫面 mock ＋尺度閘門），
+// 規範＝Docs/UI_SYSTEM.md。**改這裡要重跑那支閘門。**
+namespace NiUi
+{
+	constexpr float U = 4.0f;
+
+	constexpr float KeycapH   = 8.0f * U;   // 32 鍵帽高（原 19＝我猜的，實測他們是 1.6 倍）
+	constexpr float KeycapR   = 1.0f * U;   //  4 鍵帽圓角＝全站唯一的圓角
+	constexpr float Margin    = 6.0f * U;   // 24 四邊共用邊距（他們 21，就近落網格）
+	constexpr float RowPitch  = 16.0f * U;  // 64 操作提示的列距
+	constexpr float GapS      = 1.0f * U;   //  4 glyph↔動詞、鍵帽之間
+	constexpr float GapM      = 2.0f * U;   //  8
+	constexpr float GapL      = 4.0f * U;   // 16 段落之間
+}
+
 // --- 間距網格（4 的倍數；選單 Slate 版面用）---
 namespace NiSpace
 {

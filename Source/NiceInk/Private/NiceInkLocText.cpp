@@ -603,6 +603,262 @@ namespace
 	{ { TEXT("eyes open — hold SHIFT to feign sleep   ·   WASD stands you up and ends the drawing"), TEXT("目を開けている — SHIFT 長押しで寝たふり   ·   WASD で起き上がり彫りを終える"), TEXT("睜著眼 — 按住 SHIFT 裝睡   ·   WASD 起身結束作畫"), TEXT("睁着眼 — 按住 SHIFT 装睡   ·   WASD 起身结束作画"),
 		TEXT("눈을 뜬 상태 — SHIFT 를 누르면 자는 척   ·   WASD 로 일어나 작업을 끝낸다"), TEXT("ojos abiertos — mantén SHIFT para fingir   ·   WASD te levanta y termina el tatuaje"), TEXT("yeux ouverts — maintiens MAJ pour faire semblant   ·   WASD te lève et met fin au tatouage"), TEXT("occhi aperti — tieni MAIUSC per fingere   ·   WASD ti alza e chiude il tatuaggio"), TEXT("Augen offen — UMSCHALT halten zum Vortäuschen   ·   WASD steht auf und beendet das Tätowieren"),
 		TEXT("olhos abertos — segure SHIFT para fingir   ·   WASD levanta você e encerra a tatuagem"), TEXT("глаза открыты — зажми SHIFT, чтобы притвориться   ·   WASD поднимет тебя и закончит работу"), TEXT("gözler açık — numara için SHIFT basılı tut   ·   WASD seni kaldırır ve işi bitirir"), TEXT("عيناك مفتوحتان — اضغط SHIFT للتظاهر   ·   WASD ينهضك وينهي الوشم") } },
+	// PhaseLobby
+	{ { TEXT("LOBBY"), TEXT("控えの間"), TEXT("等候室"), TEXT("等候室"),
+		TEXT("대기실"), TEXT("VESTÍBULO"), TEXT("SALON"), TEXT("ATRIO"), TEXT("VORRAUM"),
+		TEXT("SAGUÃO"), TEXT("ЛОББИ"), TEXT("LOBİ"), TEXT("الردهة") } },
+	// PhaseBottleSpin
+	{ { TEXT("BOTTLE SPIN"), TEXT("瓶回し"), TEXT("轉酒瓶"), TEXT("转酒瓶"),
+		TEXT("병 돌리기"), TEXT("LA BOTELLA"), TEXT("LA BOUTEILLE"), TEXT("LA BOTTIGLIA"), TEXT("FLASCHENDREHEN"),
+		TEXT("A GARRAFA"), TEXT("БУТЫЛОЧКА"), TEXT("ŞİŞE ÇEVİRME"), TEXT("دوران الزجاجة") } },
+	// PhaseSeating
+	{ { TEXT("SEATING"), TEXT("入座"), TEXT("入座"), TEXT("入座"),
+		TEXT("착석"), TEXT("EL BRINDIS"), TEXT("LE TOAST"), TEXT("IL BRINDISI"), TEXT("DER TRUNK"),
+		TEXT("O BRINDE"), TEXT("ТОСТ"), TEXT("KADEH"), TEXT("الجلوس") } },
+	// PhaseTour
+	{ { TEXT("GALLERY TOUR"), TEXT("品評会"), TEXT("傑作巡禮"), TEXT("杰作巡礼"),
+		TEXT("감상회"), TEXT("LA GALERÍA"), TEXT("LA GALERIE"), TEXT("LA GALLERIA"), TEXT("DIE GALERIE"),
+		TEXT("A GALERIA"), TEXT("ГАЛЕРЕЯ"), TEXT("GALERİ"), TEXT("المعرض") } },
+	// PhaseAccusation
+	{ { TEXT("ACCUSATION"), TEXT("名指し"), TEXT("指認"), TEXT("指认"),
+		TEXT("지목"), TEXT("LA ACUSACIÓN"), TEXT("L’ACCUSATION"), TEXT("L’ACCUSA"), TEXT("DIE ANKLAGE"),
+		TEXT("A ACUSAÇÃO"), TEXT("ОБВИНЕНИЕ"), TEXT("SUÇLAMA"), TEXT("الاتهام") } },
+	// PhaseResolution
+	{ { TEXT("RESOLUTION"), TEXT("判定"), TEXT("判決"), TEXT("判决"),
+		TEXT("판정"), TEXT("EL VEREDICTO"), TEXT("LE VERDICT"), TEXT("IL VERDETTO"), TEXT("DAS URTEIL"),
+		TEXT("O VEREDITO"), TEXT("ВЕРДИКТ"), TEXT("KARAR"), TEXT("الحكم") } },
+	// PhaseFinale
+	{ { TEXT("FINALE"), TEXT("三杯目"), TEXT("第三杯"), TEXT("第三杯"),
+		TEXT("세 잔째"), TEXT("EL FINAL"), TEXT("LA FIN"), TEXT("IL FINALE"), TEXT("DAS FINALE"),
+		TEXT("O FINAL"), TEXT("ФИНАЛ"), TEXT("FİNAL"), TEXT("الختام") } },
+	// PhasePostGame
+	{ { TEXT("PARLOR"), TEXT("彫り物部屋"), TEXT("刺青房"), TEXT("刺青房"),
+		TEXT("문신방"), TEXT("EL SALÓN"), TEXT("LE SALON"), TEXT("IL SALOTTO"), TEXT("DER SALON"),
+		TEXT("O SALÃO"), TEXT("САЛОН"), TEXT("SALON"), TEXT("الصالون") } },
+	// PhaseDream
+	{ { TEXT("DRUNK DREAM"), TEXT("酔いの夢"), TEXT("醉夢"), TEXT("醉梦"),
+		TEXT("취몽"), TEXT("EL SUEÑO EBRIO"), TEXT("LE RÊVE IVRE"), TEXT("IL SOGNO EBBRO"), TEXT("DER RAUSCHTRAUM"),
+		TEXT("O SONHO ÉBRIO"), TEXT("ХМЕЛЬНОЙ СОН"), TEXT("SARHOŞ RÜYA"), TEXT("حلم السكر") } },
+	// ImpLobbyWait
+	{ { TEXT("wait for the room to fill"), TEXT("人が揃うのを待とう"), TEXT("等大家坐滿"), TEXT("等大家坐满"),
+		TEXT("사람이 모이길 기다리자"), TEXT("espera a que se llene la sala"), TEXT("attends que la salle se remplisse"), TEXT("aspetta che la sala si riempia"), TEXT("warte, bis der Raum voll ist"),
+		TEXT("espere a sala encher"), TEXT("жди, пока все соберутся"), TEXT("oda dolsun diye bekle"), TEXT("انتظر امتلاء الغرفة") } },
+	// ImpLobbyHost
+	{ { TEXT("start when everyone is in"), TEXT("全員揃ったら始めよう"), TEXT("人到齊就開局"), TEXT("人到齐就开局"),
+		TEXT("다 모이면 시작하자"), TEXT("empieza cuando estén todos"), TEXT("commence quand tout le monde est là"), TEXT("inizia quando ci sono tutti"), TEXT("starte, wenn alle da sind"),
+		TEXT("comece quando todos entrarem"), TEXT("начинай, когда все в сборе"), TEXT("herkes gelince başlat"), TEXT("ابدأ عندما يكتمل الجميع") } },
+	// ImpBottleSpin
+	{ { TEXT("see who the bottle points at"), TEXT("瓶の口が向く先を見よう"), TEXT("看瓶口指向誰"), TEXT("看瓶口指向谁"),
+		TEXT("병이 누구를 가리키는지 보자"), TEXT("mira a quién señala la botella"), TEXT("regarde qui la bouteille désigne"), TEXT("guarda chi indica la bottiglia"), TEXT("sieh, auf wen die Flasche zeigt"),
+		TEXT("veja para quem a garrafa aponta"), TEXT("смотри, на кого укажет бутылка"), TEXT("şişe kimi gösteriyor bak"), TEXT("انظر إلى من تشير الزجاجة") } },
+	// ImpSeating
+	{ { TEXT("he is falling asleep"), TEXT("彼は眠りに落ちる"), TEXT("他要睡了"), TEXT("他要睡了"),
+		TEXT("그가 잠들고 있다"), TEXT("se está quedando dormido"), TEXT("il s’endort"), TEXT("si sta addormentando"), TEXT("er schläft gerade ein"),
+		TEXT("ele está adormecendo"), TEXT("он засыпает"), TEXT("uykuya dalıyor"), TEXT("إنه يغفو") } },
+	// ImpDrawStand
+	{ { TEXT("lean in to his body"), TEXT("体に身を寄せよう"), TEXT("湊近他的身體"), TEXT("凑近他的身体"),
+		TEXT("몸에 다가가자"), TEXT("acércate a su cuerpo"), TEXT("approche-toi de son corps"), TEXT("avvicinati al suo corpo"), TEXT("beuge dich zu seinem Körper"),
+		TEXT("chegue perto do corpo dele"), TEXT("придвинься к его телу"), TEXT("vücuduna yaklaş"), TEXT("اقترب من جسده") } },
+	// ImpDrawLocked
+	{ { TEXT("ink him"), TEXT("彫ろう"), TEXT("畫下去"), TEXT("画下去"),
+		TEXT("새기자"), TEXT("tatúalo"), TEXT("encre-le"), TEXT("inchiostralo"), TEXT("tätowiere ihn"),
+		TEXT("tatue-o"), TEXT("коли его"), TEXT("onu döv"), TEXT("ارسم عليه") } },
+	// ImpDream
+	{ { TEXT("trace the line to the end"), TEXT("線を最後までなぞろう"), TEXT("沿著線描到底"), TEXT("沿着线描到底"),
+		TEXT("선을 끝까지 따라가자"), TEXT("sigue la línea hasta el final"), TEXT("suis la ligne jusqu’au bout"), TEXT("segui la linea fino in fondo"), TEXT("folge der Linie bis zum Ende"),
+		TEXT("siga a linha até o fim"), TEXT("веди по линии до конца"), TEXT("çizgiyi sonuna kadar izle"), TEXT("تتبع الخط حتى النهاية") } },
+	// ImpFeign
+	{ { TEXT("you are feigning sleep"), TEXT("寝たふり中"), TEXT("裝睡中"), TEXT("装睡中"),
+		TEXT("자는 척하는 중"), TEXT("estás fingiendo dormir"), TEXT("tu fais semblant de dormir"), TEXT("stai fingendo di dormire"), TEXT("du stellst dich schlafend"),
+		TEXT("você está fingindo dormir"), TEXT("ты притворяешься спящим"), TEXT("uyuyor numarası yapıyorsun"), TEXT("أنت تتظاهر بالنوم") } },
+	// ImpTour
+	{ { TEXT("look at every piece"), TEXT("一枚ずつよく見よう"), TEXT("看清楚每一幅"), TEXT("看清楚每一幅"),
+		TEXT("한 점씩 잘 보자"), TEXT("mira bien cada obra"), TEXT("regarde bien chaque œuvre"), TEXT("guarda bene ogni opera"), TEXT("sieh dir jedes Werk an"),
+		TEXT("olhe bem cada obra"), TEXT("рассмотри каждую работу"), TEXT("her esere iyi bak"), TEXT("انظر جيدا إلى كل عمل") } },
+	// ImpAccuseVictim
+	{ { TEXT("name who drew this one"), TEXT("これを彫った奴を指せ"), TEXT("指出這幅是誰畫的"), TEXT("指出这幅是谁画的"),
+		TEXT("이걸 새긴 자를 지목하라"), TEXT("di quién dibujó esta"), TEXT("désigne qui a dessiné celle-ci"), TEXT("indica chi ha disegnato questa"), TEXT("nenne, wer das gestochen hat"),
+		TEXT("diga quem desenhou esta"), TEXT("назови, кто это нарисовал"), TEXT("bunu kimin çizdiğini söyle"), TEXT("سم من رسم هذه") } },
+	// ImpAccuseOther
+	{ { TEXT("do not let him recognise you"), TEXT("気づかれるな"), TEXT("別讓他認出你"), TEXT("别让他认出你"),
+		TEXT("들키지 마라"), TEXT("que no te reconozca"), TEXT("ne te fais pas reconnaître"), TEXT("non farti riconoscere"), TEXT("lass dich nicht erkennen"),
+		TEXT("não deixe ele te reconhecer"), TEXT("не дай себя узнать"), TEXT("seni tanımasına izin verme"), TEXT("لا تدعه يتعرف عليك") } },
+	// ImpPostGame
+	{ { TEXT("look over your ink"), TEXT("己の彫り物を眺めよう"), TEXT("端詳你的刺青"), TEXT("端详你的刺青"),
+		TEXT("자신의 문신을 살펴보자"), TEXT("observa tus tatuajes"), TEXT("contemple tes tatouages"), TEXT("osserva i tuoi tatuaggi"), TEXT("betrachte deine Tätowierungen"),
+		TEXT("observe suas tatuagens"), TEXT("рассмотри свои татуировки"), TEXT("dövmelerine bak"), TEXT("تأمل وشومك") } },
+	// ActStartMatch
+	{ { TEXT("start"), TEXT("開始"), TEXT("開局"), TEXT("开局"),
+		TEXT("시작"), TEXT("empezar"), TEXT("démarrer"), TEXT("inizia"), TEXT("starten"),
+		TEXT("começar"), TEXT("начать"), TEXT("başlat"), TEXT("ابدأ") } },
+	// ActKick
+	{ { TEXT("kick"), TEXT("追い出す"), TEXT("踢人"), TEXT("踢人"),
+		TEXT("내보내기"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
+		TEXT("expulsar"), TEXT("выгнать"), TEXT("at"), TEXT("اطرد") } },
+	// ActTrace
+	{ { TEXT("trace"), TEXT("なぞる"), TEXT("描線"), TEXT("描线"),
+		TEXT("따라 그리기"), TEXT("trazar"), TEXT("tracer"), TEXT("traccia"), TEXT("nachziehen"),
+		TEXT("traçar"), TEXT("вести"), TEXT("izle"), TEXT("تتبع") } },
+	// ActWake
+	{ { TEXT("open eyes"), TEXT("目を開ける"), TEXT("睜眼"), TEXT("睁眼"),
+		TEXT("눈 뜨기"), TEXT("abrir ojos"), TEXT("ouvrir les yeux"), TEXT("apri gli occhi"), TEXT("Augen öffnen"),
+		TEXT("abrir os olhos"), TEXT("открыть глаза"), TEXT("gözleri aç"), TEXT("افتح عينيك") } },
+	// ActPickWork
+	{ { TEXT("pick work"), TEXT("作品を選ぶ"), TEXT("選畫"), TEXT("选画"),
+		TEXT("작품 고르기"), TEXT("elegir obra"), TEXT("choisir l’œuvre"), TEXT("scegli l’opera"), TEXT("Werk wählen"),
+		TEXT("escolher obra"), TEXT("выбрать работу"), TEXT("eser seç"), TEXT("اختر العمل") } },
+	// ActSuspect
+	{ { TEXT("next suspect"), TEXT("次の容疑者"), TEXT("換嫌疑人"), TEXT("换嫌疑人"),
+		TEXT("다음 용의자"), TEXT("siguiente sospechoso"), TEXT("suspect suivant"), TEXT("prossimo sospetto"), TEXT("nächster Verdächtiger"),
+		TEXT("próximo suspeito"), TEXT("следующий подозреваемый"), TEXT("sonraki şüpheli"), TEXT("المشتبه التالي") } },
+	// ActAccuse
+	{ { TEXT("accuse"), TEXT("名指し"), TEXT("指認"), TEXT("指认"),
+		TEXT("지목"), TEXT("acusar"), TEXT("accuser"), TEXT("accusa"), TEXT("anklagen"),
+		TEXT("acusar"), TEXT("обвинить"), TEXT("suçla"), TEXT("اتهم") } },
+	// ActLaser
+	{ { TEXT("laser"), TEXT("レーザー"), TEXT("雷射"), TEXT("激光"),
+		TEXT("레이저"), TEXT("láser"), TEXT("laser"), TEXT("laser"), TEXT("Laser"),
+		TEXT("laser"), TEXT("лазер"), TEXT("lazer"), TEXT("ليزر") } },
+	// ActNextMatch
+	{ { TEXT("next match"), TEXT("次の一戦"), TEXT("下一場"), TEXT("下一场"),
+		TEXT("다음 판"), TEXT("siguiente partida"), TEXT("partie suivante"), TEXT("prossima partita"), TEXT("nächste Runde"),
+		TEXT("próxima partida"), TEXT("следующий матч"), TEXT("sonraki maç"), TEXT("الجولة التالية") } },
+	// RuleDraw1
+	{ { TEXT("he wakes when his dream is traced."), TEXT("夢をなぞり終えると彼は目を覚ます。"), TEXT("他描完夢就會醒。"), TEXT("他描完梦就会醒。"),
+		TEXT("꿈을 다 따라 그리면 그는 깨어난다."), TEXT("despierta cuando termina de trazar su sueño."), TEXT("il se réveille quand son rêve est tracé."), TEXT("si sveglia quando il sogno è tracciato."), TEXT("er erwacht, wenn sein Traum nachgezogen ist."),
+		TEXT("ele acorda quando o sonho é traçado."), TEXT("он проснётся, когда обведёт свой сон."), TEXT("rüyasını çizip bitirince uyanır."), TEXT("يستيقظ عندما يكمل تتبع حلمه.") } },
+	// RuleDraw2
+	{ { TEXT("works he cannot name become real tattoos."), TEXT("見抜けなかった絵は本物の刺青になる。"), TEXT("他認不出的畫會變成真刺青。"), TEXT("他认不出的画会变成真刺青。"),
+		TEXT("그가 못 맞힌 그림은 진짜 문신이 된다."), TEXT("las obras que no acierte serán tatuajes reales."), TEXT("les œuvres qu’il n’identifie pas deviennent de vrais tatouages."), TEXT("le opere che non indovina diventano tatuaggi veri."), TEXT("Werke, die er nicht errät, werden echte Tattoos."),
+		TEXT("as obras que ele não acertar viram tatuagens reais."), TEXT("работы, автора которых он не угадает, станут настоящими."), TEXT("bilemediği eserler gerçek dövme olur."), TEXT("الأعمال التي لا يعرف صاحبها تصبح وشما حقيقيا.") } },
+	// RuleDream1
+	{ { TEXT("trace to the end to wake up."), TEXT("最後までなぞれば目が覚める。"), TEXT("描到底就會醒來。"), TEXT("描到底就会醒来。"),
+		TEXT("끝까지 따라 그리면 깨어난다."), TEXT("traza hasta el final para despertar."), TEXT("trace jusqu’au bout pour te réveiller."), TEXT("traccia fino in fondo per svegliarti."), TEXT("zieh bis zum Ende nach, um aufzuwachen."),
+		TEXT("trace até o fim para acordar."), TEXT("доведи линию до конца, чтобы проснуться."), TEXT("uyanmak için sonuna kadar çiz."), TEXT("تتبع حتى النهاية لتستيقظ.") } },
+	// RuleDream2
+	{ { TEXT("leave the line and you start over."), TEXT("線を外れたらやり直し。"), TEXT("描出線就要重來。"), TEXT("描出线就要重来。"),
+		TEXT("선을 벗어나면 처음부터 다시."), TEXT("si te sales de la línea, vuelves a empezar."), TEXT("si tu sors de la ligne, tu recommences."), TEXT("se esci dalla linea, ricominci."), TEXT("verlässt du die Linie, fängst du von vorn an."),
+		TEXT("se sair da linha, recomeça."), TEXT("сойдёшь с линии — начнёшь заново."), TEXT("çizgiden çıkarsan baştan başlarsın."), TEXT("إذا خرجت عن الخط تبدأ من جديد.") } },
+	// RuleAccuse1
+	{ { TEXT("name the artist of each work."), TEXT("一枚ずつ彫った奴を当てる。"), TEXT("逐幅指認作者。"), TEXT("逐幅指认作者。"),
+		TEXT("작품마다 새긴 자를 맞힌다."), TEXT("acierta el autor de cada obra."), TEXT("devine l’auteur de chaque œuvre."), TEXT("indovina l’autore di ogni opera."), TEXT("errate den Urheber jedes Werks."),
+		TEXT("acerte o autor de cada obra."), TEXT("угадай автора каждой работы."), TEXT("her eserin sahibini bil."), TEXT("خمن صاحب كل عمل.") } },
+	// RuleAccuse2
+	{ { TEXT("guess wrong and it stays on you forever."), TEXT("外せばその絵は一生残る。"), TEXT("猜錯那幅就永遠留在身上。"), TEXT("猜错那幅就永远留在身上。"),
+		TEXT("틀리면 그 그림은 평생 남는다."), TEXT("si fallas, se queda contigo para siempre."), TEXT("si tu te trompes, elle reste à jamais."), TEXT("se sbagli, resta per sempre."), TEXT("rätst du falsch, bleibt es für immer."),
+		TEXT("se errar, fica para sempre."), TEXT("ошибёшься — останется навсегда."), TEXT("yanılırsan sonsuza dek kalır."), TEXT("إذا أخطأت تبقى إلى الأبد.") } },
+	// BannerCorrect
+	{ { TEXT("CORRECT!"), TEXT("的中！"), TEXT("猜對了！"), TEXT("猜对了！"),
+		TEXT("정답!"), TEXT("¡ACIERTO!"), TEXT("TROUVÉ !"), TEXT("INDOVINATO!"), TEXT("RICHTIG!"),
+		TEXT("ACERTOU!"), TEXT("УГАДАЛ!"), TEXT("BİLDİ!"), TEXT("إصابة!") } },
+	// BannerWrong
+	{ { TEXT("WRONG!"), TEXT("外れ！"), TEXT("猜錯了！"), TEXT("猜错了！"),
+		TEXT("오답!"), TEXT("¡FALLO!"), TEXT("RATÉ !"), TEXT("SBAGLIATO!"), TEXT("FALSCH!"),
+		TEXT("ERROU!"), TEXT("МИМО!"), TEXT("YANLIŞ!"), TEXT("خطأ!") } },
+	// BannerOutCold
+	{ { TEXT("OUT COLD"), TEXT("昏倒"), TEXT("昏死"), TEXT("昏死"),
+		TEXT("기절"), TEXT("FUERA DE JUEGO"), TEXT("K.-O."), TEXT("STESO"), TEXT("AUSGEKNOCKT"),
+		TEXT("APAGOU"), TEXT("В ОТКЛЮЧКЕ"), TEXT("KENDİNDEN GEÇTİ"), TEXT("فاقد الوعي") } },
+	// ResCorrect
+	{ { TEXT("takes the seat"), TEXT("席を明け渡す"), TEXT("換他上座"), TEXT("换他上座"),
+		TEXT("자리를 넘긴다"), TEXT("cede el asiento"), TEXT("cède sa place"), TEXT("cede il posto"), TEXT("gibt den Platz ab"),
+		TEXT("cede o lugar"), TEXT("уступает место"), TEXT("yerini devreder"), TEXT("يتنازل عن المقعد") } },
+	// ResWrong
+	{ { TEXT("inks the picked work   ·   +1 cup"), TEXT("選ばれた絵が本物に   ·   罰杯 +1"), TEXT("那幅變成真刺青   ·   罰酒 +1"), TEXT("那幅变成真刺青   ·   罚酒 +1"),
+		TEXT("고른 그림이 진짜가 된다   ·   벌주 +1"), TEXT("la obra elegida se vuelve real   ·   +1 copa"), TEXT("l’œuvre choisie devient réelle   ·   +1 coupe"), TEXT("l’opera scelta diventa vera   ·   +1 coppa"), TEXT("das gewählte Werk wird echt   ·   +1 Becher"),
+		TEXT("a obra escolhida vira real   ·   +1 taça"), TEXT("выбранная работа станет настоящей   ·   +1 чарка"), TEXT("seçilen eser gerçek olur   ·   +1 kadeh"), TEXT("العمل المختار يصبح حقيقيا   ·   كأس +1") } },
+	// FinaleNote
+	{ { TEXT("cash is split   ·   ink locked forever"), TEXT("現金は山分け   ·   刺青は一生もの"), TEXT("現金瓜分   ·   刺青永久固定"), TEXT("现金瓜分   ·   刺青永久固定"),
+		TEXT("현금은 나눠 갖고   ·   문신은 평생"), TEXT("el dinero se reparte   ·   la tinta queda para siempre"), TEXT("l’argent est partagé   ·   l’encre reste à jamais"), TEXT("i soldi si dividono   ·   l’inchiostro resta per sempre"), TEXT("das Geld wird geteilt   ·   die Tinte bleibt für immer"),
+		TEXT("o dinheiro é dividido   ·   a tinta fica para sempre"), TEXT("деньги делят   ·   тушь остаётся навсегда"), TEXT("para paylaşılır   ·   mürekkep sonsuza dek kalır"), TEXT("يقسم المال   ·   ويبقى الحبر للأبد") } },
+	// LobbySeat
+	{ { TEXT("seat {0}"), TEXT("席 {0}"), TEXT("第 {0} 席"), TEXT("第 {0} 席"),
+		TEXT("{0}번 자리"), TEXT("asiento {0}"), TEXT("place {0}"), TEXT("posto {0}"), TEXT("Platz {0}"),
+		TEXT("lugar {0}"), TEXT("место {0}"), TEXT("koltuk {0}"), TEXT("مقعد {0}") } },
+	// LobbyHostTag
+	{ { TEXT("host"), TEXT("部屋主"), TEXT("房主"), TEXT("房主"),
+		TEXT("방장"), TEXT("anfitrión"), TEXT("hôte"), TEXT("host"), TEXT("Gastgeber"),
+		TEXT("anfitrião"), TEXT("хост"), TEXT("kurucu"), TEXT("المضيف") } },
+	// PostInk
+	{ { TEXT("your ink:  {0} carbon  ·  {1} permanent"), TEXT("彫り物：カーボン {0}  ·  本彫り {1}"), TEXT("你的刺青：碳黑 {0}  ·  永久 {1}"), TEXT("你的刺青：碳黑 {0}  ·  永久 {1}"),
+		TEXT("네 문신: 카본 {0}  ·  영구 {1}"), TEXT("tu tinta:  {0} carbón  ·  {1} permanente"), TEXT("ton encre :  {0} carbone  ·  {1} permanent"), TEXT("il tuo inchiostro:  {0} carbone  ·  {1} permanente"), TEXT("deine Tinte:  {0} Kohle  ·  {1} dauerhaft"),
+		TEXT("sua tinta:  {0} carbono  ·  {1} permanente"), TEXT("твоя тушь:  {0} уголь  ·  {1} навсегда"), TEXT("mürekkebin:  {0} karbon  ·  {1} kalıcı"), TEXT("حبرك:  {0} كربون  ·  {1} دائم") } },
+	// MenuTitle
+	{ { TEXT("MENU"), TEXT("メニュー"), TEXT("選單"), TEXT("菜单"),
+		TEXT("메뉴"), TEXT("MENÚ"), TEXT("MENU"), TEXT("MENU"), TEXT("MENÜ"),
+		TEXT("MENU"), TEXT("МЕНЮ"), TEXT("MENÜ"), TEXT("القائمة") } },
+	// MenuResume
+	{ { TEXT("resume"), TEXT("戻る"), TEXT("繼續"), TEXT("继续"),
+		TEXT("계속하기"), TEXT("continuar"), TEXT("reprendre"), TEXT("riprendi"), TEXT("fortsetzen"),
+		TEXT("continuar"), TEXT("продолжить"), TEXT("devam et"), TEXT("استئناف") } },
+	// MenuLeave
+	{ { TEXT("leave the room"), TEXT("部屋を出る"), TEXT("離開房間"), TEXT("离开房间"),
+		TEXT("방 나가기"), TEXT("salir de la sala"), TEXT("quitter la salle"), TEXT("esci dalla sala"), TEXT("Raum verlassen"),
+		TEXT("sair da sala"), TEXT("выйти из комнаты"), TEXT("odadan çık"), TEXT("غادر الغرفة") } },
+	// MenuPlayers
+	{ { TEXT("players"), TEXT("参加者"), TEXT("玩家"), TEXT("玩家"),
+		TEXT("참가자"), TEXT("jugadores"), TEXT("joueurs"), TEXT("giocatori"), TEXT("Spieler"),
+		TEXT("jogadores"), TEXT("игроки"), TEXT("oyuncular"), TEXT("اللاعبون") } },
+	// MenuKick
+	{ { TEXT("kick"), TEXT("追い出す"), TEXT("踢出"), TEXT("踢出"),
+		TEXT("내보내기"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
+		TEXT("expulsar"), TEXT("выгнать"), TEXT("at"), TEXT("اطرد") } },
+	// MenuSensitivity
+	{ { TEXT("mouse sensitivity"), TEXT("マウス感度"), TEXT("滑鼠靈敏度"), TEXT("鼠标灵敏度"),
+		TEXT("마우스 감도"), TEXT("sensibilidad del ratón"), TEXT("sensibilité de la souris"), TEXT("sensibilità del mouse"), TEXT("Mausempfindlichkeit"),
+		TEXT("sensibilidade do mouse"), TEXT("чувствительность мыши"), TEXT("fare hassasiyeti"), TEXT("حساسية الفأرة") } },
+	// MenuVolume
+	{ { TEXT("master volume"), TEXT("全体音量"), TEXT("總音量"), TEXT("总音量"),
+		TEXT("전체 음량"), TEXT("volumen general"), TEXT("volume général"), TEXT("volume generale"), TEXT("Gesamtlautstärke"),
+		TEXT("volume geral"), TEXT("общая громкость"), TEXT("ana ses"), TEXT("مستوى الصوت") } },
+	// TrapTitle
+	{ { TEXT("HE STEPPED ON YOU"), TEXT("踏まれた"), TEXT("他踩到你了"), TEXT("他踩到你了"),
+		TEXT("밟혔다"), TEXT("TE HA PISADO"), TEXT("IL T’A MARCHÉ DESSUS"), TEXT("TI HA CALPESTATO"), TEXT("ER IST AUF DICH GETRETEN"),
+		TEXT("ELE PISOU EM VOCÊ"), TEXT("ОН НАСТУПИЛ НА ТЕБЯ"), TEXT("ÜSTÜNE BASTI"), TEXT("لقد داس عليك") } },
+	// TrapSpin
+	{ { TEXT("SPIN HIS DREAM"), TEXT("夢を回せ"), TEXT("攪亂他的夢"), TEXT("搅乱他的梦"),
+		TEXT("그의 꿈을 흔들어라"), TEXT("REVUELVE SU SUEÑO"), TEXT("BROUILLE SON RÊVE"), TEXT("STRAVOLGI IL SUO SOGNO"), TEXT("VERDREH SEINEN TRAUM"),
+		TEXT("EMBARALHE O SONHO DELE"), TEXT("ЗАКРУТИ ЕГО СОН"), TEXT("RÜYASINI KARIŞTIR"), TEXT("اعبث بحلمه") } },
+	// TrapHint
+	{ { TEXT("scroll wheel   ·   locks in {0}s"), TEXT("ホイールを回せ   ·   あと {0} 秒"), TEXT("滾動滾輪   ·   {0} 秒後定案"), TEXT("滚动滚轮   ·   {0} 秒后定案"),
+		TEXT("휠을 굴려라   ·   {0}초 후 확정"), TEXT("rueda del ratón   ·   se fija en {0}s"), TEXT("molette   ·   verrouillé dans {0}s"), TEXT("rotella   ·   si blocca tra {0}s"), TEXT("Mausrad   ·   fixiert in {0}s"),
+		TEXT("roda do mouse   ·   trava em {0}s"), TEXT("колесо мыши   ·   зафиксируется через {0}с"), TEXT("tekerlek   ·   {0}sn sonra kilitlenir"), TEXT("عجلة الفأرة   ·   تثبت خلال {0} ثانية") } },
+	// DreamShake
+	{ { TEXT("{0} SHAKES YOUR DREAM !"), TEXT("{0} が夢を揺らす！"), TEXT("{0} 在搖你的夢！"), TEXT("{0} 在摇你的梦！"),
+		TEXT("{0} 이(가) 꿈을 흔든다!"), TEXT("¡{0} SACUDE TU SUEÑO!"), TEXT("{0} SECOUE TON RÊVE !"), TEXT("{0} SCUOTE IL TUO SOGNO!"), TEXT("{0} SCHÜTTELT DEINEN TRAUM!"),
+		TEXT("{0} SACODE SEU SONHO!"), TEXT("{0} ТРЯСЁТ ТВОЙ СОН!"), TEXT("{0} RÜYANI SARSIYOR!"), TEXT("{0} يهز حلمك!") } },
+	// DreamSlipped
+	{ { TEXT("SLIPPED — BACK TO THE START"), TEXT("はみ出した — 最初から"), TEXT("描出線 — 從頭來過"), TEXT("描出线 — 从头来过"),
+		TEXT("선을 벗어났다 — 처음부터"), TEXT("TE SALISTE — VUELTA AL INICIO"), TEXT("TU AS DÉRAPÉ — ON RECOMMENCE"), TEXT("SEI USCITO — SI RICOMINCIA"), TEXT("ABGERUTSCHT — VON VORN"),
+		TEXT("SAIU DA LINHA — DO COMEÇO"), TEXT("СОРВАЛСЯ — СНАЧАЛА"), TEXT("ÇİZGİDEN ÇIKTIN — BAŞTAN"), TEXT("انحرفت — من البداية") } },
+	// DreamTrapped
+	{ { TEXT("TRAPPED BY {0} !"), TEXT("{0} の罠だ！"), TEXT("中了 {0} 的陷阱！"), TEXT("中了 {0} 的陷阱！"),
+		TEXT("{0} 의 함정이다!"), TEXT("¡TRAMPA DE {0}!"), TEXT("PIÈGE DE {0} !"), TEXT("TRAPPOLA DI {0}!"), TEXT("FALLE VON {0}!"),
+		TEXT("ARMADILHA DE {0}!"), TEXT("ЛОВУШКА {0}!"), TEXT("{0} SENİ TUZAĞA DÜŞÜRDÜ!"), TEXT("فخ من {0}!") } },
+	// DreamReels
+	{ { TEXT("the dream reels..."), TEXT("夢が揺れる…"), TEXT("夢在晃…"), TEXT("梦在晃…"),
+		TEXT("꿈이 흔들린다…"), TEXT("el sueño se tambalea..."), TEXT("le rêve vacille..."), TEXT("il sogno vacilla..."), TEXT("der Traum taumelt …"),
+		TEXT("o sonho balança..."), TEXT("сон качается…"), TEXT("rüya sallanıyor..."), TEXT("الحلم يترنح...") } },
+	// DreamCash
+	{ { TEXT("the room helps itself to your cash..."), TEXT("身ぐるみ剥がされていく…"), TEXT("大家正在分你的錢…"), TEXT("大家正在分你的钱…"),
+		TEXT("네 돈이 나눠지고 있다…"), TEXT("se reparten tu dinero..."), TEXT("on se partage ton argent..."), TEXT("si stanno dividendo i tuoi soldi..."), TEXT("dein Geld wird verteilt …"),
+		TEXT("estão dividindo seu dinheiro..."), TEXT("твои деньги делят…"), TEXT("paranı paylaşıyorlar..."), TEXT("يقتسمون مالك...") } },
+	// PoseFaceUp
+	{ { TEXT("POSE — FACE UP"), TEXT("仰向け"), TEXT("姿勢 — 仰躺"), TEXT("姿势 — 仰躺"),
+		TEXT("자세 — 위를 보고"), TEXT("POSTURA — BOCA ARRIBA"), TEXT("POSE — SUR LE DOS"), TEXT("POSA — SUPINO"), TEXT("HALTUNG — RÜCKENLAGE"),
+		TEXT("POSE — DE COSTAS"), TEXT("ПОЗА — НА СПИНЕ"), TEXT("DURUŞ — SIRT ÜSTÜ"), TEXT("الوضع — على الظهر") } },
+	// PoseFaceDown
+	{ { TEXT("POSE — FACE DOWN"), TEXT("うつ伏せ"), TEXT("姿勢 — 趴臥"), TEXT("姿势 — 趴卧"),
+		TEXT("자세 — 엎드려"), TEXT("POSTURA — BOCA ABAJO"), TEXT("POSE — SUR LE VENTRE"), TEXT("POSA — PRONO"), TEXT("HALTUNG — BAUCHLAGE"),
+		TEXT("POSE — DE BRUÇOS"), TEXT("ПОЗА — НА ЖИВОТЕ"), TEXT("DURUŞ — YÜZ ÜSTÜ"), TEXT("الوضع — على البطن") } },
+	// DreamProgress
+	{ { TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"),
+		TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"),
+		TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%"), TEXT("{0}%") } },
+	// AccuseWork
+	{ { TEXT("work {0} / {1}"), TEXT("作品 {0} / {1}"), TEXT("第 {0} / {1} 幅"), TEXT("第 {0} / {1} 幅"),
+		TEXT("작품 {0} / {1}"), TEXT("obra {0} / {1}"), TEXT("œuvre {0} / {1}"), TEXT("opera {0} / {1}"), TEXT("Werk {0} / {1}"),
+		TEXT("obra {0} / {1}"), TEXT("работа {0} / {1}"), TEXT("eser {0} / {1}"), TEXT("العمل {0} / {1}") } },
 	};
 
 	// 表的大小寫在兩個地方必有一邊會舊：改成推導長度＋編譯期對賬。

@@ -18,12 +18,16 @@ import sys
 HUD = os.path.join(os.path.dirname(__file__), "..", "..",
                    "Source", "NiceInk", "Private", "NiceInkHUD.cpp")
 
-# 作畫相位的畫面：本批已全數進 NiceInkLocText，之後不准退步
-GUARDED = {
-    "DrawInkChip", "DrawInkTray", "DrawInkCup",
-    "DrawInkCrosshair", "DrawTopBar", "GetPhaseLabel", "DrawHUD",
-    "DrawControlStrip", "DrawKeycap",
+# 2026-09-04：守備範圍從「作畫相位九個函式」擴到**全檔**（user：整個遊戲的 UI）。
+# 現在是明列豁免制——豁免要有理由，而且理由必須可查證（不是「還沒做」）。
+EXEMPT = {
+    # 開發者遙測：由 ni.DebugHud 關著，出貨畫面看不到
+    "DrawDebugPanel": "dev-only（CVarNiDebugHud 預設 0）",
+    # 噴射／拳腳＝SPEC #51 已移出核心循環，GNiceInkSprayEnabled/KickEnabled 恆 false
+    # ⇒ 這兩處是封存的死碼；功能回歸時要連同字串一起進表。
+    "DrawBlindOverlay": "噴射封存（GNiceInkSprayEnabled=false）",
 }
+GUARDED = "<全檔，見 EXEMPT>"
 
 # 刻意不進字串表的字面量，每一條都要有理由
 ALLOW = {
@@ -49,6 +53,11 @@ ALLOW = {
     "SerifBlack": "字體 typeface 名",
     "NiUiFont": "字體物件名",
     "ni.DebugHud": "console 變數名",
+    # 噴射封存（SPEC #51）：DrawVictimSleepUI 內的死碼分支，功能回歸時要進表
+    "Q spray from %s  ·  E kick  ·  arrows aim": "噴射封存",
+    "Q spray from %s (1/2/3)  ·  arrow keys aim": "噴射封存",
+    # 醉夢迷宮＝v4.0 已由描圖取代、元件保留永不啟動（IsMazeActive 恆 false）
+    "hold LMB — walk out of the dream to wake": "迷宮封存（v4.0 退役）",
 }
 
 CALL_RE = re.compile(
@@ -75,7 +84,7 @@ def main():
                 continue
             line = line0 + body[:m.start()].count("\n")
             rec = (name, line, lit[:64])
-            (violations if name in GUARDED else backlog).append(rec)
+            (backlog if name in EXEMPT else violations).append(rec)
 
     if violations:
         print("FAIL  作畫相位出現裸英文字面量（必須進 NiceInkLocText）：")
@@ -85,8 +94,8 @@ def main():
         print("修法：在 ENiLocKey 加一個鍵、在 GTable 加一列 13 語，改用 NiLoc::T()。")
         print("（表的列數有 static_assert 對賬，少一列會編譯失敗。）")
 
-    print("guarded=%d functions   violations=%d   backlog(其餘相位, 已記帳)=%d"
-          % (len(GUARDED), len(violations), len(backlog)))
+    print("守備=全檔   violations=%d   豁免命中=%d（%s）"
+          % (len(violations), len(backlog), ", ".join(sorted(EXEMPT))))
     if backlog:
         seen = {}
         for name, _, _ in backlog:

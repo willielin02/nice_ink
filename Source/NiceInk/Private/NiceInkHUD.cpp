@@ -170,6 +170,10 @@ void ANiceInkHUD::EnsureUiAssets()
 	IconTrap   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Trap.T_UI_Trap"));
 	IconSleep  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Sleep.T_UI_Sleep"));
 	IconNose   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Nose.T_UI_Nose"));
+	InMouseLeft   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseLeft.T_InMouseLeft"));
+	InMouseRight  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseRight.T_InMouseRight"));
+	InMouseScroll = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseScroll.T_InMouseScroll"));
+	InMouseMove   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseMove.T_InMouseMove"));
 	PenSprite  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
 	MarkerSprite = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_MarkerPen.T_UI_MarkerPen"));
 
@@ -391,7 +395,20 @@ void ANiceInkHUD::DrawPanelBox(float X, float Y, float W, float H, float Alpha)
 	// 圓角半透墨面單塊——一次繪製無疊蓋＝無接縫
 	FLinearColor C = NiHudColor::Ink;
 	C.A = Alpha;
-	DrawRoundedBox(X, Y, W, H, 14.0f * UiScale, C);
+	DrawRoundedBox(X, Y, W, H, 12.0f * UiScale, C);  // 與選單控制項同一階
+}
+
+void ANiceInkHUD::DrawIconRect(UTexture2D* Tex, float X, float Y, float W, float H, const FLinearColor& Tint)
+{
+	if (!Canvas || !Tex)
+	{
+		return;
+	}
+	X = FlipXW(X, W);
+	FLinearColor T = Tint;
+	T.A *= ChromeAlphaMul;
+	Canvas->K2_DrawTexture(Tex, FVector2D(X, Y), FVector2D(W, H),
+		FVector2D::ZeroVector, FVector2D::UnitVector, T, BLEND_Translucent);
 }
 
 UTexture2D* ANiceInkHUD::GetFaceIcon(int32 AvatarIdx)
@@ -694,6 +711,8 @@ void ANiceInkHUD::DrawHUD()
 	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
 		DrawVictimSleepUI(MyChar, GS, MyPS);
+		DrawControlStrip(GS, MyChar);
+		DrawRulesBlock(GS, MyChar, true);
 		DrawTrapDial(MyChar);
 		DrawSystemMenu(MyChar);
 		DrawDebugPanel(GS, MyPS, MyChar);
@@ -706,7 +725,7 @@ void ANiceInkHUD::DrawHUD()
 	if (MyChar && MyChar->IsFeigningSleep())
 	{
 		DrawRect(FLinearColor(0.01f, 0.01f, 0.015f, 1.0f), 0.0f, 0.0f, Canvas->ClipX, Canvas->ClipY);
-		DrawBottomHint(NiLoc::T(this, ENiLocKey::HudFeignSleep), NiHudColor::PaperDim);
+		DrawControlStrip(GS, MyChar);
 		DrawTrapDial(MyChar);
 		DrawSystemMenu(MyChar);
 		DrawDebugPanel(GS, MyPS, MyChar);
@@ -811,105 +830,159 @@ void ANiceInkHUD::DrawHUD()
 	}
 
 	DrawInkCrosshair(GS);
-	DrawControlStrip(GS, MyChar); // 常駐操作列（右緣鍵帽縱列；隨狀態增減）
+	DrawControlStrip(GS, MyChar); // 常駐操作列（右緣；glyph 上／動詞下、共用右緣）
+	DrawRulesBlock(GS, MyChar, bIsVictim); // 右下角：這個相位怎麼贏
 	DrawDebugPanel(GS, MyPS, MyChar);
 }
 
 void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerState* MyPS, ANiceInkCharacter* MyChar)
 {
-	if (!GS)
+	if (!GS || !Canvas)
 	{
 		return;
 	}
-	// 落筆時整條 chrome 淡出（畫面清單 2026-09-02）：橫幅與現金是「兩筆之間」
-	// 的資訊，按住左鍵的那幾秒它們只是視野邊緣的亮塊。
+	// 落筆時整條 chrome 淡出：橫幅與現金是「兩筆之間」的資訊。
 	const bool bInking = MyChar && MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal();
 	TGuardValue<float> ChromeDim(ChromeAlphaMul, bInking ? 0.35f : 1.0f);
 
 	const float W = Canvas->ClipX;
-	const float M = 22.0f * UiScale;
+	const float M = NiUi::Margin * UiScale;
+	const float Gap = NiUi::GapS * UiScale;
 
-	// 相位（頂部置中）＋可選倒數
-	FString PhaseText = GetPhaseLabel(GS->CurrentPhase);
+	// **無面板**（2026-09-04 照抄 Meccha）：他們局內一塊面板都沒有，對比靠文字陰影
+	// （bTokShadows 本專案本來就開著）。此前這裡是 Ink α0.55 的圓角面板，而
+	// 全站 alpha 有七種、沒有規則——面板拆掉，那個問題就不存在了。
+	// 版面＝倒數（大數字）→ 祈使句 → 受害者，三行共用畫面中線。
+	float Y = M;
 	const float Remaining = GS->GetPhaseTimeRemaining();
 	if (Remaining > 0.0f)
 	{
-		PhaseText += FString::Printf(TEXT("  ·  %.0fs"), Remaining);
+		const FString Count = FString::FromInt(FMath::CeilToInt(Remaining));
+		Y += DrawTok(Count, W * 0.5f, Y, ETextTier::Display, NiHudColor::Paper,
+			EHAlign::Center, true).Y + Gap;
 	}
 
-	// 副行：回合中＝受害者臉像＋狀態＋罰酒（臉制 SPEC #52：名字→臉）；
-	// 巡禮＝進度；指認（旁觀）＝等待中
-	FString SubText;
-	int32 SubCups = -1;
-	const APlayerState* SubFacePS = nullptr;
-	const APlayerState* VictimPS = GS->FindPlayerStateById(GS->VictimPlayerId);
-	const ANiceInkPlayerState* VictimNIPS = Cast<ANiceInkPlayerState>(VictimPS);
-	switch (GS->CurrentPhase)
+	const ANiceInkPlayerState* VictimNIPS =
+		Cast<ANiceInkPlayerState>(GS->FindPlayerStateById(GS->VictimPlayerId));
+	const bool bIsVictim = MyPS && GS->VictimPlayerId == MyPS->GetPlayerId();
+	const FString Imp = GetPhaseImperative(GS, MyChar, bIsVictim);
+	if (!Imp.IsEmpty())
 	{
-	case ENiceInkPhase::Drawing:
-		if (VictimPS)
-		{
-			// v4.0e：臉像＋名字並列（辨識雙載體）
-			SubText = NiLoc::TFmt(this, ENiLocKey::SubjectAsleep,
-				FitTok(VictimPS->GetPlayerName(), ETextTier::Body, 240.0f * UiScale));
-			SubFacePS = VictimPS;
-			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
-		}
-		break;
-	case ENiceInkPhase::Tour:
-		SubText = FString::Printf(TEXT("work %d / %d"), GS->TourWorkNumber, GS->TourWorkCount);
-		break;
-	case ENiceInkPhase::Accusation:
-		if (VictimPS)
-		{
-			SubText = FString::Printf(TEXT("%s is choosing..."),
-				*FitTok(VictimPS->GetPlayerName(), ETextTier::Body, 240.0f * UiScale));
-			SubFacePS = VictimPS;
-			SubCups = VictimNIPS ? VictimNIPS->PenaltyCups : 0;
-		}
-		break;
-	default:
-		break;
+		Y += DrawTok(Imp, W * 0.5f, Y, ETextTier::Body, NiHudColor::Paper,
+			EHAlign::Center, false).Y + NiUi::GapM * UiScale;
 	}
 
-	const FVector2D PhaseSize = MeasureTok(PhaseText, ETextTier::Title, true);
-	const FVector2D SubSize = SubText.IsEmpty() ? FVector2D::ZeroVector : MeasureTok(SubText, ETextTier::Body, false);
-	const float CupSize = 22.0f * UiScale;
-	const float FaceSize = 24.0f * UiScale;
-	const float FaceW = SubFacePS ? FaceSize + 8.0f * UiScale : 0.0f;
-	const float CupsW = (SubCups >= 0) ? (CupSize * 1.18f * 2.0f + CupSize + 12.0f * UiScale) : 0.0f;
-	const float PanelW = FMath::Max(PhaseSize.X, FaceW + SubSize.X + CupsW) + 60.0f * UiScale;
-	const float PanelH = PhaseSize.Y + (SubText.IsEmpty() ? 0.0f : FMath::Max(SubSize.Y, FaceSize) + 6.0f * UiScale) + 22.0f * UiScale;
-	DrawPanelBox(W * 0.5f - PanelW * 0.5f, M * 0.5f, PanelW, PanelH, 0.55f);
-
-	float Y = M * 0.5f + 10.0f * UiScale;
-	DrawTok(PhaseText, W * 0.5f, Y, ETextTier::Title, NiHudColor::Paper, EHAlign::Center, true);
-	Y += PhaseSize.Y + 6.0f * UiScale;
-	if (!SubText.IsEmpty())
+	// 受害者＝這一相位的賭注：臉＋名字＋罰酒杯，跟著上緣走
+	const bool bShowVictim = VictimNIPS && !bIsVictim &&
+		(GS->CurrentPhase == ENiceInkPhase::Drawing ||
+		 GS->CurrentPhase == ENiceInkPhase::Tour ||
+		 GS->CurrentPhase == ENiceInkPhase::Accusation);
+	if (bShowVictim)
 	{
-		const float RowW = FaceW + SubSize.X + CupsW;
-		float TextX = W * 0.5f - RowW * 0.5f;
-		if (SubFacePS)
-		{
-			DrawFaceTok(SubFacePS, TextX, Y + (SubSize.Y - FaceSize) * 0.5f, FaceSize);
-			TextX += FaceW;
-		}
-		DrawTok(SubText, TextX, Y, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Left, false);
-		if (SubCups >= 0)
-		{
-			DrawCupsRow(TextX + SubSize.X + 12.0f * UiScale, Y + (SubSize.Y - CupSize) * 0.5f, CupSize, SubCups);
-		}
+		const float FaceSize = 6.0f * NiUi::U * UiScale;   // 24
+		const float CupSize  = 5.0f * NiUi::U * UiScale;   // 20
+		const FString Name = FitTok(VictimNIPS->GetPlayerName(), ETextTier::Small,
+			60.0f * NiUi::U * UiScale);
+		const FVector2D NameSize = MeasureTok(Name, ETextTier::Small, false);
+		const float CupsW = CupSize * 1.18f * 2.0f + CupSize;
+		const float RowW = FaceSize + Gap + NameSize.X + NiUi::GapM * UiScale + CupsW;
+		float X = W * 0.5f - RowW * 0.5f;
+		DrawFaceTok(VictimNIPS, X, Y, FaceSize);
+		X += FaceSize + Gap;
+		DrawTok(Name, X, Y + (FaceSize - NameSize.Y) * 0.5f, ETextTier::Small,
+			NiHudColor::PaperDim, EHAlign::Left, false);
+		X += NameSize.X + NiUi::GapM * UiScale;
+		DrawCupsRow(X, Y + (FaceSize - CupSize) * 0.5f, CupSize, VictimNIPS->PenaltyCups);
 	}
 
-	// 現金（右上）
+	// 現金（右上；與四邊共用同一個邊距）
 	if (MyPS)
 	{
-		const float CashIcon = 22.0f * UiScale;
-		const FString CashText = FText::AsNumber(MyPS->Cash).ToString();
+		const float CashIcon = 5.0f * NiUi::U * UiScale;  // 20
 		DrawIconTok(IconCash, W - M - CashIcon, M, CashIcon, NiHudColor::Amber);
-		DrawTok(CashText, W - M - CashIcon - 8.0f * UiScale, M + 2.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Right, true);
+		DrawTok(FText::AsNumber(MyPS->Cash).ToString(), W - M - CashIcon - Gap, M,
+			ETextTier::Body, NiHudColor::Paper, EHAlign::Right, true);
 	}
 }
+
+FString ANiceInkHUD::GetPhaseImperative(const ANiceInkGameState* GS,
+	ANiceInkCharacter* MyChar, bool bIsVictim) const
+{
+	// **每個相位一句「現在該做什麼」**（Meccha 的上緣＝沙漏＋數字＋祈使句）。
+	// 我們此前上緣只有相位**名詞**（GALLERY TOUR）——名詞說明不了要做什麼。
+	if (!GS)
+	{
+		return FString();
+	}
+	if (MyChar)
+	{
+		if (MyChar->bAsleep && !MyChar->bEyesOpen) { return NiLoc::T(this, ENiLocKey::ImpDream); }
+		if (MyChar->IsFeigningSleep())             { return NiLoc::T(this, ENiLocKey::ImpFeign); }
+	}
+	switch (GS->CurrentPhase)
+	{
+	case ENiceInkPhase::Lobby:
+		return NiLoc::T(this, (GetWorld() && GetWorld()->GetNetMode() != NM_Client)
+			? ENiLocKey::ImpLobbyHost : ENiLocKey::ImpLobbyWait);
+	case ENiceInkPhase::BottleSpin: return NiLoc::T(this, ENiLocKey::ImpBottleSpin);
+	case ENiceInkPhase::Seating:    return NiLoc::T(this, ENiLocKey::ImpSeating);
+	case ENiceInkPhase::Drawing:
+		if (bIsVictim) { return FString(); }   // 受害者在這一相位無事可做
+		return NiLoc::T(this, (MyChar && MyChar->bLeanLocked)
+			? ENiLocKey::ImpDrawLocked : ENiLocKey::ImpDrawStand);
+	case ENiceInkPhase::Tour:       return NiLoc::T(this, ENiLocKey::ImpTour);
+	case ENiceInkPhase::Accusation:
+		return NiLoc::T(this, bIsVictim ? ENiLocKey::ImpAccuseVictim : ENiLocKey::ImpAccuseOther);
+	case ENiceInkPhase::PostGame:   return NiLoc::T(this, ENiLocKey::ImpPostGame);
+	default: return FString();     // Resolution／Finale＝演出自己會說話
+	}
+}
+
+void ANiceInkHUD::DrawRulesBlock(const ANiceInkGameState* GS,
+	ANiceInkCharacter* MyChar, bool bIsVictim)
+{
+	// **右下角常駐規則塊**（照抄 Meccha：模式名＋兩行「怎麼贏」）。
+	// 教「按哪顆鍵」與教「怎麼玩」是兩件事：兩個區塊、兩種顏色、兩個字級。
+	// 我們此前完全沒有這個東西——玩家無處得知猜錯會怎樣。
+	if (!GS || !Canvas)
+	{
+		return;
+	}
+	ENiLocKey Title = ENiLocKey::COUNT, L1 = ENiLocKey::COUNT, L2 = ENiLocKey::COUNT;
+	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
+	{
+		Title = ENiLocKey::PhaseDream; L1 = ENiLocKey::RuleDream1; L2 = ENiLocKey::RuleDream2;
+	}
+	else if (GS->CurrentPhase == ENiceInkPhase::Drawing)
+	{
+		Title = ENiLocKey::PhaseDrawing; L1 = ENiLocKey::RuleDraw1; L2 = ENiLocKey::RuleDraw2;
+	}
+	else if (GS->CurrentPhase == ENiceInkPhase::Tour ||
+			 GS->CurrentPhase == ENiceInkPhase::Accusation)
+	{
+		Title = ENiLocKey::PhaseAccusation; L1 = ENiLocKey::RuleAccuse1; L2 = ENiLocKey::RuleAccuse2;
+	}
+	else
+	{
+		return;
+	}
+	const bool bInking = MyChar && MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal();
+	TGuardValue<float> ChromeDim(ChromeAlphaMul, bInking ? 0.25f : 1.0f);
+
+	const float M = NiUi::Margin * UiScale;
+	const float Gap = NiUi::GapS * UiScale;
+	const float RightX = Canvas->ClipX - M;
+	const FVector2D L2Size = MeasureTok(NiLoc::T(this, L2), ETextTier::Small, false);
+	const FVector2D L1Size = MeasureTok(NiLoc::T(this, L1), ETextTier::Small, false);
+	const FVector2D TSize  = MeasureTok(NiLoc::T(this, Title), ETextTier::Title, true);
+	float Y = Canvas->ClipY - M - L2Size.Y;
+	DrawTok(NiLoc::T(this, L2), RightX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Right, false);
+	Y -= L1Size.Y + Gap;
+	DrawTok(NiLoc::T(this, L1), RightX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Right, false);
+	Y -= TSize.Y + Gap;
+	DrawTok(NiLoc::T(this, Title), RightX, Y, ETextTier::Title, NiHudColor::Green, EHAlign::Right, true);
+}
+
 
 void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 {
@@ -925,7 +998,7 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 		// 臉制（SPEC #52）：揭曉＝真作者的臉放大登場——全戲最重的一拍給臉
 		const bool bCorrect = GS->LastAccusationResult == ENiceInkAccusationResult::Correct;
 		const APlayerState* AuthorPS = GS->FindPlayerStateById(GS->RevealedAuthorId);
-		DrawTok(bCorrect ? TEXT("CORRECT!") : TEXT("WRONG!"),
+		DrawTok(NiLoc::T(this, bCorrect ? ENiLocKey::BannerCorrect : ENiLocKey::BannerWrong),
 			W * 0.5f, H * 0.26f, ETextTier::Display, bCorrect ? NiHudColor::Green : NiHudColor::Red, EHAlign::Center, true);
 		const float RevealFace = 96.0f * UiScale;
 		DrawFaceTok(AuthorPS, W * 0.5f - RevealFace * 0.5f, H * 0.26f + 56.0f * UiScale, RevealFace);
@@ -937,7 +1010,7 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 				W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 			RevealY += 22.0f * UiScale;
 		}
-		DrawTok(bCorrect ? TEXT("takes the seat") : TEXT("inks the picked work  ·  +1 cup"),
+		DrawTok(NiLoc::T(this, bCorrect ? ENiLocKey::ResCorrect : ENiLocKey::ResWrong),
 			W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
 	}
 
@@ -945,14 +1018,14 @@ void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 	{
 		if (const APlayerState* LoserPS = GS->FindPlayerStateById(GS->LoserPlayerId))
 		{
-			DrawTok(TEXT("OUT COLD"), W * 0.5f, H * 0.2f, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
+			DrawTok(NiLoc::T(this, ENiLocKey::BannerOutCold), W * 0.5f, H * 0.2f, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
 			const float LoserFace = 72.0f * UiScale;
 			DrawFaceTok(LoserPS, W * 0.5f - LoserFace * 0.5f, H * 0.2f + 52.0f * UiScale, LoserFace);
 			float LoserY = H * 0.2f + 52.0f * UiScale + LoserFace + 8.0f * UiScale;
 			DrawTok(FitTok(LoserPS->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
 				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 			LoserY += 22.0f * UiScale;
-			DrawTok(TEXT("cash is split  ·  ink locked forever"),
+			DrawTok(NiLoc::T(this, ENiLocKey::FinaleNote),
 				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
 		}
 	}
@@ -1033,7 +1106,7 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 		LineY += 32.0f * UiScale;
 		FLinearColor Div = NiHudColor::Paper;
 		Div.A = 0.12f;
-		DrawRoundedBox(X + 36.0f * UiScale, LineY, PanelW - 72.0f * UiScale, 2.0f * UiScale, 1.0f * UiScale, Div);
+		DrawRoundedBox(X + 36.0f * UiScale, LineY, PanelW - 72.0f * UiScale, 1.0f * UiScale, 1.0f * UiScale, Div);
 		LineY += 24.0f * UiScale;
 	}
 
@@ -1051,7 +1124,7 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 	{
 		// v4.0e：名列＝席位＋臉像＋名字＋現金（辨識雙載體）；名字＝量測截斷
 		//（.Left(14) 碼元截斷退役——CJK 全形名照樣撐爆版面的實錘修）
-		DrawTok(FString::Printf(TEXT("seat %d"), PS->SeatIndex + 1),
+		DrawTok(NiLoc::TFmt(this, ENiLocKey::LobbySeat, FString::FromInt(PS->SeatIndex + 1)),
 			CX - 150.0f * UiScale, LineY, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Left, false);
 		DrawFaceTok(PS, CX - 52.0f * UiScale, LineY - 2.0f * UiScale, RowH - 6.0f * UiScale);
 		const float NameBudget = (PS->bIsRoomHost ? 96.0f : 136.0f) * UiScale;
@@ -1060,7 +1133,7 @@ void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 		if (PS->bIsRoomHost)
 		{
 			// 房主標示（2026-08-13）：名字後綴酒金小字
-			DrawTok(TEXT("host"), CX - 12.0f * UiScale + NameSize.X + 8.0f * UiScale,
+			DrawTok(NiLoc::T(this, ENiLocKey::LobbyHostTag), CX - 12.0f * UiScale + NameSize.X + 8.0f * UiScale,
 				LineY + 3.0f * UiScale, ETextTier::Small, NiHudColor::Amber, EHAlign::Left, false);
 		}
 		DrawTok(FText::AsNumber(PS->Cash).ToString(), CX + 190.0f * UiScale, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Right, false);
@@ -1117,7 +1190,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 	Dim.A = 0.62f;
 	DrawRect(Dim, 0, 0, W, H);
 
-	DrawBigTitle(TEXT("MENU"), CX, H * 0.22f, 44.0f, NiHudColor::Paper);
+	DrawBigTitle(NiLoc::T(this, ENiLocKey::MenuTitle), CX, H * 0.22f, 44.0f, NiHudColor::Paper);
 
 	UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
 	const float RowX = CX - 40.0f * UiScale;
@@ -1126,7 +1199,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 
 	if (GI)
 	{
-		const int32 SensDelta = AdjustRow(TEXT("mouse sensitivity"),
+		const int32 SensDelta = AdjustRow(NiLoc::T(this, ENiLocKey::MenuSensitivity),
 			FString::Printf(TEXT("%.1f"), GI->MouseSensitivityScale), RowX, Y,
 			GI->MouseSensitivityScale > 0.25f, GI->MouseSensitivityScale < 2.95f);
 		if (SensDelta != 0)
@@ -1136,7 +1209,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 		}
 		Y += Step;
 
-		const int32 VolDelta = AdjustRow(TEXT("master volume"),
+		const int32 VolDelta = AdjustRow(NiLoc::T(this, ENiLocKey::MenuVolume),
 			FString::Printf(TEXT("%d%%"), FMath::RoundToInt(GI->MasterVolume * 100.0f)), RowX, Y,
 			GI->MasterVolume > 0.01f, GI->MasterVolume < 0.99f);
 		if (VolDelta != 0)
@@ -1150,12 +1223,12 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 
 	const float BtnW = 300.0f * UiScale;
 	const float BtnH = 52.0f * UiScale;
-	if (Button(TEXT("resume"), CX, Y, BtnW, BtnH, true, true))
+	if (Button(NiLoc::T(this, ENiLocKey::MenuResume), CX, Y, BtnW, BtnH, true, true))
 	{
 		MyChar->SetSystemMenuOpen(false);
 	}
 	Y += BtnH + 14.0f * UiScale;
-	if (Button(TEXT("leave the room"), CX, Y, BtnW, BtnH))
+	if (Button(NiLoc::T(this, ENiLocKey::MenuLeave), CX, Y, BtnW, BtnH))
 	{
 		if (GI)
 		{
@@ -1185,7 +1258,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 			{
 				Others.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
 					{ return A.SeatIndex < B.SeatIndex; });
-				DrawTok(TEXT("players"), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
+				DrawTok(NiLoc::T(this, ENiLocKey::MenuPlayers), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 				Y += 26.0f * UiScale;
 				const float KickW = 84.0f * UiScale;
 				const float KickH = 34.0f * UiScale;
@@ -1193,7 +1266,7 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 				{
 					DrawTok(FitTok(NIPS->GetPlayerName(), ETextTier::Body, 200.0f * UiScale),
 						CX - 150.0f * UiScale, Y + 5.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
-					if (Button(TEXT("kick"), CX + 110.0f * UiScale, Y, KickW, KickH))
+					if (Button(NiLoc::T(this, ENiLocKey::MenuKick), CX + 110.0f * UiScale, Y, KickW, KickH))
 					{
 						if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
 						{
@@ -1207,7 +1280,6 @@ void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 		}
 	}
 
-	DrawTok(TEXT("esc — resume"), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
 
 void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
@@ -1220,10 +1292,10 @@ void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter
 	const float PanelH = 156.0f * UiScale;
 	const float X = W * 0.5f - PanelW * 0.5f;
 	const float Y = H - PanelH - 70.0f * UiScale;
-	DrawPanelBox(X, Y, PanelW, PanelH, 0.8f);
+	DrawPanelBox(X, Y, PanelW, PanelH, 0.88f);
 
 	float LineY = Y + 12.0f * UiScale;
-	DrawTok(FString::Printf(TEXT("ACCUSE  ·  work %d / %d"), MyChar->AccusePickNumber, GS->TourWorkCount),
+	DrawTok(NiLoc::TFmt(this, ENiLocKey::AccuseWork, FString::FromInt(MyChar->AccusePickNumber), FString::FromInt(GS->TourWorkCount)),
 		W * 0.5f, LineY, ETextTier::Title, NiHudColor::Paper, EHAlign::Center, true);
 	LineY += 34.0f * UiScale;
 	const APlayerState* Suspect = MyChar->GetAccuseSuspect();
@@ -1238,9 +1310,6 @@ void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter
 		DrawTok(FitTok(Suspect->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
 			W * 0.5f, LineY, ETextTier::Body, NiHudColor::Amber, EHAlign::Center, true);
 	}
-	LineY += 24.0f * UiScale;
-	DrawTok(TEXT("1-9 view work   ·   TAB suspect   ·   ENTER accuse"),
-		W * 0.5f, LineY, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
 
 void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
@@ -1255,13 +1324,8 @@ void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
 	const int32 PermanentCount = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Permanent).Num();
 
 	// 場間大廳：端詳刺青、自費雷射、開下一場
-	DrawTok(FString::Printf(TEXT("your ink:  %d carbon (laserable)  ·  %d permanent"), CarbonCount, PermanentCount),
+	DrawTok(NiLoc::TFmt(this, ENiLocKey::PostInk, FString::FromInt(CarbonCount), FString::FromInt(PermanentCount)),
 		W * 0.5f, H - 96.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
-	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
-	DrawBottomHint(bIsHost
-		? TEXT("L — laser oldest carbon (2000, 3rd pass removes)   ·   ENTER — next match")
-		: TEXT("L — laser oldest carbon (2000, 3rd pass removes)   ·   host starts the next match"),
-		NiHudColor::PaperDim);
 }
 
 void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)
@@ -1325,96 +1389,133 @@ void ANiceInkHUD::DrawInkChip(const ANiceInkCharacter* MyChar)
 	TGuardValue<float> ChromeDim(ChromeAlphaMul,
 		MyChar->IsPenTriggerHeldLocal() ? 0.35f : 1.0f);
 
-	const float Cell = 26.0f * UiScale;
-	const float PadX = 10.0f * UiScale;
-	const float PadY = 7.0f * UiScale;
-	// **chip 只講這支筆真的擁有的軸**（09-03 修）：此前它無條件畫「顏色＋百分比」，
-	// 不看是哪支筆 ⇒ 拿稿筆時顯示「藍色 60%」而落墨是**結晶紫 100%**＝HUD 在說謊。
-	// 這比「按了沒反應」嚴重：玩家有回饋，而回饋是假的。
+	// **無面板**（2026-09-04）：與上緣同一條規則。此前這裡是 Ink α0.62 的卡片，
+	// 而全站面板 alpha 有七種、沒有規則；拆掉面板，對比交給杯子自己的邊框與文字陰影。
+	const float Cell = 7.0f * NiUi::U * UiScale;   // 28
 	const bool bStencil = (MyChar->SelectedNeedle == EInkNeedle::Stencil);
 	const bool bShowPct = (MyChar->SelectedNeedle == EInkNeedle::Shader);
 	const FLinearColor ChipColor = bStencil
 		? NiceInkStencil::Color() : FNiceInkPalette::Get(MyChar->SelectedColorIndex);
 	const int32 ChipTier = bShowPct ? MyChar->ShaderTierIdx : 2; // 非打霧＝恆實墨
 	// 百分比＝**與托盤列標同一個來源**（TierLabel），不要自己從位元組除。
-	// 舊寫法除出 61%、托盤卻寫 60%＝同一個東西兩個名字（user 09-02 抓到）。
 	const FString Pct = bShowPct
 		? FNiInkTrayLayout::TierLabel(FNiInkTrayLayout::RowFromTier(MyChar->ShaderTierIdx))
 		: FString();
-	const FVector2D PctSize = bShowPct ? MeasureTok(Pct, ETextTier::Small, true) : FVector2D::ZeroVector;
-	const float CardW = PadX * 2.0f + Cell + (bShowPct ? 8.0f * UiScale + PctSize.X : 0.0f);
-	const float CardH = PadY * 2.0f + Cell;
-	const float CardX = Canvas->ClipX * 0.5f - CardW * 0.5f;
-	const float CardY = Canvas->ClipY - 46.0f * UiScale - 14.0f * UiScale - CardH;
-
-	// 全站卡片語言（DrawPanelBox＝圓角＋墨底）——此前 cluster 是裸字漂在皮膚上，
-	// 壓到地板/牆交界時對比完全失控，而且跟正上方的圓角相位橫幅不像同一款遊戲
-	DrawPanelBox(CardX, CardY, CardW, CardH, 0.62f);
-	DrawInkCup(CardX + PadX, CardY + PadY, Cell, Cell, ChipColor, ChipTier);
+	const FVector2D PctSize = bShowPct ? MeasureTok(Pct, ETextTier::Body, true) : FVector2D::ZeroVector;
+	const float Gap = NiUi::GapM * UiScale;
+	const float RowW = Cell + (bShowPct ? Gap + PctSize.X : 0.0f);
+	const float X = Canvas->ClipX * 0.5f - RowW * 0.5f;
+	const float Y = Canvas->ClipY - NiUi::Margin * UiScale - Cell;
+	DrawInkCup(X, Y, Cell, Cell, ChipColor, ChipTier);
 	if (bShowPct)
 	{
-		DrawTok(Pct, CardX + PadX + Cell + 8.0f * UiScale, CardY + PadY + Cell * 0.5f - 8.0f * UiScale,
-			ETextTier::Small, NiHudColor::Paper, EHAlign::Left, true);
+		DrawTok(Pct, X + Cell + Gap, Y + (Cell - PctSize.Y) * 0.5f,
+			ETextTier::Body, NiHudColor::Paper, EHAlign::Left, true);
 	}
 }
+
 
 float ANiceInkHUD::DrawKeycap(float X, float Y, const FString& Key, bool bAccent)
 {
 	// 鍵帽圖形（照 Meccha 實物）：淺底圓角小方塊＋深色鍵名。**鍵位要畫成鍵盤上的
-	// 樣子**——寫在句子裡的 "Q" 玩家不會讀成「一顆可以按的鍵」，畫成鍵帽就會。
-	// 數字鍵用琥珀底（Meccha 的數字鍵也是黃的），其餘用紙色。
-	const FVector2D Size = MeasureTok(Key, ETextTier::Small, true);
-	const float H = 19.0f * UiScale;
-	const float W = FMath::Max(H, Size.X + 12.0f * UiScale);
+	// 樣子**——寫在句子裡的 "Q" 玩家不會讀成一顆可以按的鍵，畫成鍵帽就會。
+	// 2026-09-04：尺寸全部改讀 NiUi（實測 Meccha 1080p 是 32px，此前的 19 是我猜的）；
+	// 鍵名字級升到 Body——32 的鍵帽塞 12 的字，看起來會全部都是內距。
+	const float H = NiUi::KeycapH * UiScale;
+	const FVector2D Size = MeasureTok(Key, ETextTier::Body, true);
+	const float W = FMath::Max(H, Size.X + NiUi::GapM * 2.0f * UiScale);
 	FLinearColor Cap = bAccent ? NiHudColor::Amber : NiHudColor::Paper;
-	Cap.A = 0.92f;
-	DrawRoundedBox(X, Y, W, H, 4.5f * UiScale, Cap);
-	// 鍵名用墨色＝淺鍵帽上的深字（對比最高、小字也讀得到）
-	DrawTok(Key, X + W * 0.5f, Y + (H - Size.Y) * 0.5f, ETextTier::Small,
+	Cap.A = 0.94f;
+	// **鍵帽也要陰影**（2026-09-04 截圖實測）：無面板之後 chrome 的對比全靠陰影，
+	// 而此前只有**文字**有（bTokShadows），鍵帽本體沒有 ⇒ 站在道場的白色障子門前
+	// 拍出來的那張，Paper 鍵帽幾乎融進白牆（量測程式甚至分不出鍵帽與牆）。
+	// 一圈 1px 的墨色投影就讓它在任何背景上都有邊——與文字同一種手段。
+	FLinearColor Shadow = NiHudColor::Ink;
+	Shadow.A = 0.55f;
+	const float Off = FMath::Max(1.0f, UiScale);
+	DrawRoundedBox(X + Off, Y + Off, W, H, NiUi::KeycapR * UiScale, Shadow);
+	DrawRoundedBox(X, Y, W, H, NiUi::KeycapR * UiScale, Cap);
+	DrawTok(Key, X + W * 0.5f, Y + (H - Size.Y) * 0.5f, ETextTier::Body,
 		NiHudColor::Ink, EHAlign::Center, true);
 	return W;
 }
 
 void ANiceInkHUD::DrawControlStrip(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
 {
-	// 常駐操作列（右緣縱列）——形式照 Meccha 實物：`鍵帽 ＋ 2~5 字動詞`，小、貼邊、
-	// **常駐但隨狀態增減**。此前是一行六項的英文句子橫跨螢幕底部（＝離視線 45°、
-	// 永遠不會被讀），我一度改成一次性教學卡；看了 Meccha 實物才知道**問題不在
-	// 常駐與否，在句子 vs 鍵帽**——這個品類的第一名就是常駐的。
+	// 常駐操作列（右緣）——形式照 Meccha 實物：**glyph 在上、動詞在下、共用右緣**。
+	// 2026-09-04 鋪到全相位：此前只有「鎖定中」與「作畫相位站著」兩種狀態有列，
+	// 其餘八個相位一行提示都沒有，而它們各自都有活著的按鍵（指認的 1-9/TAB/ENTER
+	// 是寫死英文句子畫在面板上、大廳的 ENTER 只在底部一行話裡）。
+	// **鐵則：軸不存在時，它的鍵、它的格子、它的操作表那一行都不該存在。**
 	if (!MyChar || !Canvas || !GS)
 	{
 		return;
 	}
-	struct FRow { const TCHAR* Key; ENiLocKey Label; bool bAccent; };
+	struct FRow { const TCHAR* Key; UTexture2D* Tex; ENiLocKey Label; bool bAccent; };
 	TArray<FRow> Rows;
-	if (MyChar->bLeanLocked)
+	const ANiceInkPlayerState* MyPS = MyChar->GetPlayerState<ANiceInkPlayerState>();
+	const bool bIsVictim = MyPS && GS->VictimPlayerId == MyPS->GetPlayerId();
+	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
+
+	if (MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
-		Rows.Add({ TEXT("LMB"),    ENiLocKey::ActInk,    true });
-		Rows.Add({ TEXT("RMB"),    ENiLocKey::ActCups,   false });
-		// **SCROLL 只在打霧筆列出**（09-03）：濃度只有打霧吃得到（BeginStroke），
-		// 滾輪的作用域已經跟著收（PollLockedDraw）——**操作表必須跟著作用域收**，
-		// 不然它就在列一顆按了不會有事的鍵，而玩家會以為是自己弄錯了。
+		// 沉睡＝醉夢描圖：只有一個動作
+		Rows.Add({ nullptr, InMouseLeft, ENiLocKey::ActTrace, true });
+	}
+	else if (MyChar->IsFeigningSleep())
+	{
+		Rows.Add({ TEXT("SHIFT"), nullptr, ENiLocKey::ActWake, true });
+	}
+	else if (MyChar->bLeanLocked)
+	{
+		Rows.Add({ nullptr, InMouseLeft,  ENiLocKey::ActInk,  true });
+		Rows.Add({ nullptr, InMouseRight, ENiLocKey::ActCups, false });
+		// **SCROLL 只在打霧筆列出**：濃度只有打霧吃得到，操作表要跟著作用域收
 		if (MyChar->SelectedNeedle == EInkNeedle::Shader)
 		{
-			Rows.Add({ TEXT("SCROLL"), ENiLocKey::ActWash, false });
+			Rows.Add({ nullptr, InMouseScroll, ENiLocKey::ActWash, false });
 		}
-		Rows.Add({ TEXT("Q"),      ENiLocKey::ActNeedle, false });
-		Rows.Add({ TEXT("G"),      ENiLocKey::ActShake,  false });
-		Rows.Add({ TEXT("WASD"),   ENiLocKey::ActStand,  false });
+		Rows.Add({ TEXT("Q"),    nullptr, ENiLocKey::ActNeedle, false });
+		Rows.Add({ TEXT("G"),    nullptr, ENiLocKey::ActShake,  false });
+		Rows.Add({ TEXT("WASD"), nullptr, ENiLocKey::ActStand,  false });
 	}
-	else if (GS->CurrentPhase == ENiceInkPhase::Drawing && !MyChar->bAsleep)
+	else
 	{
-		// 「湊近」＝這個相位站著時**唯一要學的動作**，排第一並用強調鍵帽。
-		// 此前它是螢幕正中央下方的一整句話（舊鍵名 HudLeanIn）＝與 F/G 兩種形式兩個位置；
-		// 併進來之後形式一致、位置只剩一個（畫面清單：一件事只講一次）。
-		// 受害者本人無畫可下 ⇒ 與舊提示同一條閘（bCanLeanPrompt）。
-		const ANiceInkPlayerState* MyPS = MyChar->GetPlayerState<ANiceInkPlayerState>();
-		if (!MyPS || GS->VictimPlayerId != MyPS->GetPlayerId())
+		switch (GS->CurrentPhase)
 		{
-			Rows.Add({ TEXT("RMB"), ENiLocKey::ActLeanIn, true });
+		case ENiceInkPhase::Lobby:
+			if (bIsHost)
+			{
+				Rows.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActStartMatch, true });
+				Rows.Add({ TEXT("ESC"),   nullptr, ENiLocKey::ActKick,       false });
+			}
+			break;
+		case ENiceInkPhase::Drawing:
+			if (!bIsVictim)
+			{
+				Rows.Add({ nullptr, InMouseRight, ENiLocKey::ActLeanIn, true });
+				Rows.Add({ TEXT("F"), nullptr, ENiLocKey::ActFlip,  false });
+				Rows.Add({ TEXT("G"), nullptr, ENiLocKey::ActShake, false });
+			}
+			break;
+		case ENiceInkPhase::Accusation:
+			if (bIsVictim)
+			{
+				Rows.Add({ TEXT("1-9"),   nullptr, ENiLocKey::ActPickWork, true });
+				Rows.Add({ TEXT("TAB"),   nullptr, ENiLocKey::ActSuspect,  false });
+				Rows.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActAccuse,   false });
+			}
+			break;
+		case ENiceInkPhase::PostGame:
+			Rows.Add({ TEXT("L"), nullptr, ENiLocKey::ActLaser, false });
+			if (bIsHost)
+			{
+				Rows.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActNextMatch, true });
+			}
+			break;
+		default:
+			break;   // 轉瓶／入座／巡禮／判決／結局＝純演出，沒有活著的鍵
 		}
-		Rows.Add({ TEXT("F"), ENiLocKey::ActFlip,  false });
-		Rows.Add({ TEXT("G"), ENiLocKey::ActShake, false });
 	}
 	if (Rows.Num() == 0)
 	{
@@ -1424,22 +1525,55 @@ void ANiceInkHUD::DrawControlStrip(const ANiceInkGameState* GS, ANiceInkCharacte
 	TGuardValue<float> ChromeDim(ChromeAlphaMul,
 		(MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal()) ? 0.30f : 1.0f);
 
-	const float RowH = 26.0f * UiScale;
-	const float RightX = Canvas->ClipX - 26.0f * UiScale;
-	float Y = Canvas->ClipY * 0.5f - Rows.Num() * RowH * 0.5f;
+	const float Pitch  = NiUi::RowPitch * UiScale;
+	const float CapH   = NiUi::KeycapH * UiScale;
+	const float Gap    = NiUi::GapS * UiScale;
+	const float RightX = Canvas->ClipX - NiUi::Margin * UiScale;
+	float Y = Canvas->ClipY * 0.5f - Rows.Num() * Pitch * 0.5f;
 	for (const FRow& R : Rows)
 	{
-		const FString Label = NiLoc::T(this, R.Label);
-		const FVector2D LabelSize = MeasureTok(Label, ETextTier::Small, false);
-		const FVector2D KeySize = MeasureTok(R.Key, ETextTier::Small, true);
-		const float CapW = FMath::Max(19.0f * UiScale, KeySize.X + 12.0f * UiScale);
-		// 鍵帽貼右緣＝所有鍵帽對齊成一直行；動詞在左側
-		DrawKeycap(RightX - CapW, Y, R.Key, R.bAccent);
-		DrawTok(Label, RightX - CapW - 8.0f * UiScale,
-			Y + (19.0f * UiScale - LabelSize.Y) * 0.5f, ETextTier::Small,
-			NiHudColor::PaperDim, EHAlign::Right, false);
-		Y += RowH;
+		const float GlyphW = DrawInputGlyph(RightX, Y, R.Key, R.Tex, R.bAccent);
+		(void)GlyphW;   // 右對齊＝由 DrawInputGlyph 自己扣寬度
+		// 動詞：同一條右緣、在 glyph 正下方。**填色 Paper 不是 PaperDim**——
+		// PaperDim 對膚色（作畫時畫面主體就是皮膚）對比只有 1.41＝那幾行是隱形的。
+		DrawTok(NiLoc::T(this, R.Label), RightX, Y + CapH + Gap,
+			ETextTier::Small, NiHudColor::Paper, EHAlign::Right, false);
+		Y += Pitch;
 	}
+}
+
+float ANiceInkHUD::DrawInputGlyph(float X, float Y, const TCHAR* Key, UTexture2D* Tex, bool bAccent)
+{
+	// **鍵盤有刻字所以寫字，滑鼠沒有刻字所以畫圖**（Docs/UI_SYSTEM.md §4.1）。
+	// X＝右緣，函式自己往左扣寬度。
+	const float H = NiUi::KeycapH * UiScale;
+	if (Tex)
+	{
+		// 調色盤已烘進資產（Paper／Red）⇒ 用白色 tint 保色，alpha 仍跟 chrome 淡出走。
+		// **等高對齊**：貼圖已在 bake 端裁到 alpha 邊界（畫布＝墨跡），所以
+		// 高度設成 KeycapH 之後，滑鼠圖與鍵帽的墨跡真的一樣高、右緣真的同一條。
+		// 寬度按原寬高比推，不要硬塞成正方形（會壓扁）。
+		const float Aspect = (Tex->GetSurfaceHeight() > 0.0f)
+			? (Tex->GetSurfaceWidth() / Tex->GetSurfaceHeight()) : 1.0f;
+		const float GW = H * Aspect;
+		// 陰影＝同一張圖染成墨色、偏移 1px（與鍵帽／文字同一種手段）
+		FLinearColor Shadow = NiHudColor::Ink;
+		Shadow.A = 0.55f;
+		const float Off = FMath::Max(1.0f, UiScale);
+		DrawIconRect(Tex, X - GW + Off, Y + Off, GW, H, Shadow);
+		FLinearColor Tint = FLinearColor::White;
+		Tint.A = 1.0f;   // ChromeAlphaMul 由 DrawIconRect 自己乘
+		DrawIconRect(Tex, X - GW, Y, GW, H, Tint);
+		return GW;
+	}
+	if (!Key)
+	{
+		return 0.0f;
+	}
+	const FVector2D Size = MeasureTok(Key, ETextTier::Body, true);
+	const float W = FMath::Max(H, Size.X + NiUi::GapM * 2.0f * UiScale);
+	DrawKeycap(X - W, Y, Key, bAccent);
+	return W;
 }
 
 
@@ -1587,7 +1721,6 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	}
 
 	// 標題＋自己的罰酒（第三杯＝生死，沉睡者最需要盯的數字）
-	DrawTok(TEXT("DRUNK DREAM"), W * 0.5f, 20.0f * UiScale, ETextTier::Title, NiHudColor::Lavender, EHAlign::Center, true);
 	if (const ANiceInkPlayerState* NIPS = MyPS)
 	{
 		DrawCupsRow(W * 0.5f, 56.0f * UiScale, 24.0f * UiScale, NIPS->PenaltyCups, EHAlign::Center);
@@ -1614,18 +1747,18 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		// 事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）——蓋在圖上、瞬態
 		if (Trace->IsShakeActive())
 		{
-			DrawTok(FString::Printf(TEXT("%s SHAKES YOUR DREAM !"), *Trace->GetShakeAttackerName().ToUpper()),
+			DrawTok(NiLoc::TFmt(this, ENiLocKey::DreamShake, Trace->GetShakeAttackerName().ToUpper()),
 				W * 0.5f, H * 0.16f, ETextTier::Display,
 				NiHudColor::Red, EHAlign::Center, true);
 		}
 		else if (Trace->IsFailFlashing())
 		{
-			DrawTok(TEXT("SLIPPED — BACK TO THE START"),
+			DrawTok(NiLoc::T(this, ENiLocKey::DreamSlipped),
 				W * 0.5f, H * 0.16f, ETextTier::Title,
 				NiHudColor::Red, EHAlign::Center, true);
 		}
-		DrawBottomHint(FString::Printf(TEXT("hold LMB — trace the line to wake · %d%%"),
-			FMath::RoundToInt(Trace->GetProgress01() * 100.0f)), NiHudColor::Lavender);
+		DrawBottomHint(NiLoc::TFmt(this, ENiLocKey::DreamProgress,
+			FString::FromInt(FMath::RoundToInt(Trace->GetProgress01() * 100.0f))), NiHudColor::Lavender);
 	}
 	else if (Maze && Maze->IsMazeActive())
 	{
@@ -1655,7 +1788,7 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		case EDreamMazeSimState::AwaitRotation:
 		case EDreamMazeSimState::Rotating:
 			// 不給任何關於度數的文字——盯緊圓形自己抓定位點
-			DrawTok(TEXT("the dream reels..."),
+			DrawTok(NiLoc::T(this, ENiLocKey::DreamReels),
 				PanelCenter.X, PanelCenter.Y + PanelRadius + 14.0f * UiScale, ETextTier::Body, NiHudColor::Lavender, EHAlign::Center, false);
 			break;
 		default:
@@ -1665,8 +1798,8 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	else
 	{
 		// 沒有迷宮＝終局昏死（server 不發夢）：昏睡不醒
-		DrawTok(TEXT("OUT COLD"), W * 0.5f, H * 0.4f, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
-		DrawTok(TEXT("the room helps itself to your cash..."), W * 0.5f, H * 0.4f + 52.0f * UiScale, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Center, false);
+		DrawTok(NiLoc::T(this, ENiLocKey::BannerOutCold), W * 0.5f, H * 0.4f, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
+		DrawTok(NiLoc::T(this, ENiLocKey::DreamCash), W * 0.5f, H * 0.4f + 52.0f * UiScale, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Center, false);
 	}
 
 	// 姿勢面板（左下）：自己身體的示意——當前姿勢與朝向。
@@ -1676,8 +1809,9 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		const float PanelH = 212.0f * UiScale;
 		const float PanelX = 34.0f * UiScale;
 		const float PanelY = H - PanelH - 34.0f * UiScale;
-		DrawPanelBox(PanelX, PanelY, PanelW, PanelH, 0.85f);
-		DrawTok(MyChar->bBodyFaceDown ? TEXT("POSE — FACE DOWN") : TEXT("POSE — FACE UP"),
+		// 無面板（2026-09-04）：與上緣／底部同一條規則——姿勢指示是夢裡黑屏上的
+	// 元素，本來就有對比，面板只是舊語言的殘留。
+		DrawTok(NiLoc::T(this, MyChar->bBodyFaceDown ? ENiLocKey::PoseFaceDown : ENiLocKey::PoseFaceUp),
 			PanelX + PanelW * 0.5f, PanelY + 10.0f * UiScale, ETextTier::Small,
 			MyChar->bBodyFaceDown ? NiHudColor::Amber : NiHudColor::Paper, EHAlign::Center, true);
 
@@ -1710,7 +1844,7 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		const float PanelH = 92.0f * UiScale;
 		const float PanelX = W - PanelW - 34.0f * UiScale;
 		const float PanelY = H - PanelH - 34.0f * UiScale;
-		DrawPanelBox(PanelX, PanelY, PanelW, PanelH, 0.85f);
+		DrawPanelBox(PanelX, PanelY, PanelW, PanelH, 0.88f);
 
 		const float IconS = 30.0f * UiScale;
 		float X = PanelX + Pad;
@@ -1748,8 +1882,8 @@ void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
 	// AR 鏡像豁免：轉盤＝玩法幾何（角度方向/指針/刻度不因語言翻面）
 	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 
-	DrawTok(TEXT("HE STEPPED ON YOU"), Center.X, Center.Y - Radius - 74.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
-	DrawTok(TEXT("SPIN HIS DREAM"), Center.X, Center.Y - Radius - 48.0f * UiScale, ETextTier::Title, NiHudColor::Amber, EHAlign::Center, true);
+	DrawTok(NiLoc::T(this, ENiLocKey::TrapTitle), Center.X, Center.Y - Radius - 74.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
+	DrawTok(NiLoc::T(this, ENiLocKey::TrapSpin), Center.X, Center.Y - Radius - 48.0f * UiScale, ETextTier::Title, NiHudColor::Amber, EHAlign::Center, true);
 
 	// 盤面
 	Canvas->K2_DrawPolygon(nullptr, Center, FVector2D(Radius + 10.0f * UiScale, Radius + 10.0f * UiScale), 32, FLinearColor(0.05f, 0.03f, 0.08f, 0.85f));
@@ -1777,7 +1911,7 @@ void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
 
 	DrawTok(FString::Printf(TEXT("%+.0f°"), MyChar->TrapDialAngleDeg),
 		Center.X, Center.Y + Radius + 24.0f * UiScale, ETextTier::Title, NeedleColor, EHAlign::Center, true);
-	DrawTok(FString::Printf(TEXT("scroll wheel  ·  locks in %.1fs"), Remaining),
+	DrawTok(NiLoc::TFmt(this, ENiLocKey::TrapHint, FString::Printf(TEXT("%.1f"), Remaining)),
 		Center.X, Center.Y + Radius + 56.0f * UiScale, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
 }
 
@@ -2295,18 +2429,19 @@ void ANiceInkHUD::DrawDebugPanel(const ANiceInkGameState* GS, const ANiceInkPlay
 
 FString ANiceInkHUD::GetPhaseLabel(ENiceInkPhase Phase) const
 {
+	// 2026-09-04：九個相位名此前有八個是硬編英文（只有 Drawing 進了表）。
+	// 相位名現在只出現在右下角的規則塊標題，上緣改放祈使句。
 	switch (Phase)
 	{
-	case ENiceInkPhase::Lobby: return TEXT("LOBBY");
-	case ENiceInkPhase::BottleSpin: return TEXT("BOTTLE SPIN");
-	case ENiceInkPhase::Seating: return TEXT("SEATING");
-	// 作畫相位已進字串表（本批範圍）；其餘相位待排（見 DRAW_HUD_INVENTORY 記帳）
-	case ENiceInkPhase::Drawing: return NiLoc::T(this, ENiLocKey::PhaseDrawing);
-	case ENiceInkPhase::Tour: return TEXT("GALLERY TOUR");
-	case ENiceInkPhase::Accusation: return TEXT("ACCUSATION");
-	case ENiceInkPhase::Resolution: return TEXT("RESOLUTION");
-	case ENiceInkPhase::Finale: return TEXT("FINALE");
-	case ENiceInkPhase::PostGame: return TEXT("PARLOR");
-	default: return TEXT("?");
+	case ENiceInkPhase::Lobby:      return NiLoc::T(this, ENiLocKey::PhaseLobby);
+	case ENiceInkPhase::BottleSpin: return NiLoc::T(this, ENiLocKey::PhaseBottleSpin);
+	case ENiceInkPhase::Seating:    return NiLoc::T(this, ENiLocKey::PhaseSeating);
+	case ENiceInkPhase::Drawing:    return NiLoc::T(this, ENiLocKey::PhaseDrawing);
+	case ENiceInkPhase::Tour:       return NiLoc::T(this, ENiLocKey::PhaseTour);
+	case ENiceInkPhase::Accusation: return NiLoc::T(this, ENiLocKey::PhaseAccusation);
+	case ENiceInkPhase::Resolution: return NiLoc::T(this, ENiLocKey::PhaseResolution);
+	case ENiceInkPhase::Finale:     return NiLoc::T(this, ENiLocKey::PhaseFinale);
+	case ENiceInkPhase::PostGame:   return NiLoc::T(this, ENiLocKey::PhasePostGame);
+	default: return FString();
 	}
 }

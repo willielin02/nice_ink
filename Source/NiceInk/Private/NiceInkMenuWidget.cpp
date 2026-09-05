@@ -209,9 +209,9 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	// --- 樣式庫（白卡制）---
 	CardBrush = MakeRounded(WithA(NiHudColor::Paper, 0.78f), 18.0f);           // 毛玻璃白卡
 	SlotBrush = MakeRounded(WithA(NiHudColor::Paper, 0.86f), 12.0f);           // 房碼格
-	RuleBrush = MakeRounded(NiHudColor::Amber, 2.0f);                          // 標題下短劃
+	RuleBrush = MakeRounded(NiHudColor::Amber, 1.0f);                          // 標題下短劃
 	DividerBrush = MakeRounded(WithA(NiHudColor::Paper, 0.14f), 1.0f);
-	UnderlineBrush = MakeRounded(NiHudColor::Amber, 1.5f);
+	UnderlineBrush = MakeRounded(NiHudColor::Amber, 1.0f);
 
 	PrimaryStyle = MakeButtonStyle(NiHudColor::Amber,
 		FLinearColor::LerpUsingHSV(NiHudColor::Amber, FLinearColor::White, 0.18f),
@@ -220,15 +220,20 @@ void SNiMenu::Construct(const FArguments& InArgs)
 		WithA(NiHudColor::Ink, 0.22f), 12.0f);
 	GhostStyle = MakeButtonStyle(WithA(NiHudColor::Paper, 0.08f), WithA(NiHudColor::Paper, 0.20f),
 		WithA(NiHudColor::Paper, 0.28f), 10.0f);
+	// **毀滅性動作要有自己的視覺通道**（2026-09-04 全站稽核）：Quit 此前與 Back／
+	// Settings 共用 GhostStyle＝同一個外觀、不同後果。它本來就有距離隔開＋二段確認
+	//（風險已經被擋住），缺的只是「一眼認出這顆不一樣」。
+	DangerStyle = MakeButtonStyle(WithA(NiHudColor::Red, 0.14f), WithA(NiHudColor::Red, 0.30f),
+		WithA(NiHudColor::Red, 0.40f), 12.0f);
 	RowStyle = MakeButtonStyle(WithA(NiHudColor::Paper, 0.82f), WithA(NiHudColor::Paper, 0.95f),
 		WithA(NiHudColor::Paper, 0.70f), 12.0f);
 	// 臉庫縮圖：平常完全無底（頭形 icon 不被方塊裱框——2026-08-12 user 抓
 	//「改了貼圖沒拆底板＝還是方形」）、hover/按下才微亮
 	FaceTileStyle = MakeButtonStyle(WithA(NiHudColor::Ink, 0.0f), WithA(NiHudColor::Ink, 0.08f),
 		WithA(NiHudColor::Ink, 0.14f), 10.0f);
-	ChipOnBrush = MakeRounded(WithA(NiHudColor::Ink, 0.85f), 10.0f);
-	ChipOffBrush = MakeRounded(WithA(NiHudColor::Ink, 0.05f), 10.0f);
-	InsetBrush = MakeRounded(WithA(NiHudColor::Ink, 0.05f), 14.0f);
+	ChipOnBrush = MakeRounded(WithA(NiHudColor::Ink, 0.85f), 12.0f);
+	ChipOffBrush = MakeRounded(WithA(NiHudColor::Ink, 0.05f), 12.0f);
+	InsetBrush = MakeRounded(WithA(NiHudColor::Ink, 0.05f), 12.0f);
 	CardDividerBrush = MakeRounded(WithA(NiHudColor::Ink, 0.12f), 1.0f);
 
 	// 首啟創角判定（2026-08-12）：要在建 UI 之前算——個人檔案卡的版面
@@ -236,10 +241,10 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	bOnboarding = !HasFace();
 
 	NameBoxStyle = FEditableTextBoxStyle()
-		.SetBackgroundImageNormal(MakeRounded(WithA(NiHudColor::Ink, 0.06f), 10.0f))
-		.SetBackgroundImageHovered(MakeRounded(WithA(NiHudColor::Ink, 0.10f), 10.0f))
-		.SetBackgroundImageFocused(MakeRounded(WithA(NiHudColor::Ink, 0.10f), 10.0f))
-		.SetBackgroundImageReadOnly(MakeRounded(WithA(NiHudColor::Ink, 0.04f), 10.0f))
+		.SetBackgroundImageNormal(MakeRounded(WithA(NiHudColor::Ink, 0.06f), 12.0f))
+		.SetBackgroundImageHovered(MakeRounded(WithA(NiHudColor::Ink, 0.10f), 12.0f))
+		.SetBackgroundImageFocused(MakeRounded(WithA(NiHudColor::Ink, 0.10f), 12.0f))
+		.SetBackgroundImageReadOnly(MakeRounded(WithA(NiHudColor::Ink, 0.04f), 12.0f))
 		.SetTextStyle(FTextBlockStyle().SetFont(Ty(NiType::Body)).SetColorAndOpacity(NiHudColor::Ink))
 		.SetFont(Ty(NiType::Body))
 		.SetForegroundColor(NiHudColor::Ink)
@@ -461,7 +466,7 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 			// 離開＝毀滅性動作：跟日常鈕拉開距離＋二段確認（手滑不再直接關遊戲）
 			+ SHorizontalBox::Slot().AutoWidth().Padding(40, 0, 8, 0)
 			[
-				SNew(SButton).ButtonStyle(&GhostStyle).IsFocusable(false)
+				SNew(SButton).ButtonStyle(&DangerStyle).IsFocusable(false)
 					.ContentPadding(FMargin(26, 10))
 					.OnClicked_Lambda([this]()
 					{
@@ -931,7 +936,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					return EVisibility::Collapsed;
 				})
 			[
-				SNew(SBackgroundBlur).BlurStrength(14).CornerRadius(FVector4(16, 16, 16, 16))
+				SNew(SBackgroundBlur).BlurStrength(14).CornerRadius(FVector4(18, 18, 18, 18))
 				[
 					SNew(SBorder).BorderImage(&CardBrush).Padding(FMargin(NiSpace::CardPadH, NiSpace::CardPadV))
 					[
