@@ -13,6 +13,7 @@
 #include "InkBodyComponent.h"
 #include "InkCanvasComponent.h"
 #include "InkTypes.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameInstance.h"
 #include "NiceInkPersonaSubsystem.h"
@@ -112,7 +113,7 @@ void ANiceInkMenuStage::BeginPlay()
 	// 力士仍靠 focal point 面向鏡頭，落在畫面右三分之一。
 	const FVector CamLoc = O + FVector(CamDistCm, bDojoLoaded ? 150.0f : 0.0f, CamHeightCm);
 	Camera = World->SpawnActor<ACameraActor>(CamLoc,
-		FRotator(-3.0f, bDojoLoaded ? 194.0f : 180.0f, 0), Params);
+		FRotator(bDojoLoaded ? 1.5f : -3.0f, bDojoLoaded ? 194.0f : 180.0f, 0), Params);   // 低機位微仰＝主角
 	if (Camera && Camera->GetCameraComponent())
 	{
 		UCameraComponent* Cam = Camera->GetCameraComponent();
@@ -133,7 +134,7 @@ void ANiceInkMenuStage::BeginPlay()
 		{
 			const float FocusDist = (O + FVector(0, StageBiasCm, 100.0f) - CamLoc).Size();
 			Cam->PostProcessSettings.bOverride_DepthOfFieldFstop = true;
-			Cam->PostProcessSettings.DepthOfFieldFstop = 4.0f;
+			Cam->PostProcessSettings.DepthOfFieldFstop = 2.2f;   // 二批：f/2.8，背景障子糊、主體清
 			Cam->PostProcessSettings.bOverride_DepthOfFieldFocalDistance = true;
 			Cam->PostProcessSettings.DepthOfFieldFocalDistance = FocusDist;
 		}
@@ -254,6 +255,21 @@ void ANiceInkMenuStage::Tick(float DeltaSeconds)
 	if (!World || !Dancer || !DancerAI)
 	{
 		return;
+	}
+
+	// 力士補亮（二批）：整張畫面曝光壓一檔後，主體用材質的 SkinBrightness 乘回來。
+	// MID 晚綁（InkBodyComponent 惰性建 MID）⇒ 在 Tick 等到它出現才乘，只乘一次。
+	if (!bSkinBoosted && Dancer->Body)
+	{
+		if (UMaterialInstanceDynamic* M = Dancer->Body->GetDynamicMaterial())
+		{
+			float Cur = 1.0f;
+			if (M->GetScalarParameterValue(FMaterialParameterInfo(TEXT("SkinBrightness")), Cur))
+			{
+				M->SetScalarParameterValue(TEXT("SkinBrightness"), Cur * DancerSkinBoost);
+				bSkinBoosted = true;
+			}
+		}
 	}
 
 	// 相機接管保險：PC 晚於舞台出生時 BeginPlay 設不到（冪等）

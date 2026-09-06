@@ -33,7 +33,8 @@ void ANiceInkMenuHUD::BeginPlay()
 	if (GEngine && GEngine->GameViewport && PlayerOwner)
 	{
 		MenuFont = BuildMenuFont();
-		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont);
+		LogoTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/T_UI_Logo.T_UI_Logo"));
+		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex);
 		GEngine->GameViewport->AddViewportWidgetContent(Menu.ToSharedRef(), /*ZOrder=*/10);
 	}
 }
@@ -121,17 +122,17 @@ void ANiceInkMenuHUD::DrawHUD()
 	{
 		const float W = Canvas->ClipX;
 		const float H = Canvas->ClipY;
-		FLinearColor Top = NiHudColor::Black;  Top.A = 0.30f;
+		FLinearColor Top = NiHudColor::Black;  Top.A = 0.45f;
 		FCanvasTileItem TopTile(FVector2D(0.0f, 0.0f), VScrimTex->GetResource(),
 			FVector2D(W, H * 0.18f), FVector2D(0.0f, 0.0f), FVector2D(1.0f, 1.0f), Top);
 		TopTile.BlendMode = SE_BLEND_Translucent;
 		Canvas->DrawItem(TopTile);
-		FLinearColor Bottom = NiHudColor::Black;  Bottom.A = 0.45f;
+		FLinearColor Bottom = NiHudColor::Black;  Bottom.A = 0.62f;
 		FCanvasTileItem BottomTile(FVector2D(0.0f, H * 0.76f), VScrimTex->GetResource(),
 			FVector2D(W, H * 0.24f), FVector2D(0.0f, 1.0f), FVector2D(1.0f, 0.0f), Bottom);
 		BottomTile.BlendMode = SE_BLEND_Translucent;
 		Canvas->DrawItem(BottomTile);
-		FLinearColor Right = NiHudColor::Black;  Right.A = 0.30f;
+		FLinearColor Right = NiHudColor::Black;  Right.A = 0.45f;
 		FCanvasTileItem RightTile(FVector2D(W * 0.86f, 0.0f), ScrimTex->GetResource(),
 			FVector2D(W * 0.14f, H), FVector2D(1.0f, 0.0f), FVector2D(0.0f, 1.0f), Right);
 		RightTile.BlendMode = SE_BLEND_Translucent;
@@ -209,11 +210,19 @@ void ANiceInkMenuHUD::RecreateMenu(bool bOpenSettings)
 		{
 			GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
 		}
-		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont);
+		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex);
 		if (bOpenSettings)
 		{
 			Menu->OpenSettingsPage();
 		}
 		GEngine->GameViewport->AddViewportWidgetContent(Menu.ToSharedRef(), /*ZOrder=*/10);
 	}));
+}
+
+void ANiceInkMenuHUD::RoboGoBack()
+{
+	if (Menu.IsValid())
+	{
+		Menu->RoboBack();
+	}
 }

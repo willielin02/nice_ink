@@ -24,6 +24,7 @@ public:
 	SLATE_BEGIN_ARGS(SNiMenu) {}
 		SLATE_ARGUMENT(TWeakObjectPtr<APlayerController>, OwnerPC)
 		SLATE_ARGUMENT(TWeakObjectPtr<class UFont>, Font)
+		SLATE_ARGUMENT(TWeakObjectPtr<class UTexture2D>, LogoTex)   // 標誌字貼圖（MenuHUD 持有 GC）
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -36,6 +37,7 @@ public:
 
 	// robo 鉤子（NiMenuShowJoin/NiMenuJoinCode）：切加入頁＋預填房間碼
 	void OpenJoinPage(const FString& PrefillCode);
+	void RoboBack() { if (CanGoBack()) { GoBack(); } }   // robo：等同按 ESC
 
 	// robo 鉤子（NiMenuFontSample）：標題下顯示多文字系統取樣行（字體矩陣驗證）
 	void ShowFontSample(const FString& Sample) { FontSample = Sample; }
@@ -106,6 +108,9 @@ private:
 	FButtonStyle PrimaryStyle, OnCardStyle, GhostStyle, RowStyle;
 	FButtonStyle TextStyle;     // 文字鈕（中性制：無底無框、hover 轉強調色）
 	FSlateBrush AccentBarBrush; // 文字鈕 hover 的左側短棒
+	FSlateBrush LogoBrush;      // 標誌字（T_UI_Logo；缺席＝展示體文字備援）
+	FSlateBrush PanelBrush;     // 模態面板材料（黑 62%、圓角 8）
+	float LogoW = 0.0f, LogoH = 0.0f;
 	FSlateBrush SegmentBrush;   // 分段控制的外框容器（六修）
 	FButtonStyle DangerStyle;   // 毀滅性動作（Quit）＝ghost 但帶紅（2026-09-04 全站稽核）
 	FButtonStyle FaceTileStyle; // 臉庫縮圖鈕：平常無底（icon=頭形不能再被方塊裱起來）、hover 微亮
@@ -115,6 +120,7 @@ private:
 	// 字體＝角色表制（NiType；2026-08-11 樣式源統一）：禁填裸字級——
 	// 每行字引用一個角色，改字級只准改 NiceInkUiTokens.h 的表
 	FSlateFontInfo Ty(const NiType::FRole& Role, bool bBold = false) const;
+	static FText Up(const FText& In);   // 展示體角色的全大寫
 
 	// --- 動態子區 ---
 	TSharedPtr<SEditableTextBox> NameBox;
@@ -134,6 +140,7 @@ private:
 	UNiceInkSessionSubsystem* Sessions() const;
 	bool IsLan() const;
 	bool IsBusy() const;
+	bool IsHostJoinLocked() const;   // 主頁 HOST／JOIN 的鎖：只有開房中／加入中（搜房不鎖）
 	void CommitName();
 	void RebuildRoomList();
 	FText StatusText() const;

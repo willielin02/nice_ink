@@ -34,6 +34,10 @@ public:
 	UFUNCTION(Exec)
 	void NiMenuShowJoin(const FString& Code);
 
+	// robo：DelaySeconds 後等同按 ESC（回上一頁）——驗證「離開加入頁取消搜房」用
+	UFUNCTION(Exec)
+	void NiMenuBack(float DelaySeconds);
+
 	// 按碼加入（等價於加入頁輸碼＋join with code）
 	UFUNCTION(Exec)
 	void NiMenuJoinCode(const FString& Code);

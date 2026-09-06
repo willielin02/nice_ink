@@ -25,15 +25,35 @@ namespace
 
 FString UNiceInkSessionSubsystem::MakeRoomCode()
 {
-	// 剔除 I/L/O（與 1/0 混形）；4 位 ≈ 28 萬組合，撞碼機率可忽略
-	static const TCHAR Charset[] = TEXT("ABCDEFGHJKMNPQRSTUVWXYZ");
+	// 只用子音（2026-09-06：user 真局抽到 FCUM）——四個隨機字母含母音就會拼出髒字；
+	// 子音串幾乎拼不出詞，再加一張短黑名單擋剩下的縮寫。仍剔除 I/L/O（與 1/0 混形）。
+	// 20 個字母 4 位＝16 萬組合，撞碼機率可忽略。
+	static const TCHAR Charset[] = TEXT("BCDFGHJKMNPQRSTVWXYZ");
 	constexpr int32 N = UE_ARRAY_COUNT(Charset) - 1;
-	FString Code;
-	for (int32 i = 0; i < 4; ++i)
+	static const TCHAR* Blocked[] = {
+		TEXT("FCK"), TEXT("FKK"), TEXT("CNT"), TEXT("KNT"), TEXT("DCK"), TEXT("CCK"), TEXT("SHT"),
+		TEXT("TWT"), TEXT("FGT"), TEXT("FGG"), TEXT("NGR"), TEXT("NGG"), TEXT("KKK"), TEXT("XXX"),
+		TEXT("WTF"), TEXT("STD"), TEXT("SXY"), TEXT("SS"), TEXT("CM"), TEXT("JZ"), TEXT("PNS"),
+		TEXT("VGN"), TEXT("BTCH"), TEXT("DMN"), TEXT("HLL"), TEXT("NZ"),
+	};
+	for (int32 Attempt = 0; Attempt < 64; ++Attempt)
 	{
-		Code.AppendChar(Charset[FMath::RandRange(0, N - 1)]);
+		FString Code;
+		for (int32 i = 0; i < 4; ++i)
+		{
+			Code.AppendChar(Charset[FMath::RandRange(0, N - 1)]);
+		}
+		bool bBad = false;
+		for (const TCHAR* B : Blocked)
+		{
+			if (Code.Contains(B)) { bBad = true; break; }
+		}
+		if (!bBad)
+		{
+			return Code;
+		}
 	}
-	return Code;
+	return TEXT("BRTK");   // 64 次都撞黑名單（機率 ~0）＝退回一個已知乾淨的碼
 }
 
 IOnlineSessionPtr UNiceInkSessionSubsystem::GetSessionInterface() const

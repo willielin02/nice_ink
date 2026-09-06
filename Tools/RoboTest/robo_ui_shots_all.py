@@ -95,9 +95,16 @@ class Shots:
         ph = self.phase()
 
         if s == "boot":
+            # 等到 LevelEditorSubsystem 真的存在再叫 PIE（2026-09-06：新貼圖首次編譯讓編輯器
+            # 啟動變慢，8 秒到了子系統還是 None ⇒ AttributeError 整輪零圖）
             if self.elapsed() > 8.0:
-                unreal.get_editor_subsystem(
-                    unreal.LevelEditorSubsystem).editor_request_begin_play()
+                les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
+                if les is None:
+                    if self.elapsed() > 120.0:
+                        log("FAIL LevelEditorSubsystem never came up")
+                        self.finish()
+                    return
+                les.editor_request_begin_play()
                 self.advance("wait_pie")
             return
 

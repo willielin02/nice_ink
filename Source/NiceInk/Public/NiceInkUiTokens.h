@@ -7,8 +7,8 @@
 //
 // 系統只有這麼多：
 //   顏色 ＝ 白（四級透明度）／黑（模態與壓暗）／一個強調色（當前・選中・確認）／紅（危險）
-//   字體 ＝ Noto Sans 一族（13 語同家；明朝與圓體全退）
-//   字級 ＝ 14／18／28／64 四階，Regular／Bold 兩種字重
+//   字體 ＝ 展示體 Oswald（大寫、拉字距）＋內文體 Noto Sans（13 語同家）——兩種人格
+//   字級 ＝ 13／18／96 三級（頁標題 48、動詞 24、相位 32），展示體只有 Medium／Bold
 //   間距 ＝ 4px 網格
 //   圓角 ＝ 一個值
 //
@@ -68,20 +68,25 @@ namespace NiType
 	{
 		int32 Size;
 		int32 Tracking;
-		bool bSerif;   // 保留欄位（中性制全 false；Ty() 對 true 也解析成 Bold 無襯線）
-		bool bBlack;   // 保留欄位（同上）
-		bool bBold;
+		bool bSerif;   // **展示字體**（2026-09-06：Oswald 壓縮大寫；欄位名沿用＝字面槽位名沒改）
+		bool bBlack;   // 展示字體的粗檔（SerifBlack＝Oswald Bold；否則 Serif＝Oswald Medium）
+		bool bBold;    // 內文字體的粗檔（Noto Sans Bold）
 	};
 
-	constexpr int32 Hero    = 64;
-	constexpr int32 Heading = 28;
+	// **兩種字體人格、三級尺度**（2026-09-06 第一批「怎麼畫」；六款參照的共同紀律）：
+	// 展示體＝Oswald（粗壓縮、全大寫、字距拉開）給標誌／頁標題／相位／主角數字／主鈕；
+	// 內文體＝Noto Sans 給說明與清單。尺度只留 13 標籤／18 內文／96 主角，頁標題 48、
+	// 動詞 24——28 與 36 兩級刪除：全部字落在 14～28 的「文件區間」就是沒有節奏。
+	// 展示體的文字在呼叫端一律 ToUpper（CJK／阿拉伯不受影響）。
+	constexpr int32 Hero    = 96;
+	constexpr int32 Heading = 32;
 	constexpr int32 Text    = 18;
-	constexpr int32 Small   = 14;
+	constexpr int32 Small   = 13;
 
-	constexpr FRole Display     {Hero,    100, false, false, true };  // 遊戲標題（主選單）
-	constexpr FRole Title       {40,      -10, false, false, false}; // 頁標題：大而細（字級對比要靠尺寸不靠粗細）
-	constexpr FRole Value       {Text,      0, false, false, true };  // 有資訊的數值
-	constexpr FRole Action      {Heading,   0, false, false, false}; // 主動作（文字鈕）
+	constexpr FRole Display     {Hero,     60, true,  true,  true };  // 遊戲標題（主選單；有標誌貼圖時退居備援）
+	constexpr FRole Title       {48,       60, true,  true,  true };  // 頁標題：展示體大寫
+	constexpr FRole Value       {Text,     30, true,  false, true };  // 有資訊的數值：展示體 Medium
+	constexpr FRole Action      {24,       60, true,  true,  true };  // 主動作（文字鈕／主鈕）：展示體大寫
 	constexpr FRole ActionSmall {Text,      0, false, false, false}; // 次要動作／導覽
 	constexpr FRole Warning     {Small,     0, false, false, true };  // 警告：粗＋白
 	constexpr FRole Body        {Text,      0, false, false, false}; // 正文、欄位、輸入

@@ -32,6 +32,7 @@ public:
 
 	// robo 鉤子（NiMenuShowJoin/NiMenuJoinCode exec 用）：切到加入頁＋預填房間碼
 	void RoboOpenJoinPage(const FString& PrefillCode);
+	void RoboGoBack();   // robo：等同按 ESC（NiMenuBack）
 
 	// robo 鉤子（NiMenuFontSample）：多文字系統取樣行上牆
 	void RoboShowFontSample(const FString& Sample);
@@ -57,6 +58,8 @@ private:
 
 	// Slate 要複合 UFont（裸 FontFace 資產＝豆腐字實錘）；UPROPERTY 保 GC
 	UPROPERTY() TObjectPtr<UFont> MenuFont;
+	// 標誌字貼圖（Slate brush 不保 GC；UPROPERTY 錨住）
+	UPROPERTY() TObjectPtr<UTexture2D> LogoTex;
 	UFont* BuildMenuFont();
 
 	// 64×1 水平漸層（alpha：前 45% 維持峰值，其後 smoothstep 收到 0）；runtime 生成

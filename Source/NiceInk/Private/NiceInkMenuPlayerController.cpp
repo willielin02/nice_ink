@@ -68,6 +68,18 @@ void ANiceInkMenuPlayerController::NiMenuShowJoin(const FString& Code)
 	}), 1.0f, false);
 }
 
+void ANiceInkMenuPlayerController::NiMenuBack(float DelaySeconds)
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		if (ANiceInkMenuHUD* MenuHud = Cast<ANiceInkMenuHUD>(GetHUD()))
+		{
+			MenuHud->RoboGoBack();
+		}
+	}), FMath::Max(0.1f, DelaySeconds), false);
+}
+
 void ANiceInkMenuPlayerController::NiMenuFontSample()
 {
 	FTimerHandle Unused;

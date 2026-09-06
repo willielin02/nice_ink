@@ -61,7 +61,7 @@ public:
 	float CamDistCm = 560.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
-	float CamHeightCm = 108.0f;
+	float CamHeightCm = 92.0f;   // 2026-09-06 二批：低機位（腰高）＝主角感；此前 108
 
 	// UE FOV＝水平角（16:9 下 45°≈垂直 26°；36 是望遠壓臉——首輪實錘）
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
@@ -90,7 +90,12 @@ public:
 	FVector DojoStageOrigin = FVector(430.0f, 40.0f, 0.0f);
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
-	float DojoExposureBias = 5.2f; // 道場的承重值（CLAUDE.md：曝光 bias 5.2）
+	// 2026-09-06 二批：整張畫面壓一檔（5.2→4.3），力士用 DancerSkinBoost 補回來＝主體亮、環境暗
+	// （REPO／PEAK 的選單世界都比主體暗；此前障子過曝成灰白、力士被平光壓成塑膠）
+	float DojoExposureBias = 4.2f;
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
+	float DancerSkinBoost = 1.3f;   // 1.75 把皮膚洗白（實拍）   // 力士皮膚 SkinBrightness 乘數（只在選單舞台）
+	bool bSkinBoosted = false;
 
 	bool bDojoLoaded = false;
 

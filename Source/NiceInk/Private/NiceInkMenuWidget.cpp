@@ -1,4 +1,5 @@
 #include "NiceInkMenuWidget.h"
+#include "Engine/Texture2D.h"
 
 #include "NiceInkLocText.h"
 #include "NiceInkMenuHUD.h"
@@ -93,6 +94,11 @@ namespace
 
 	FLinearColor WithA(FLinearColor C, float A) { C.A = A; return C; }
 
+	// 全站文字陰影（2026-09-06）：六款參照的每一個字都有陰影或描邊，無例外；
+	// 選單此前一個都沒有＝字直接躺在世界上、換個背景就隱形。掛在每個 STextBlock 上。
+	const FVector2D NiTextShadowOffset(1.0f, 1.0f);
+	const FLinearColor NiTextShadowColor(0.0f, 0.0f, 0.0f, 0.55f);
+
 	// 白卡制的**一個開關**（2026-09-05）：Meccha 的選單完全沒有卡片，控制項直接浮在
 	// 即時場景上；我們的白卡此前正好把背景那隻跳舞的力士切開一半（09-05 設定頁
 	// 實機截圖可證）。拆的方式是把卡片的底換成全透明、模糊強度歸零——
@@ -119,6 +125,12 @@ namespace
 FText SNiMenu::Loc(ENiLocKey Key) const
 {
 	return FText::FromString(NiLoc::T(OwnerPC.Get(), Key));
+}
+
+FText SNiMenu::Up(const FText& In)
+{
+	// 展示體＝全大寫；CJK／阿拉伯 ToUpper 是恆等
+	return FText::FromString(In.ToString().ToUpper());
 }
 
 FString SNiMenu::LocS(ENiLocKey Key) const
@@ -173,6 +185,19 @@ bool SNiMenu::IsLan() const
 	return !UNiceInkSessionSubsystem::IsOnlineServiceConfigured();
 }
 
+bool SNiMenu::IsHostJoinLocked() const
+{
+	// 主頁兩顆主動詞只被**真正互斥**的動作鎖住：開房中、加入中。搜房不算——搜房中按 HOST
+	// 沒有任何衝突（此前三種忙碌一視同仁，搜房那 5 秒把主動詞一起壓暗）。
+	const UNiceInkSessionSubsystem* S = Sessions();
+	if (!S)
+	{
+		return false;
+	}
+	const ENiSessionUiState St = S->GetUiState();
+	return St == ENiSessionUiState::Hosting || St == ENiSessionUiState::Joining;
+}
+
 bool SNiMenu::IsBusy() const
 {
 	const UNiceInkSessionSubsystem* S = Sessions();
@@ -223,6 +248,18 @@ void SNiMenu::Construct(const FArguments& InArgs)
 {
 	OwnerPC = InArgs._OwnerPC;
 	MenuFont = InArgs._Font;
+	if (UTexture2D* Logo = InArgs._LogoTex.Get())
+	{
+		LogoBrush.SetResourceObject(Logo);
+		LogoBrush.DrawAs = ESlateBrushDrawType::Image;
+		// 長寬比是常數，不讀貼圖：未 cook 的 -game 下貼圖在建構當幀還是 32×32 的佔位
+		// （非同步編譯），GetSizeX／GetSurfaceWidth 都回 32 ⇒ 標誌被拉成正方形（實錄 2026-09-06）。
+		// 來源＝Tools/AssetPrep/make_logo.py 產出 893×303；改標誌就改這個常數。
+		constexpr float LogoAspect = 303.0f / 893.0f;
+		LogoBrush.ImageSize = FVector2D(893.0f, 303.0f);
+		LogoW = 400.0f;                                                // 畫面寬的 21%
+		LogoH = LogoW * LogoAspect;
+	}
 
 	// AR 版面鏡像（v4.0e）：流向跟文化——SetCurrentCulture("ar") 時 Slate 整樹
 	// 自動鏡像（SHorizontalBox 逆序/HAlign 翻面/命中判定跟著走）；換語言重建
@@ -260,7 +297,7 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	const float R = NiSpace::Radius;
 	CardBrush = MakeRounded(WithA(NiHudColor::White, 0.0f), R);
 	PageGroundBrush = MakeRounded(WithA(NiHudColor::White, 0.0f), R);
-	KeycapBrush = MakeOutlinedBrush(WithA(NiHudColor::Black, 0.55f), WithA(NiHudColor::White, 0.70f), 1.0f, R);   // 與局內 DrawKeycap 同形
+	KeycapBrush = MakeOutlinedBrush(WithA(NiHudColor::Black, 0.70f), WithA(NiHudColor::White, 0.85f), 1.0f, R);   // 與局內 DrawKeycap 同形
 	SlotBrush = MakeOutlinedBrush(WithA(NiHudColor::White, 0.05f), WithA(NiHudColor::White, 0.30f), 1.0f, R);   // 房碼格：1px 外框（10% 白底在深地上看不見）
 	RuleBrush = MakeRounded(NiHudColor::AccentText, 1.0f);
 	DividerBrush = MakeRounded(WithA(NiHudColor::White, 0.14f), 1.0f);
@@ -270,16 +307,21 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	// 主動作＝強調色實填＋白字（一頁只有一顆）
 	// 主鈕（六修）：金框金字，hover 才微填——金當大面積填色是「工程師 UI」最強的訊號，
 	// Liar's Bar 的金只用在字與線。
-	PrimaryStyle = MakeOutlinedStyle(WithA(NiHudColor::Black, 0.35f), WithA(NiHudColor::Accent, 0.22f),
-		WithA(NiHudColor::Accent, 0.38f), NiHudColor::AccentText, 1.5f, R);
+	// 主鈕（2026-09-06 七修）：**實心白＋黑字**。六款參照的主動作全部實心（PEAK START、
+	// Among Us CREATE、Liar's READY），線框只給次要動作；1px 金框＝Bootstrap 的 btn-outline。
+	PrimaryStyle = MakeButtonStyle(WithA(NiHudColor::White, 0.92f), NiHudColor::White,
+		WithA(NiHudColor::White, 0.78f), R);
+	// 停用＝底降到 35%（Slate 預設的停用是整顆半透明疊灰＝糊成一塊）；黑字照舊
+	PrimaryStyle.SetDisabled(MakeRounded(WithA(NiHudColor::White, 0.35f), R));
 	// 分段控制的容器：1px 白 22% 外框，把幾個 chip 收成一個控制項
 	SegmentBrush = MakeOutlinedBrush(WithA(NiHudColor::White, 0.04f), WithA(NiHudColor::White, 0.22f), 1.0f, R);
 	// 地上的次要控制項（設定頁箭頭、列表 chip）：白 7% 微填
 	OnCardStyle = MakeButtonStyle(WithA(NiHudColor::White, 0.07f), WithA(NiHudColor::White, 0.16f),
 		WithA(NiHudColor::White, 0.24f), R);
 	// 導覽／輔助動作：無底、細白框
-	GhostStyle = MakeOutlinedStyle(WithA(NiHudColor::White, 0.0f), WithA(NiHudColor::White, 0.08f),
-		WithA(NiHudColor::White, 0.14f), WithA(NiHudColor::White, 0.25f), 1.0f, R);
+	// 次鈕：白 14% 底、無框（線框退役——一頁三種框就是沒有元件系統）
+	GhostStyle = MakeButtonStyle(WithA(NiHudColor::White, 0.14f), WithA(NiHudColor::White, 0.22f),
+		WithA(NiHudColor::White, 0.30f), R);
 	// 文字鈕（首頁動作堆疊）：無底無框，hover＝文字轉強調色＋左側短棒（MakeTextButton）
 	TextStyle = MakeButtonStyle(WithA(NiHudColor::White, 0.0f), WithA(NiHudColor::White, 0.0f),
 		WithA(NiHudColor::White, 0.06f), R);
@@ -296,6 +338,9 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	ChipOnBrush = MakeRounded(WithA(NiHudColor::White, 0.14f), R);   // 選中＝微亮底＋金字（見 chip 文字色）
 	ChipOffBrush = MakeRounded(WithA(NiHudColor::White, 0.0f), R);   // 未選＝無底，只有字
 	InsetBrush = MakeRounded(WithA(NiHudColor::White, 0.05f), R);
+	// 模態面板材料（三批）：黑 62% 圓角 8——設定這種「清單」要有一個容器才讀成一個物件
+	// （REPO／PEAK 的設定頁都是一塊深色面板；浮字讀成還沒套樣式的表格）。
+	PanelBrush = MakeRounded(WithA(NiHudColor::Black, 0.62f), 8.0f);
 	CardDividerBrush = MakeRounded(WithA(NiHudColor::White, 0.14f), 1.0f);
 	// 首啟創角判定（2026-08-12）：要在建 UI 之前算——個人檔案卡的版面
 	// 依模式在建構時分支（創角=任務優先／日常=你的東西在上）
@@ -362,14 +407,14 @@ void SNiMenu::Construct(const FArguments& InArgs)
 					.Visibility_Lambda([this]() { return Page == EPage::Root ? EVisibility::Visible : EVisibility::Collapsed; })
 					.OnClicked_Lambda([this]() { LangOrigin = EPage::Root; Page = EPage::Language; return FReply::Handled(); })
 				[
-					SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70)
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70)
 						.Text(FText::FromString(FString::Printf(TEXT("\u6587A  %s"),
 							*NiLoc::LangNativeName(GI() ? GI()->GetMenuLanguage() : 0))))
 				]
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::M, 0, 0, 0)
 			[
-				SNew(STextBlock).Font(Ty(NiType::Micro))
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Micro))
 					.ColorAndOpacity(NiHudColor::White25)
 					.Text(FText::FromString(FString::Printf(TEXT("v%s"), *Version)))
 			]
@@ -405,6 +450,17 @@ void SNiMenu::GoBack()
 	case EPage::Credits:  Page = EPage::Settings; break;
 	case EPage::Language: Page = LangOrigin; break;
 	case EPage::Profile:  CommitName(); Page = EPage::Root; break;
+	case EPage::Join:
+		// 根治（2026-09-06）：搜房只服務加入頁，離開它就沒有消費者——立刻取消前景搜尋，
+		// 否則 LAN 的 5 秒引擎逾時會讓主頁的 HOST／JOIN 暗上好幾秒、狀態列還寫著 looking for rooms。
+		if (UNiceInkSessionSubsystem* S = Sessions())
+		{
+			if (S->GetUiState() == ENiSessionUiState::Searching && !S->IsBackgroundSearching())
+			{
+				S->CancelMenuAction();
+			}
+		}
+		Page = EPage::Root; break;
 	default:              Page = EPage::Root; break;
 	}
 }
@@ -419,13 +475,13 @@ TSharedRef<SWidget> SNiMenu::MakeKeycapHint(const FString& Key, const FString& L
 		[
 			SNew(SBorder).BorderImage(&KeycapBrush).Padding(FMargin(12, 4))
 			[
-				SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::White)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::White)
 					.Text(FText::FromString(Key))
 			]
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::S, 0, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
 				.Text(FText::FromString(Label))
 		];
 }
@@ -438,7 +494,7 @@ TSharedRef<SWidget> SNiMenu::MakeGhostButton(const FString& Label, TFunction<voi
 		.ContentPadding(FMargin(26, 10))
 		.OnClicked_Lambda([OnClick]() { OnClick(); return FReply::Handled(); })
 		[
-			SNew(STextBlock).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(NiHudColor::Paper)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(NiHudColor::Paper)
 				.Text(FText::FromString(Label))
 		];
 }
@@ -455,7 +511,7 @@ TSharedRef<SWidget> SNiMenu::MakeChip(const FString& Label, bool bPublicValue)
 		.OnMouseButtonDown_Lambda([this, bPublicValue](const FGeometry&, const FPointerEvent&)
 			{ bPublicRoom = bPublicValue; return FReply::Handled(); })
 		[
-			SNew(STextBlock).Font(Ty(NiType::Body))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body))
 				.ColorAndOpacity_Lambda([this, bPublicValue]()
 					{ return bPublicRoom == bPublicValue ? FSlateColor(NiHudColor::AccentText) : FSlateColor(NiHudColor::PaperDim); })
 				.Text(FText::FromString(Label))
@@ -472,16 +528,31 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 	[
 		SNew(SVerticalBox)
 
+		// 標誌字（2026-09-06）：貼圖＝Oswald 排字＋墨滴（Tools/AssetPrep/make_logo.py）。
+		// 六款參照每一款都有一個佔畫面 15～25% 寬的標誌；沒有標誌的標題讀成佔位文字。
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Display)).ColorAndOpacity(NiHudColor::White)
-				.Text(FText::FromString(TEXT("NICE INK")))
+			SNew(SOverlay)
+			+ SOverlay::Slot()
+			[
+				SNew(SBox).WidthOverride(LogoW).HeightOverride(LogoH)
+					.Visibility(LogoBrush.GetResourceObject() ? EVisibility::HitTestInvisible : EVisibility::Collapsed)
+				[
+					SNew(SImage).Image(&LogoBrush).ColorAndOpacity(NiHudColor::White)
+				]
+			]
+			+ SOverlay::Slot()
+			[
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Display)).ColorAndOpacity(NiHudColor::White)
+					.Visibility(LogoBrush.GetResourceObject() ? EVisibility::Collapsed : EVisibility::HitTestInvisible)
+					.Text(FText::FromString(TEXT("NICE INK")))
+			]
 		]
 
 		// 斷線原因（有才顯示；host/join 時清除）
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::M, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Red)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Red)
 				.Visibility_Lambda([this]() { return ErrorBanner.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 				.Text_Lambda([this]() { return FText::FromString(ErrorBanner); })
 		]
@@ -489,20 +560,23 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 		// 字體取樣行（robo NiMenuFontSample 專用；平時空=隱藏）
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::M, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Value)).ColorAndOpacity(NiHudColor::White)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Value)).ColorAndOpacity(NiHudColor::White)
 				.Visibility_Lambda([this]() { return FontSample.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible; })
 				.Text_Lambda([this]() { return FText::FromString(FontSample); })
 		]
 
-		// --- 主動詞（兩顆，Heading）：與內頁同一條規則——內容從標題下 XL 開始 ---
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuTextBtnGutter, NiSpace::XL, 0, 0)
+		// 主頁縱向節奏（二批）：動詞欄從畫面高 ~36% 開始（REPO 的欄位置），下方留 64% 給世界；
+		// 比例用 FillHeight 給，不寫死像素（解析度一變就歪）。
+		+ SVerticalBox::Slot().FillHeight(0.22f)[SNew(SSpacer)]
+		// --- 主動詞（兩顆，Heading）---
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuTextBtnGutter, 0, 0, 0)
 		[
 			MakeTextButton(Loc(ENiLocKey::HostARoom), NiType::Action, [this]()
 			{
 				CommitName();
 				ErrorBanner.Reset();
 				Page = EPage::Host;
-			}, [this]() { return !IsBusy(); })
+			}, [this]() { return !IsHostJoinLocked(); })
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuTextBtnGutter, 0, 0, 0)
 		[
@@ -514,7 +588,7 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 				CodeBuffer.Reset();
 				bSearchKicked = false;
 				FSlateApplication::Get().SetAllUserFocus(AsShared());
-			}, [this]() { return !IsBusy(); })
+			}, [this]() { return !IsHostJoinLocked(); })
 		]
 		// 登入預告（線上模式且未登入才亮）
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, 0, 0, 0)
@@ -529,7 +603,7 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 						? EVisibility::Visible : EVisibility::Collapsed;
 				})
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70).AutoWrapText(true)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70).AutoWrapText(true)
 					.Text(Loc(ENiLocKey::SignInBrowserNote))
 			]
 		]
@@ -576,6 +650,7 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 		[
 			MakeStatusRow()
 		]
+		+ SVerticalBox::Slot().FillHeight(0.78f)[SNew(SSpacer)]
 	];
 }
 
@@ -585,7 +660,7 @@ TSharedRef<SWidget> SNiMenu::MakeTextButton(const TAttribute<FText>& Label, cons
 	// 文字鈕（中性制的主要控制項）：無底、無框；hover＝文字轉強調色＋左側 3px 短棒。
 	// 短棒佔位恆在（Hidden 不是 Collapsed）⇒ 文字不會在 hover 時位移。
 	// 主動詞（Heading）＝白；次要動詞（Text）＝白 70%；毀滅性＝hover 轉紅。
-	const bool bPrimary = Role.Size >= NiType::Heading;
+	const bool bPrimary = Role.Size >= 24;
 	const FLinearColor Idle = bPrimary ? NiHudColor::White : NiHudColor::White70;
 	const FLinearColor Hot = bDanger ? NiHudColor::Red : NiHudColor::AccentText;
 
@@ -614,13 +689,17 @@ TSharedRef<SWidget> SNiMenu::MakeTextButton(const TAttribute<FText>& Label, cons
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::M, 0, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(Role))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(Role))
 				.ColorAndOpacity_Lambda([Hovered, Usable, Idle, Hot]()
 				{
 					if (!Usable()) { return FSlateColor(NiHudColor::White45); }
 					return FSlateColor(Hovered() ? Hot : Idle);
 				})
-				.Text(Label)
+				// 展示體角色＝全大寫（CJK 恆等）
+				.Text_Lambda([Label, bUp = Role.bSerif]()
+				{
+					return bUp ? FText::FromString(Label.Get().ToString().ToUpper()) : Label.Get();
+				})
 		]
 		]);
 	return Btn.ToSharedRef();
@@ -662,7 +741,7 @@ TSharedRef<SWidget> SNiMenu::MakeRootLangRow()
 					return FReply::Handled();
 				})
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note))
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note))
 					.ColorAndOpacity(bSel ? NiHudColor::AccentText : NiHudColor::White45)
 					.Text(FText::FromString(NiLoc::LangNativeName(i)))
 			]
@@ -677,7 +756,7 @@ TSharedRef<SWidget> SNiMenu::MakeStatusRow()
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Body))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body))
 				.ColorAndOpacity_Lambda([this]() { return StatusColor(); })
 				.Text_Lambda([this]() { return StatusText(); })
 		]
@@ -722,7 +801,7 @@ TSharedRef<SWidget> SNiMenu::MakeMaxPlayersRow()
 				.OnMouseButtonDown_Lambda([this, N](const FGeometry&, const FPointerEvent&)
 					{ HostMaxPlayers = N; return FReply::Handled(); })
 			[
-				SNew(STextBlock).Font(Ty(NiType::Body))
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body))
 					.ColorAndOpacity_Lambda([this, N]()
 						{ return HostMaxPlayers == N ? FSlateColor(NiHudColor::AccentText) : FSlateColor(NiHudColor::PaperDim); })
 					.Text(FText::AsNumber(N))
@@ -754,7 +833,7 @@ TSharedRef<SWidget> SNiMenu::MakeHostLangRow()
 				.OnMouseButtonDown_Lambda([this, i](const FGeometry&, const FPointerEvent&)
 					{ HostLangIndex = i; return FReply::Handled(); })
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note))
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note))
 					.ColorAndOpacity_Lambda([this, i]()
 					{
 						const int32 Cur = HostLangIndex != INDEX_NONE ? HostLangIndex
@@ -791,7 +870,7 @@ TSharedRef<SWidget> SNiMenu::MakeJoinLangRow()
 			.OnMouseButtonDown_Lambda([PickLang, Lang](const FGeometry&, const FPointerEvent&)
 				{ PickLang(Lang); return FReply::Handled(); })
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note))
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note))
 					.ColorAndOpacity_Lambda([this, Lang]()
 						{ return JoinLangFilter == Lang ? FSlateColor(NiHudColor::AccentText) : FSlateColor(NiHudColor::PaperDim); })
 					.Text(Label)
@@ -817,8 +896,8 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
-				.Text(Loc(ENiLocKey::HostARoom))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+				.Text(Up(Loc(ENiLocKey::HostARoom)))
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XL, 0, 0)
 		[
@@ -831,7 +910,7 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 						SNew(SVerticalBox)
 						+ SVerticalBox::Slot().AutoHeight()
 						[
-							SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+							SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 								.Text(Loc(ENiLocKey::RoomVisibility))
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
@@ -843,19 +922,10 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 								+ SHorizontalBox::Slot().FillWidth(1)[MakeChip(LocS(ENiLocKey::PublicRoom), true)]
 							]
 						]
-						// 當前選項的後果說明（第一次玩也能預期）
-						+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiSpace::S, 0, 0)
-						[
-							SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
-								.Text_Lambda([this]()
-								{
-									return Loc(bPublicRoom ? ENiLocKey::PublicDesc : ENiLocKey::InviteOnlyDesc);
-								})
-						]
 						// 人數上限 2~6（2026-08-13 房主人數設定；chips 同可見性語彙）
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::M, 0, 0)
 						[
-							SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+							SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 								.Text(Loc(ENiLocKey::MaxPlayersLabel))
 						]
 						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
@@ -868,7 +938,7 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 							SNew(SBox).Visibility_Lambda([this]()
 								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
 							[
-								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+								SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 									.Text(Loc(ENiLocKey::Language))
 							]
 						]
@@ -887,7 +957,7 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 							SNew(SBox).Visibility_Lambda([this]()
 								{ return bPublicRoom ? EVisibility::Visible : EVisibility::Collapsed; })
 							[
-								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+								SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 									.Text(Loc(ENiLocKey::RoomNameLabel))
 							]
 						]
@@ -928,8 +998,8 @@ TSharedRef<SWidget> SNiMenu::BuildHostPage()
 						return FReply::Handled();
 					})
 				[
-					SNew(STextBlock).Font(Ty(NiType::Value)).ColorAndOpacity(NiHudColor::AccentText)
-						.Text(Loc(ENiLocKey::HostARoom))
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Action)).ColorAndOpacity(NiHudColor::OnAccent).ShadowOffset(FVector2D::ZeroVector)
+						.Text(Up(Loc(ENiLocKey::HostARoom)))
 				]
 			]
 		]
@@ -965,7 +1035,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 				+ SOverlay::Slot()[SNew(SImage).Image(&SlotBrush)]
 				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
-					SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
 						.Text_Lambda([this, i]()
 						{
 							return FText::FromString(i < CodeBuffer.Len() ? CodeBuffer.Mid(i, 1) : FString());
@@ -992,24 +1062,17 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
-				.Text(Loc(ENiLocKey::JoinARoom))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+				.Text(Up(Loc(ENiLocKey::JoinARoom)))
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::S, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::PaperDim)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::PaperDim)
 				.Text(Loc(ENiLocKey::AskHostCode))
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XL, 0, 0)
 		[
 			Slots
-		]
-
-		// 輸入方式要被告知：房號＝直接敲鍵盤（格子不可點、沒有這行就只能猜）
-		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::S, 0, 0)
-		[
-			SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
-				.Text(Loc(ENiLocKey::TypeCodeHint))
 		]
 
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::M, 0, 0)
@@ -1036,8 +1099,8 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 						return FReply::Handled();
 					})
 				[
-					SNew(STextBlock).Font(Ty(NiType::Value)).ColorAndOpacity(NiHudColor::AccentText)
-						.Text(Loc(ENiLocKey::JoinWithCode))
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Action)).ColorAndOpacity(NiHudColor::OnAccent).ShadowOffset(FVector2D::ZeroVector)
+						.Text(Up(Loc(ENiLocKey::JoinWithCode)))
 				]
 			]
 		]
@@ -1070,7 +1133,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 			})
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 					.Text(Loc(ENiLocKey::NoPublicRooms))
 			]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::M, 0, 0, 0)
@@ -1118,7 +1181,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 							SNew(SHorizontalBox)
 							+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
 							[
-								SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+								SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 									.Text(Loc(ENiLocKey::PublicRooms))
 							]
 							// 語言過濾 chip：顯示現值（母語名/全部語言）、點開選擇列
@@ -1132,7 +1195,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 										return FReply::Handled();
 									})
 								[
-									SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
+									SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
 										.Text_Lambda([this]()
 										{
 											return JoinLangFilter == INDEX_NONE
@@ -1152,7 +1215,7 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 										return FReply::Handled();
 									})
 								[
-									SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
+									SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
 										.Text(Loc(ENiLocKey::Refresh))
 								]
 							]
@@ -1206,7 +1269,7 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 			.IsEnabled_Lambda([Enabled]() { return !Enabled || Enabled(); })
 			.OnClicked_Lambda([OnClick]() { OnClick(); return FReply::Handled(); })
 			[
-				SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::White70)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::White70)
 					.Text(FText::FromString(Glyph == TEXT("<") ? TEXT("\u2039") : TEXT("\u203A")))
 			];
 	};
@@ -1221,15 +1284,16 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
 			[
-				SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::PaperDim)
-					.Text(FText::FromString(Label))
+				// 列標籤＝大寫小標（三批）：設定列是「標籤｜控制」，標籤不該跟值一樣大
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+					.Text(FText::FromString(Label.ToUpper()))
 			]
 			+ SHorizontalBox::Slot().AutoWidth()[MakeArrow(TEXT("<"), OnLeft, Enabled)]
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 			[
 				SNew(SBox).WidthOverride(150)
 				[
-					SNew(STextBlock).Font(Ty(NiType::Body)).Justification(ETextJustify::Center)
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).Justification(ETextJustify::Center)
 						.ColorAndOpacity_Lambda([Enabled]() -> FSlateColor
 						{
 							return (!Enabled || Enabled()) ? FSlateColor(NiHudColor::Paper) : FSlateColor(NiHudColor::PaperDim);
@@ -1250,16 +1314,16 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
-				.Text(Loc(ENiLocKey::SettingsBtn))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+				.Text(Up(Loc(ENiLocKey::SettingsBtn)))
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XL, 0, 0)
 		[
 			SNew(SBox).WidthOverride(NiSpace::CardWWide)
 			[
-				SNew(SBackgroundBlur).BlurStrength(NiMenuCardBlur).CornerRadius(FVector4(18, 18, 18, 18))
+				SNew(SBackgroundBlur).BlurStrength(8.0f).CornerRadius(FVector4(8, 8, 8, 8))
 				[
-					SNew(SBorder).BorderImage(&PageGroundBrush).Padding(FMargin(NiMenuGroundPad))
+					SNew(SBorder).BorderImage(&PanelBrush).Padding(FMargin(NiSpace::L, NiSpace::M))
 					[
 						SNew(SVerticalBox)
 
@@ -1444,7 +1508,9 @@ TSharedRef<SWidget> SNiMenu::BuildCreditsPage()
 		TEXT("nice ink uses these third-party works:"),
 		TEXT(""),
 		TEXT("Noto Sans family (Latin/JP/TC/SC/KR/Arabic) — (c) The Noto Project Authors, SIL Open Font License 1.1"),
+		TEXT("Oswald — (c) The Oswald Project Authors (Vernon Adams), SIL Open Font License 1.1"),
 		TEXT("icons adapted from game-icons.net — CC BY 3.0"),
+		TEXT("Lucide icons — (c) Lucide Contributors, ISC License"),
 		TEXT("\"Sauna\" 3d scene by local.yany (sketchfab) — CC BY 4.0"),
 		TEXT("\"Radiola from Matrix\" 3d model by Sirenko (sketchfab) — CC BY 4.0"),
 		TEXT(""),
@@ -1453,15 +1519,15 @@ TSharedRef<SWidget> SNiMenu::BuildCreditsPage()
 	TSharedRef<SVerticalBox> Box = SNew(SVerticalBox);
 	Box->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 	[
-		SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
-			.Text(Loc(ENiLocKey::Licenses))
+		SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+			.Text(Up(Loc(ENiLocKey::Licenses)))
 	];
 	Box->AddSlot().FillHeight(1)[SNew(SSpacer)];
 	for (const TCHAR* Line : Lines)
 	{
 		Box->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XS, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::White70)
 				.Text(FText::FromString(Line))
 		];
 	}
@@ -1504,7 +1570,7 @@ TSharedRef<SWidget> SNiMenu::BuildLanguagePage()
 					return FReply::Handled();
 				})
 			[
-				SNew(STextBlock).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(bSelected ? NiHudColor::AccentText : NiHudColor::White70)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(bSelected ? NiHudColor::AccentText : NiHudColor::White70)
 					.Text(FText::FromString(NiLoc::LangNativeName(i)))
 			]
 		];
@@ -1517,8 +1583,8 @@ TSharedRef<SWidget> SNiMenu::BuildLanguagePage()
 		[
 			// 頁內標題＝「語言」（入口鈕才需要「文A」救援語義——進到頁裡
 			// 的人已脫離迷路情境，正文的母語名網格自己會說話）
-			SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
-				.Text(Loc(ENiLocKey::Language))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+				.Text(Up(Loc(ENiLocKey::Language)))
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XL, 0, 0)
 		[
@@ -1549,7 +1615,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileFacesBlock()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 				.Visibility_Lambda([this]()
 				{
 					return (FaceRowBox.IsValid() && FaceRowBox->GetChildren()->Num() > 0)
@@ -1572,7 +1638,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
-				SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 					.Text(Loc(ENiLocKey::YourName))
 			]
 			// **欄位計數器**（2026-09-05；Meccha 每個輸入框右上都有 `11/30` 綠字）：
@@ -1580,7 +1646,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 			// 「這是一個會擋你的界線」，與其他說明小字分開。
 			+ SHorizontalBox::Slot().FillWidth(1).HAlign(HAlign_Right)
 			[
-				SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::Amber)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::Amber)
 					.Text_Lambda([this]() -> FText
 					{
 						const int32 N = NameBox.IsValid() ? NameBox->GetText().ToString().Len() : 0;
@@ -1621,7 +1687,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 					.Visibility_Lambda([this]()
 					{
 						const UNiceInkGameInstance* I = GI();
@@ -1633,7 +1699,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 			]
 			+ SHorizontalBox::Slot().AutoWidth()
 			[
-				SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Amber)
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Amber)
 					.Visibility_Lambda([this]()
 					{
 						return FPlatformTime::Seconds() < NameSavedUntil
@@ -1650,12 +1716,12 @@ TSharedRef<SWidget> SNiMenu::MakeProfileCashBlock()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
 				.Text(Loc(ENiLocKey::CashLabel))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS, 0, 0)
 		[
-			SNew(STextBlock).ColorAndOpacity(NiHudColor::Paper)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).ColorAndOpacity(NiHudColor::Paper)
 				.Font_Lambda([this]() -> FSlateFontInfo
 				{
 					UNiceInkPersonaSubsystem* P = Persona();
@@ -1680,7 +1746,7 @@ TSharedRef<SWidget> SNiMenu::MakeProfileCashBlock()
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 				.AutoWrapText(true)
 				.Visibility_Lambda([this]()
 				{
@@ -1699,13 +1765,13 @@ TSharedRef<SWidget> SNiMenu::MakeProfileUploadBlock()
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(STextBlock).Font(Ty(NiType::Warning)).ColorAndOpacity(NiHudColor::Paper)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Warning)).ColorAndOpacity(NiHudColor::Paper)
 				.AutoWrapText(true)
 				.Text(Loc(ENiLocKey::BrowHint))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 				.AutoWrapText(true)
 				.Text(Loc(ENiLocKey::PrivacyHint))
 		]
@@ -1725,20 +1791,20 @@ TSharedRef<SWidget> SNiMenu::MakeProfileUploadBlock()
 					return FReply::Handled();
 				})
 			[
-				SNew(STextBlock).Font(Ty(NiType::Value)).ColorAndOpacity(NiHudColor::AccentText)
+				SNew(STextBlock).Font(Ty(NiType::Action)).ColorAndOpacity(NiHudColor::OnAccent)
 					.Text_Lambda([this]()
 					{
 						// 已有臉＝「重新上傳」（user 定案 2026-08-07）
 						UNiceInkPersonaSubsystem* P = Persona();
-						return (P && P->HasCustomFace())
-							? Loc(ENiLocKey::ReuploadSelfie) : Loc(ENiLocKey::UploadSelfie);
+						return Up((P && P->HasCustomFace())
+							? Loc(ENiLocKey::ReuploadSelfie) : Loc(ENiLocKey::UploadSelfie));
 					})
 			]
 		]
 		// 管線狀態列（Running/Done/Failed；Idle 隱藏；Running 附秒數防「當機了嗎」）
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Note))
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note))
 				.Visibility_Lambda([this]()
 				{
 					UNiceInkPersonaSubsystem* P = Persona();
@@ -1781,11 +1847,11 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 		SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::BandTop, 0, 0)
 		[
-			SNew(STextBlock).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Title)).ColorAndOpacity(NiHudColor::Paper)
 				// 首啟創角＝同一頁換帽子：標題「創建你的力士」
 				.Text_Lambda([this]()
 				{
-					return Loc(bOnboarding ? ENiLocKey::CreateYourRikishi : ENiLocKey::Profile);
+					return Up(Loc(bOnboarding ? ENiLocKey::CreateYourRikishi : ENiLocKey::Profile));
 				})
 		]
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::XL, 0, 0)
@@ -1865,7 +1931,7 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 							return FReply::Handled();
 						})
 					[
-						SNew(STextBlock).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(NiHudColor::Paper)
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::ActionSmall)).ColorAndOpacity(NiHudColor::Paper)
 							.Text_Lambda([this]()
 							{
 								return FPlatformTime::Seconds() < QuitArmedUntil
@@ -2120,12 +2186,12 @@ void SNiMenu::RebuildRoomList()
 					SNew(SVerticalBox)
 					+ SVerticalBox::Slot().AutoHeight()
 					[
-						SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
 							.Text(FText::FromString(F.RoomName.IsEmpty() ? F.Code : F.RoomName))
 					]
 					+ SVerticalBox::Slot().AutoHeight().Padding(0, 2, 0, 0)
 					[
-						SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 							.Visibility(bDiffLang ? EVisibility::Visible : EVisibility::Collapsed)
 							.Text(FText::FromString(bDiffLang ? NiLoc::LangNativeName(F.LangIndex) : FString()))
 					]
@@ -2139,18 +2205,18 @@ void SNiMenu::RebuildRoomList()
 						SNew(SHorizontalBox)
 						+ SHorizontalBox::Slot().AutoWidth()
 						[
-							SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Amber)
+							SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Amber)
 								.Text(FText::FromString(DotsFilled))
 						]
 						+ SHorizontalBox::Slot().AutoWidth()
 						[
-							SNew(STextBlock).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::PaperDim)
+							SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::PaperDim)
 								.Text(FText::FromString(DotsEmpty))
 						]
 					]
 					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Right).Padding(0, 2, 0, 0)
 					[
-						SNew(STextBlock).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 							.Visibility(F.PingMs > 0 ? EVisibility::Visible : EVisibility::Collapsed)
 							.Text(FText::FromString(FString::Printf(TEXT("%d ms"), F.PingMs)))
 					]

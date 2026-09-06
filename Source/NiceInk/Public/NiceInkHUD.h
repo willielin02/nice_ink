@@ -84,6 +84,11 @@ protected:
 	// 缺席時退向量筆
 	UPROPERTY() TObjectPtr<UTexture2D> MarkerSprite;
 	UPROPERTY() TObjectPtr<UTexture2D> IconCash;
+	// Lucide 線圖示（2026-09-06 二批；ISC）：一家圖示、按名惰性載入。/Game/UI/Icons/T_Ico_<name>
+	UPROPERTY() TMap<FName, TObjectPtr<UTexture2D>> LucideCache;
+	UTexture2D* Ico(const TCHAR* Name);
+	UTexture2D* ActionIcon(ENiLocKey Label);   // 操作提示動詞→圖示（沒有＝nullptr）
+	void DrawRevealBand(float Y0, float Y1);   // 揭曉／結局橫幅後方的全寬暗帶（三批）
 	UPROPERTY() TObjectPtr<UTexture2D> IconRotate;
 	UPROPERTY() TObjectPtr<UTexture2D> IconEye;
 	UPROPERTY() TObjectPtr<UTexture2D> IconTrap;
@@ -174,6 +179,8 @@ protected:
 		bool bLeftEnabled = true, bool bRightEnabled = true);
 
 	void DrawBigTitle(const FString& Text, float CenterX, float Y, float SizePx, const FLinearColor& Color);
+	FVector2D MeasureBig(const FString& Text, float SizePx);
+	float BigCapTopOffset(float SizePx, float& OutCapH);   // 展示體大寫墨跡：行框頂→大寫頂的距離與大寫高（Slate 基線）   // 與 DrawBigTitle 同字面同字距的量測（面板要包住字就得量，不能猜行高）
 
 	// ---- 畫面（相位 × 角色）----
 	void DrawTopBar(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS, class ANiceInkCharacter* MyChar);

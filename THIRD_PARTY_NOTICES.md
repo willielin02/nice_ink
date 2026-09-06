@@ -11,6 +11,11 @@ linked or reproduced below. This file ships next to the game executable.
 - Used as the single UI font family for all 13 languages (menu and in-game HUD; Regular / Bold).
 - Sources: https://github.com/notofonts (latin-greek-cyrillic, arabic) and https://github.com/notofonts/noto-cjk (Sans SubsetOTF).
 
+### Oswald
+- Copyright (c) 2016 The Oswald Project Authors (https://github.com/googlefonts/OswaldFont)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Used as the display face (titles, phase banners, hero numbers, primary buttons; Medium / Bold) since 2026-09-06.
+
 ### M PLUS Rounded 1c
 - Copyright (c) M+ FONTS PROJECT
 - License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
@@ -33,6 +38,11 @@ linked or reproduced below. This file ships next to the game executable.
 - (Noto Serif TC is also bundled as a backup face.)
 
 ## Icons
+
+### Lucide
+- Copyright (c) 2022 Lucide Contributors; portions (c) 2013-2022 Cole Bemis (Feather)
+- License: ISC (https://lucide.dev/license)
+- Used for all UI line icons since 2026-09-06 (rendered from the Lucide icon font; SourceAssets/UI/icons/LICENSE_lucide.txt).
 
 ### game-icons.net
 - Icons adapted from game-icons.net
