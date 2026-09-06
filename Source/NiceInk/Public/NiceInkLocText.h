@@ -161,6 +161,10 @@ enum class ENiLocKey : uint8
 	PoseFaceDown,
 	DreamProgress,
 	AccuseWork,
+	// 第三批（2026-09-05）：右下角比分（Meccha 的 `残り人数`）。
+	// 罰酒杯＝我們的比分——三杯就結束這一局，而它此前是三個 12px 的圖示
+	// 擠在受害者臉旁邊，畫面上沒有任何東西大到會被一眼看見。
+	ScorePenalty,
 	COUNT
 };
 

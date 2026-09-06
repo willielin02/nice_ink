@@ -5,15 +5,21 @@ linked or reproduced below. This file ships next to the game executable.
 
 ## Fonts
 
+### Noto Sans / Noto Sans JP / Noto Sans TC / Noto Sans SC / Noto Sans KR / Noto Sans Arabic
+- Copyright (c) The Noto Project Authors (Google)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Used as the single UI font family for all 13 languages (menu and in-game HUD; Regular / Bold).
+- Sources: https://github.com/notofonts (latin-greek-cyrillic, arabic) and https://github.com/notofonts/noto-cjk (Sans SubsetOTF).
+
 ### M PLUS Rounded 1c
 - Copyright (c) M+ FONTS PROJECT
 - License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
-- Used as the in-game UI font (Medium / ExtraBold weights).
+- Bundled; no longer used by the UI since 2026-09-05 (kept as a fallback face).
 
 ### Zen Old Mincho
 - Copyright (c) The Zen Project Authors (Yoshimichi Ohira)
 - License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
-- Used as the menu display font (Regular / Bold / Black weights).
+- Bundled; no longer used by the UI since 2026-09-05 (kept as a fallback face).
 
 ### GenRyuMin (源流明體)
 - Copyright (c) ButTaiwan, derived from Source Han Serif (Adobe/Google)

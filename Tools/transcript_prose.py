@@ -108,7 +108,7 @@ LEADING_JUNK = set(r"[]|>#*=-+`$%/" + BACKSLASH + r"(){}<~@!;:,.'" + '"')
 # 行首全大寫代號＝程式印的標籤（SAVED / DONE / GATE / POOLED…）
 LEADING_TAG = re.compile(r"^[A-Z][A-Z0-9_]{2,}\b")
 # 行首是函式呼叫＝程式碼（P("…") / print(… / foo.bar(…）
-LEADING_CALL = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*\s*\(")
+LEADING_CALL = re.compile(r"^\d*[A-Za-z_][A-Za-z0-9_.]*\s*\(")
 
 # 結構性簽名：出現就一定不是敘述文字
 HARD_SIGNATURE = re.compile(
@@ -116,6 +116,7 @@ HARD_SIGNATURE = re.compile(
     r"|/[A-Za-z_][\w.\-]*/"                 # 路徑（反斜線路徑另在程式碼裡查）
     r"|^\S+\s*=\s*\S"                       # 賦值／鍵值
     r"|^\d+[-:]"                            # grep -n 的行號前綴（-C 的脈絡行用 `-`）
+    r"|^\d+	"                              # 行號後直接接 tab 的 grep 輸出
     r"|^\d{4}-\d{2}-\d{2}\b"                # 日期開頭＝git log／檔案列表
     r"|^[0-9a-f]{7,40}\s"                   # git log 的 commit hash 開頭
     r"|^\d+\.\s+\*\*"                       # 「26. **題材改制**…」＝被 cat 出來的文件條目
@@ -141,8 +142,16 @@ def _is_cjk(ch):
     return any(lo <= o <= hi for lo, hi in CJK_RANGES)
 
 
-def looks_like_prose(line):
-    """這一行可不可以當成一段敘述文字的開頭。"""
+DATA_RULE = re.compile(r"^\s*[-=_]{5,}\s*$|^\s*={2,}\s+\S")
+
+
+def looks_like_prose(line, nxt=None):
+    """這一行可不可以當成一段敘述文字的開頭。
+
+    nxt＝下一行。腳本印出來的中文標籤（「負向測試（…）：」「③ 選單按鈕樣式數」）
+    在字面上與敘述無從區分，但它們**後面接的是縮排的資料列或一條分隔線**，而敘述
+    段落不會。這個前瞻是本檔（UI 稽核 session）唯一擋得住那批標籤的判準。
+    """
     if not line or line[:1] in " \t":            # 縮排＝輸出或程式碼
         return False
     s = line.strip()
@@ -154,6 +163,10 @@ def looks_like_prose(line):
     if LEADING_TAG.match(s) or LEADING_CALL.match(s):
         return False
     if HARD_SIGNATURE.search(s) or BACKSLASH in s:   # 反斜線＝Windows 路徑
+        return False
+    # 注意空字串：`""[:1] in " \t"` 是 True（空字串是任何字串的子字串），
+    # 不先擋掉的話，段落後面接一行空白就會被誤判成資料標籤。
+    if nxt and (nxt[0] in " \t" or DATA_RULE.match(nxt)):
         return False
 
     body = [c for c in s if not c.isspace()]
@@ -247,7 +260,8 @@ def extract(lines, report=None):
             if i < n and lines[i].strip() == "OUT":
                 i += 1
                 while (i < n and not any_header(lines[i])
-                       and not looks_like_prose(lines[i])):
+                       and not looks_like_prose(
+                           lines[i], lines[i + 1] if i + 1 < n else "")):
                     i += 1                        # OUT 區：唯一靠判斷的邊界
 
         if report is not None:

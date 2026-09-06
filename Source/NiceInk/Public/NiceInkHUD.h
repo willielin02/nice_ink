@@ -6,6 +6,9 @@
 #include "NiceInkHUD.generated.h"
 
 enum class ENiceInkPhase : uint8;
+// 操作提示表要把「動詞」存成字串表的鍵（NiceInkLocText.h）。前置宣告而不是
+// include：標頭層不需要那張 13 語表，只需要知道這個列舉的底層型別。
+enum class ENiLocKey : uint8;
 class UFont;
 class UTexture2D;
 
@@ -32,6 +35,32 @@ protected:
 	// 文字投影開關：投影是給疊在 3D 場景上的字用的；平面深底（主選單）或
 	// 深色面板上開投影＝小字邊緣髒掉（08-06 user 抓「字雜亂」的主因）
 	bool bTokShadows = true;
+
+	// 字體人格（2026-09-05）：**一款遊戲只有一種字體人格，兩個載體共用**。
+	// 這是照抄 Meccha 的**規則**（他們全站單一圓體、零襯線）；**值**是我們自己的
+	// ——他們的人格是兒童廣告顏料，我們的是墨 ⇒ 明朝體。所以對齊的動作不是把
+	// 選單的明朝體拿掉，是把它推進局內（此前選單 10 個字級角色有 5 個明朝體，
+	// 局內四個 tier 連 serif 旗標都沒有＝一款遊戲兩種人格）。
+	// 掛在最底層原語上、用 TGuardValue 圈範圍——與 ChromeAlphaMul／bMirrorSuspended
+	// 同一個 pattern，呼叫端不必逐個改顏色。
+	// 分工：**聲部**（相位名／倒數／揭曉橫幅＝這款遊戲在說話）＝明朝體；
+	//       **工具字**（動詞／鍵名／數值／狀態）＝圓體（小字級的可讀性優先）。
+	bool bSerifFace = false;
+
+	// 鍵位狀態（2026-09-05；照抄 Meccha 的狀態系統）：他們的右緣是
+	// **白＝可用／灰＝不可用（鍵帽與象形圖一起變灰）／黃＝一次性動作／
+	// 綠膠囊＝切換中** 四態，而我們此前只有一個 `bAccent` 布林、語義還是
+	// 「這條最重要」＝一個通道兩個語義（UI_SYSTEM §4.4 早就要求收斂）。
+	// **刻意只做三態**：`ToggleOn` 在我們的遊戲裡沒有消費者——雷射（L）與搖夢（G）
+	// 都是一次性動作、裝睡（SHIFT）是按住不是切換。§4.2 鐵則「軸不存在的時候，
+	// 它的輸入、它的格子、它的操作表那一行都不該存在」同樣適用於狀態通道本身：
+	// 造一個沒有人用的視覺狀態，就是替下一個人埋一個「這個灰色是什麼意思」。
+	enum class ENiKeyState : uint8
+	{
+		Available,    // 現在可按（紙色鍵帽、白色滑鼠圖、紙色動詞）
+		Unavailable,  // 現在不可按（鍵帽／glyph／動詞**一起**淡下去——只淡一個會讀成排版錯誤）
+		OneShot,      // 一次性動作（酒金鍵帽）——按下去就發生、且要花掉某種東西
+	};
 
 	float TierSize(ETextTier Tier) const;
 
@@ -75,6 +104,10 @@ protected:
 	// 被 cruise tipSpd 那條契約抓過兩次。
 	// t=0（貼著主線）alpha=1 ⇒ 主線自己也用這張貼圖的 t=0，一張圖服務兩者。
 	UPROPERTY() TObjectPtr<UTexture2D> GlowTex;
+	// runtime 生成的**上緣壓暗漸層**（1×64，垂直）。用貼圖而不是疊 N 個 DrawRect：
+	// 疊出來的那一版被 robo 的 `cruise tipSpd` 契約抓到（2.05 對上限 2.00）——
+	// 那條契約只有 0.5% 餘裕，每幀成本會沿著針的離散步進洩漏進手感。
+	UPROPERTY() TObjectPtr<UTexture2D> ScrimTex;
 	void EnsureUiAssets();
 
 	// 臉像＝全 UI 身分載體（2026-08-06 SPEC #52 臉制定案：名字退出畫面）
@@ -100,6 +133,11 @@ protected:
 	// DrawIconTok/K2_DrawTexture 路徑），用 TGuardValue 圈住要淡的區塊——與
 	// bMirrorSuspended 同一個 pattern，呼叫端不必逐個 colour 改。
 	float ChromeAlphaMul = 1.0f;
+	// 相位切換淡入的乘數（2026-09-05）：DrawHUD 每幀由 PhaseChangedAt 算出，
+	// 與 ChromeAlphaMul 相乘後才進原語——兩者分開是因為 ChromeAlphaMul 在各區塊
+	// 以 TGuardValue 設**絕對值**，淡入若也走它會被蓋掉。
+	float ChromeAlphaBase = 1.0f;
+	double PhaseChangedAt = -1.0;
 	bool IsMirrored() const { return bRTLLayout && !bMirrorSuspended; }
 	float FlipX(float X) const;              // 錨點鏡像
 	float FlipXW(float X, float W) const;    // 矩形左緣鏡像
@@ -150,6 +188,11 @@ protected:
 	// 大廳（Lobby 相位）：玩家列表＋主機開始提示
 	void DrawLobbyPanel(const ANiceInkGameState* GS);
 
+	// 房主現在能不能開局（人數＋全員臉齊）。**兩個消費者**：底部那行狀態，
+	// 以及操作列 ENTER 的可按／不可按。同一個判準寫兩份必有一邊會舊
+	//（那會表現成「字說還差一個人、鍵卻是亮的」）。
+	bool CanHostStartMatch(const ANiceInkGameState* GS) const;
+
 	// ESC 系統選單：繼續／靈敏度／音量／離開房間（任何相位可開）
 	void DrawSystemMenu(class ANiceInkCharacter* MyChar);
 	void DrawAccusePanel(const ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
@@ -164,7 +207,33 @@ protected:
 
 	// 鍵帽圖形（Meccha 實物語言）：小圓角方塊＋鍵名。**鍵位要畫成鍵盤上的樣子**，
 	// 寫成句子裡的一個英文詞玩家不會把它讀成「一顆可以按的鍵」。回傳寬度。
-	float DrawKeycap(float X, float Y, const FString& Key, bool bAccent = false);
+	float DrawKeycap(float X, float Y, const FString& Key,
+		ENiKeyState State = ENiKeyState::Available);
+	// 平面滑鼠（2026-09-06）：Button 0=左鍵 1=右鍵 2=滾輪；回傳寬度
+	float DrawMouseGlyph(float LeftX, float Y, float H, int32 Button, ENiKeyState State);
+
+	// 上緣漸層壓暗（2026-09-05）。**這是整份對齊工作裡唯一一條「不能照抄」的**：
+	// Meccha 的「常駐 chrome 無面板」成立，前提是他們的世界是暗的——實測他們的
+	// chrome 背景亮度 27／80／84／155（最亮是打光的綠地板），而我們的道場有一整面
+	// 打亮的白障子牆，實測 208 ⇒ 上緣祈使句對比只有 **1.27**（近乎隱形）。
+	// 我先前假設「他們的白字描邊比較強、照抄就好」——**實測推翻**：他們字邊比背景
+	// 暗 1.7~27 階，我們 7.7~10，同一個量級。差的不是手法，是前提。
+	// 所以這裡自己發明，但守住他們那條規則的**意思**：常駐＝無邊界，模態＝有面板。
+	// 漸層沒有邊界（alpha 連續收到 0），所以它不是面板。
+	void DrawTopScrim(float BottomY);
+
+	// 姿勢／移動群（2026-09-05；Meccha 的底部中央橫排）：他們有**兩個**操作群
+	// ——右緣＝模式與動作（直排）、底部中央＝姿勢與移動（橫排、鍵帽在上動詞在下）。
+	// 我們此前把 `WASD 起身` 塞進右緣直列＝把身體狀態混進工具列。
+	void DrawPostureCluster(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
+
+	// 右下角比分（2026-09-05；Meccha 的 `残り人数` ＋巨大數字）：
+	// **罰酒杯就是我們的比分**——三杯結束這一局。此前它是三個 20px 圖示擠在
+	// 受害者臉旁邊，畫面上沒有任何東西大到會被一眼看見。
+	// 與規則塊**分時共用同一個角**（Meccha 同款：搜索階段教規則、開打後放比分）：
+	// 判準＝`杯數 == 0`（第一回合沒有賭注可以顯示 ⇒ 這時候正好教規則；
+	// 第一次猜錯之後這個角就永久變成計分板）。
+	void DrawScoreCorner(const class ANiceInkGameState* GS);
 
 
 	// 常駐操作列（右緣縱列，鍵帽＋動詞，隨狀態增減）——形式照 Meccha 實物：
@@ -200,6 +269,26 @@ protected:
 		class ANiceInkCharacter* MyChar, bool bIsVictim) const;
 	void DrawRulesBlock(const class ANiceInkGameState* GS,
 		class ANiceInkCharacter* MyChar, bool bIsVictim);
-	// glyph＝鍵帽（有刻字）或滑鼠圖（沒有刻字）；回傳寬度
-	float DrawInputGlyph(float X, float Y, const TCHAR* Key, class UTexture2D* Tex, bool bAccent);
+	// glyph＝鍵帽（有刻字）或滑鼠圖（沒有刻字）；回傳寬度。
+	// **X＝右緣時自己往左扣寬度**；bLeftAnchor=true 改成 X＝左緣（底部橫排用）。
+	float DrawInputGlyph(float X, float Y, const TCHAR* Key, class UTexture2D* Tex,
+		ENiKeyState State, bool bLeftAnchor = false);
+	float MeasureInputGlyph(const TCHAR* Key, class UTexture2D* Tex) const;
+
+	// ---- 操作提示的單一正本（2026-09-05；UI_SYSTEM §4.3 的第一號工程）----
+	// 此前每個呼叫點手寫 `Rows.Add({ TEXT("Q"), ... })`，散在一個 120 行的 switch 裡。
+	// 沒有這一層，**手把支援或改鍵功能一到就要全站重寫**——這是建它的唯一理由，
+	// 不是為了好看。同時它讓「這個相位有哪些鍵」變成可以被閘門讀的資料。
+	struct FNiControlHint
+	{
+		const TCHAR* Key;        // 鍵名（鍵盤有刻字＝寫字）；nullptr＝用 Tex
+		UTexture2D* Tex;         // 滑鼠圖（沒有刻字＝畫圖）
+		ENiLocKey   Label;       // 動詞（必須進字串表）
+		ENiKeyState State;
+		bool        bPosture;    // true＝身體姿勢/移動 ⇒ 底部中央橫排；false＝右緣直排
+	};
+	// 依（相位 × 角色 × 狀態）解出這一幀所有的操作提示——右緣與底部共用同一份，
+	// 差別只在 bPosture 這一欄。**一件事只講一次**由「同一份來源」在構造上保證。
+	void BuildControlHints(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar,
+		TArray<FNiControlHint>& Out) const;
 };

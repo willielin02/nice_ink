@@ -6,6 +6,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Engine/DirectionalLight.h"
+#include "Engine/LevelStreamingDynamic.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -44,9 +45,29 @@ void ANiceInkMenuStage::BeginPlay()
 	FActorSpawnParameters Params;
 	Params.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
+	// --- 道場實景（2026-09-05 中性制）---
+	// 「讓遊戲內容站出來」的字面意思＝內容得先在場：主選單的背景就是遊戲世界本身，
+	// 把 L_Dojo 以 level instance 串進選單世界（黑虛空退役）。舞台原點搬到榻榻米中心
+	// （VictimLieSpot＝儀式圈心），相機從東側往西看、力士站畫面右三分之一。
+	// 載入失敗＝退回舊制：隱形地板＋三盞平行光＋手動曝光。
+	bDojoLoaded = false;
+	if (ULevelStreamingDynamic* Inst = ULevelStreamingDynamic::LoadLevelInstance(World,
+		TEXT("/Game/Maps/L_Dojo"), FVector::ZeroVector, FRotator::ZeroRotator, bDojoLoaded))
+	{
+		Inst->bShouldBlockOnLoad = true;
+	}
+	if (bDojoLoaded)
+	{
+		SetActorLocation(DojoStageOrigin);
+		// 真地板在道場裡：隱形箱只在退路上承重（留著會讓力士踩在 z=0 的箱頂上懸空）
+		Floor->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	const FVector O = GetActorLocation();
+
 	// --- 力士替身（墨水 RT 壓 512：選單不畫畫、別佔 800MB）---
 	// 出生點=玩家視角最左（screen-left=world +Y）：舞步規格「從最左開始」
-	const FTransform SpawnT(FRotator(0, FaceCameraYaw, 0), FVector(0, SwayCm, 120.0f));
+	const FTransform SpawnT(FRotator(0, FaceCameraYaw, 0),
+		O + FVector(0, StageBiasCm + SwayCm, 120.0f));
 	Dancer = World->SpawnActorDeferred<ANiceInkCharacter>(ANiceInkCharacter::StaticClass(), SpawnT,
 		nullptr, nullptr, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (Dancer)
@@ -87,21 +108,35 @@ void ANiceInkMenuStage::BeginPlay()
 	// --- 相機（+X 往回看；角色面向 +X＝面向鏡頭）---
 	// 俯角 2°：中心射線落在角色平面 88cm 高→腳投影在畫面 ~85%、頭 ~18%
 	// ＝地面線入鏡、下方空白=地板；頭離開標題帶（俯角 5° 時腳吊在 70%=下方真空）
-	Camera = World->SpawnActor<ACameraActor>(FVector(CamDistCm, 0, CamHeightCm),
-		FRotator(-2.0f, 180.0f, 0), Params);
+	// 取景（六修／七修正負號）：相機偏到 +Y 側、朝 -Y 偏 14° 看（yaw 194）——正對的證件照沒有縱深；
+	// 力士仍靠 focal point 面向鏡頭，落在畫面右三分之一。
+	const FVector CamLoc = O + FVector(CamDistCm, bDojoLoaded ? 150.0f : 0.0f, CamHeightCm);
+	Camera = World->SpawnActor<ACameraActor>(CamLoc,
+		FRotator(-3.0f, bDojoLoaded ? 194.0f : 180.0f, 0), Params);
 	if (Camera && Camera->GetCameraComponent())
 	{
 		UCameraComponent* Cam = Camera->GetCameraComponent();
 		Cam->bConstrainAspectRatio = false;
 		Cam->SetFieldOfView(CamFovDeg);
-		// 鎖曝光：空景+人物的亮度不能被自動曝光泵動
+		// 鎖曝光：空景+人物的亮度不能被自動曝光泵動。
+		// 道場實景＝用道場的承重值（5.2；fullbright 均勻環境光下的曝光），
+		// 黑虛空退路＝舊的 9.6（三盞平行光的讀感）。
 		Cam->PostProcessSettings.bOverride_AutoExposureMethod = true;
 		Cam->PostProcessSettings.AutoExposureMethod = AEM_Manual;
 		Cam->PostProcessSettings.bOverride_AutoExposureBias = true;
-		Cam->PostProcessSettings.AutoExposureBias = ExposureBias;
+		Cam->PostProcessSettings.AutoExposureBias = bDojoLoaded ? DojoExposureBias : ExposureBias;
 		// 橫移力士＝動態模糊的頭號受害者（首輪截圖糊成一片實錘）——關
 		Cam->PostProcessSettings.bOverride_MotionBlurAmount = true;
 		Cam->PostProcessSettings.MotionBlurAmount = 0.0f;
+		// 景深：對焦力士、f/2.8——背景的障子與木格略糊，主體與介面才分得出前後
+		if (bDojoLoaded)
+		{
+			const float FocusDist = (O + FVector(0, StageBiasCm, 100.0f) - CamLoc).Size();
+			Cam->PostProcessSettings.bOverride_DepthOfFieldFstop = true;
+			Cam->PostProcessSettings.DepthOfFieldFstop = 4.0f;
+			Cam->PostProcessSettings.bOverride_DepthOfFieldFocalDistance = true;
+			Cam->PostProcessSettings.DepthOfFieldFocalDistance = FocusDist;
+		}
 	}
 	if (APlayerController* PC = World->GetFirstPlayerController())
 	{
@@ -113,6 +148,11 @@ void ANiceInkMenuStage::BeginPlay()
 	}
 
 	// --- 無影平行光×2（fullbright 讀感：正面主光＋反向補光）---
+	// 道場實景自帶環境光（SaunaSkyLight）——再疊平行光＝雙重曝光，只在退路上點
+	if (bDojoLoaded)
+	{
+		return;
+	}
 	auto SpawnSun = [&](const FRotator& Rot, float Lux, int32 Priority)
 	{
 		ADirectionalLight* Sun = World->SpawnActor<ADirectionalLight>(FVector(0, 0, 400), Rot, Params);
@@ -245,8 +285,8 @@ void ANiceInkMenuStage::Tick(float DeltaSeconds)
 		// =world -Y）、後 BeatsPerSide 拍＝由右到左；出生在最左＝循環相位對齊
 		const int32 Half = FMath::Max(1, BeatsPerSide);
 		const bool bGoingRight = (Beat / Half) % 2 == 0;
-		const float TargetY = bGoingRight ? -SwayCm : SwayCm;
-		DancerAI->MoveToLocation(FVector(0, TargetY, Dancer->GetActorLocation().Z),
+		const float TargetY = StageBiasCm + (bGoingRight ? -SwayCm : SwayCm);
+		DancerAI->MoveToLocation(FVector(GetActorLocation().X, GetActorLocation().Y + TargetY, Dancer->GetActorLocation().Z),
 			/*AcceptanceRadius=*/12.0f, /*bStopOnOverlap=*/false, /*bUsePathfinding=*/false,
 			/*bProjectDestinationToNavigation=*/false, /*bCanStrafe=*/true);
 	}

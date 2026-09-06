@@ -255,6 +255,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboAccuse(bool bCorrect);
 
+	// robo：從任何相位直接進結局（拍 Finale／PostGame 的畫面用）。兩人房猜錯需要第三人，
+	// 所以三杯路徑在 PIE 走不到——這裡只拍畫面不驗規則（規則由 fullloop 守）。
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboFinale();
+
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSpray(float AimYawWorld, uint8 OriginType);
 

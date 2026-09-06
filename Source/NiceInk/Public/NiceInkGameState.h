@@ -187,6 +187,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Nice Ink")
 	APlayerState* FindPlayerStateById(int32 PlayerId) const;
 
+	// 這一局的賭注進度（2026-09-05）：受害者累積的罰酒杯，三杯＝結局。
+	// HUD 的右下角比分與規則塊靠它分時共用同一個角，兩邊必須讀同一個來源
+	//（同一個判準寫兩份必有一邊會舊 ⇒ 兩個角落會同時出現或同時消失）。
+	// 無受害者（大廳／結局後）回 0。
+	int32 GetVictimPenaltyCups() const;
+
 private:
 	UFUNCTION()
 	void OnRep_Phase();

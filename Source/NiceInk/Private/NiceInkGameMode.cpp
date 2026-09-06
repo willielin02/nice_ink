@@ -2368,6 +2368,24 @@ void ANiceInkGameMode::DebugRoboEmerge()
 	}), 0.1f, false);
 }
 
+void ANiceInkGameMode::DebugRoboFinale()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		ANiceInkGameState* GS = NIState();
+		if (!GS || GS->VictimPlayerId == INDEX_NONE)
+		{
+			return;
+		}
+		if (ANiceInkPlayerState* VictimPS = FindNIPlayerState(GS->VictimPlayerId))
+		{
+			VictimPS->PenaltyCups = PenaltyCupsToFinale;
+		}
+		EnterFinale();
+	}), 0.1f, false);
+}
+
 void ANiceInkGameMode::DebugRoboWake()
 {
 	FTimerHandle Unused;

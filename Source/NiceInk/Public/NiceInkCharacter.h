@@ -1325,6 +1325,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	bool DebugRoboEnterLean(ANiceInkCharacter* Target, FVector Anchor, FVector Normal);
 
+	// robo：開／關 ESC 系統選單（拍畫面用；bSystemMenuOpen 不是 UPROPERTY、python 設不到）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboSystemMenu(bool bOpen) { SetSystemMenuOpen(bOpen); }
+
 	// robo：從「當前真實眼位」朝 AimPoint 打入座射線——驗「站在外面點不點得到」
 	// 這一段（DebugRoboEnterLean 先傳送到點旁＝跳過此段）。
 	// 回傳 "HIT z=<命中高> err=<離目標> eyez=<眼高>"；bEnter=true 時並走真 ServerEnterLean

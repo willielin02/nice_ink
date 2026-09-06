@@ -859,6 +859,10 @@ namespace
 	{ { TEXT("work {0} / {1}"), TEXT("作品 {0} / {1}"), TEXT("第 {0} / {1} 幅"), TEXT("第 {0} / {1} 幅"),
 		TEXT("작품 {0} / {1}"), TEXT("obra {0} / {1}"), TEXT("œuvre {0} / {1}"), TEXT("opera {0} / {1}"), TEXT("Werk {0} / {1}"),
 		TEXT("obra {0} / {1}"), TEXT("работа {0} / {1}"), TEXT("eser {0} / {1}"), TEXT("العمل {0} / {1}") } },
+	// ScorePenalty（右下角比分的小標；數量由杯子自己講，這一行只講「這是什麼」）
+	{ { TEXT("penalty"), TEXT("罰杯"), TEXT("罰酒"), TEXT("罚酒"),
+		TEXT("벌주"), TEXT("castigo"), TEXT("gage"), TEXT("penitenza"), TEXT("Strafe"),
+		TEXT("castigo"), TEXT("штраф"), TEXT("ceza"), TEXT("عقاب") } },
 	};
 
 	// 表的大小寫在兩個地方必有一邊會舊：改成推導長度＋編譯期對賬。

@@ -12,7 +12,7 @@
 猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產；局內 HUD 用 canvas 畫、
 輸入用輪詢；**主選單自 08-06 起＝Slate C++ 直寫（仍零編輯器資產；user 裁決——
 canvas 做不到毛玻璃半透明）**。
-**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock）。
+**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；**2026-09-06 中性制＝§11 為現行正本：白／黑／清酒金一個強調色、Noto Sans 13 語、四階字級、道場實景選單、鍵帽二版——08-06 白卡明朝制已作廢**；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock）。
 **設計的唯一權威是 `SPEC.md`**（**v4.0j——2026-09-03 作畫操作二次收斂（墨杯盤收成一排 #59 修訂、數字鍵退役、針尖指示器全制 #60）；v4.0i=09-02 作畫全制（#57~#59）；v4.0h——2026-08-29 開場動畫改制（#55 看電視版取代「目送極道壯漢」、待定 #14 結案）＋電視節目＝祭典的新聞畫面（#56）＋皮膚色度通道改裝解剖色調＋描圖帶寬勘誤 2.2→2.4**；v4.0g=08-18 入睡儀式（轉瓶→拾瓶→喝→醉倒、
 零硬切）與舞台移到道場正中央 #53/#54；v4.0f=08-10 首啟身分與強制上傳制
 #52 追記②；v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
@@ -515,7 +515,7 @@ canvas 做不到毛玻璃半透明）**。
   （-ExecCmds 直呼、逗號分隔——`|` 不是分隔符；**user 在機時禁焦點/輸入注入自動化、
   截圖=topmost+NOACTIVATE＋SetProcessDPIAware**）；記帳=join-by-code E2E 併 B4
   雙機驗收（本機防火牆無 UnrealEditor inbound 規則擋 LAN beacon）。
-  **08-06 Slate 白卡制（user 兩連打回 canvas 深棕版後定案）**：素色半透明＝
+  **08-06 Slate 白卡制（user 兩連打回 canvas 深棕版後定案；⚠ 2026-09-06 user 作廢，現制見 UI_SYSTEM §11，下段為歷史）**：素色半透明＝
   `SBackgroundBlur` 毛玻璃白卡（Paper 0.78）＋墨字＋酒金主鈕；SNiMenu 全 C++ 零
   資產（Visibility lambda 輪詢換頁、SButton IsFocusable(false) 防搶鍵盤焦點）；
   字體=**複合 UFont**（裸 FontFace 餵 FSlateFontInfo=豆腐字鐵坑；MenuHUD 建持

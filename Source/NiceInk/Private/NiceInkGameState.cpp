@@ -193,6 +193,13 @@ APlayerState* ANiceInkGameState::FindPlayerStateById(int32 PlayerId) const
 	return nullptr;
 }
 
+int32 ANiceInkGameState::GetVictimPenaltyCups() const
+{
+	const ANiceInkPlayerState* VictimPS =
+		Cast<ANiceInkPlayerState>(FindPlayerStateById(VictimPlayerId));
+	return VictimPS ? VictimPS->PenaltyCups : 0;
+}
+
 void ANiceInkGameState::OnRep_Phase()
 {
 	OnPhaseChanged.Broadcast(CurrentPhase);

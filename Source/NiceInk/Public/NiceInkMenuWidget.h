@@ -96,10 +96,17 @@ private:
 
 	// --- 樣式（brush/style 必須比 widget 長壽＝成員持有）---
 	FSlateBrush CardBrush, SlotBrush, RuleBrush, DividerBrush, UnderlineBrush;
+	// 頁面的「地」（2026-09-05 無卡片制）：全透明——版面樹保持原狀，只是底不畫了
+	FSlateBrush PageGroundBrush;
+	// 鍵帽底（與局內 canvas 的 DrawKeycap 同一個形狀語言：淺底、小圓角）
+	FSlateBrush KeycapBrush;
 	FSlateBrush ChipOnBrush, ChipOffBrush;
 	FSlateBrush InsetBrush; // 卡內分組框（歸屬用「裝在同個盒子」表達，不靠間距）
 	FSlateBrush CardDividerBrush; // 卡上細分隔線（日常個人檔案頁：資產區/上傳區分家）
 	FButtonStyle PrimaryStyle, OnCardStyle, GhostStyle, RowStyle;
+	FButtonStyle TextStyle;     // 文字鈕（中性制：無底無框、hover 轉強調色）
+	FSlateBrush AccentBarBrush; // 文字鈕 hover 的左側短棒
+	FSlateBrush SegmentBrush;   // 分段控制的外框容器（六修）
 	FButtonStyle DangerStyle;   // 毀滅性動作（Quit）＝ghost 但帶紅（2026-09-04 全站稽核）
 	FButtonStyle FaceTileStyle; // 臉庫縮圖鈕：平常無底（icon=頭形不能再被方塊裱起來）、hover 微亮
 	FEditableTextBoxStyle NameBoxStyle;
@@ -157,6 +164,27 @@ private:
 	bool HasFace() const;                    // 臉制閘門（2026-08-10：無臉不開玩）
 	void PickSelfieAndIntake();              // 檔案對話框→自拍管線
 	TSharedRef<SWidget> MakeGhostButton(const FString& Label, TFunction<void()> OnClick);
+	// 文字鈕（2026-09-05 中性制的主要控制項）：無底無框，hover＝強調色文字＋左側短棒
+	TSharedRef<SWidget> MakeTextButton(const TAttribute<FText>& Label, const NiType::FRole& Role,
+		TFunction<void()> OnClick, TFunction<bool()> Enabled = nullptr, bool bDanger = false);
+	TSharedRef<SWidget> MakeTextButton(const FText& Label, const NiType::FRole& Role,
+		TFunction<void()> OnClick, TFunction<bool()> Enabled = nullptr, bool bDanger = false);
+	TSharedRef<SWidget> MakeRootLangRow();   // 首頁欄底 13 語 chips（點選即套用）
+	// 換頁淡入：頁根登記（Construct）＋ Tick 設 RenderOpacity
+	TSharedPtr<SWidget> PageRoots[7];
+	EPage LastPageSeen = EPage::Root;
+	double PageChangedAt = -1.0;
+	TSharedRef<SWidget> RegisterPage(EPage P, TSharedRef<SWidget> W)
+	{
+		PageRoots[static_cast<int32>(P)] = W;
+		return W;
+	}
+	// 鍵帽＋動詞（2026-09-05）：選單也講局內那套操作語言——此前選單零鍵帽，
+	// 兩個載體讀起來不像同一個產品。
+	TSharedRef<SWidget> MakeKeycapHint(const FString& Key, const FString& Label);
+	// 返回的唯一實作（ESC 與左下那一列共用；頁面內的 Back 鈕已拆）
+	bool CanGoBack() const;
+	void GoBack();
 	TSharedRef<SWidget> MakeChip(const FString& Label, bool bPublicValue);
 	TSharedRef<SWidget> MakeMaxPlayersRow(); // 建房頁人數 2~6 chips
 	TSharedRef<SWidget> MakeHostLangRow();   // 建房頁公開房語言 chips（13 語 wrap）

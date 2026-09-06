@@ -42,8 +42,17 @@ public:
 	int32 BeatsPerSide = 2;       // 單程拍數（2 拍走完一個方向＝四拍一來回）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
-	float SwayCm = 180.0f;        // 橫移半幅（±；全寬舞台：畫面半寬 232cm 留 15% 邊距
-	                              // ——每趟穿過毛玻璃卡後面，主角用整個舞台）
+	// **2026-09-05 重算**：±180 那個值的理由寫在它自己的舊註解裡——「每趟穿過
+	// 毛玻璃卡後面」。**卡拆掉之後那個理由就不存在了**，而值留著 ⇒ 力士走到畫面
+	// 左半，設定頁的數值就疊在他的皮膚上（user viewport 實錘）。
+	// 新制＝**內容靠左、場景佔右**（Meccha 的版面規則）由舞台自己遵守：
+	//   內容欄右緣 x=632/1920 -> world Y +79.3cm；力士半體寬 ~84.6cm
+	//   ⇒ 中心可走 Y -147.4..-5.3 ⇒ 中心 -76、半幅 71（不出畫面、不進內容欄）
+	float SwayCm = 71.0f;         // 橫移半幅（±，繞 StageBiasCm）
+
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
+	// 舞台中心偏移（world Y；**負 = 畫面右**，與 MoveToLocation 的註解同一個慣例）
+	float StageBiasCm = -76.0f;
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
 	int32 SpinEveryBeats = 0;     // 0=不轉（user 定案「全程面對玩家」；旋鈕留未來變化拍）
@@ -73,7 +82,17 @@ public:
 	                              // 俯角光全照不到→沉黑「像被遮住」；朝上補光=治本）
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
-	float ExposureBias = 9.6f;    // 手動曝光（鎖死＝不隨畫面泵動）
+	float ExposureBias = 9.6f;    // 手動曝光（鎖死＝不隨畫面泵動；黑虛空退路用）
+
+	// --- 道場實景（2026-09-05 中性制）---
+	// 舞台原點＝榻榻米中心（VictimLieSpot (430,40)＝儀式圈心）；相機在 +X 側往 -X 看
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
+	FVector DojoStageOrigin = FVector(430.0f, 40.0f, 0.0f);
+
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Stage")
+	float DojoExposureBias = 5.2f; // 道場的承重值（CLAUDE.md：曝光 bias 5.2）
+
+	bool bDojoLoaded = false;
 
 private:
 	UPROPERTY() TObjectPtr<UBoxComponent> Floor;

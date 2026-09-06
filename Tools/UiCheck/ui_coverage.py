@@ -8,10 +8,17 @@ user 2026-09-05：「這是整個遊戲所有地方的同步改動，還是只�
 """
 import io, os, re, sys
 
+NL = chr(10)
+
 ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
 HUD = io.open(os.path.join(ROOT, "Source/NiceInk/Private/NiceInkHUD.cpp"), encoding="utf-8").read()
+# **先剝行註解、再剝塊註解**（2026-09-05 修）。反過來做會踩到一個真的坑：
+# NiceInkHUD.cpp 裡有一行行註解寫著 `/**墨**＝地對比…`，naive 的 `/\*.*?\*/`
+# 會把那個 `/**` 當成塊註解開頭，一路吃到下一個 `*/` ——實測**吞掉 10,918 個字元**，
+# 而那段剛好蓋住 BuildControlHints ⇒ 操作列整欄報 0/14。
+# 這是既有的潛伏 bug（那行註解早就在），只是被吞的範圍這次剛好蓋到要讀的函式。
+HUD = NL.join(re.sub(r"//.*$", "", ln) for ln in HUD.split(NL))
 HUD = re.sub(r"/\*.*?\*/", "", HUD, flags=re.S)
-HUD = "\n".join(re.sub(r"//.*$", "", ln) for ln in HUD.split("\n"))
 
 
 def body(fn):
@@ -23,7 +30,9 @@ def body(fn):
 
 
 IMP = body("GetPhaseImperative")
-STRIP = body("DrawControlStrip")
+# 操作提示 2026-09-05 起住在 BuildControlHints（單一正本），DrawControlStrip 只負責畫。
+# 舊版讀 DrawControlStrip 的內容 ⇒ 抽層之後那裡一條規則都沒有，整欄變成 0/14。
+STRIP = body("BuildControlHints")
 RULES = body("DrawRulesBlock")
 
 # 受測面：局內每一個玩家真的會看到的狀態
