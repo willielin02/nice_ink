@@ -9,10 +9,15 @@
 派對遊戲：相撲力士（被協會禁止刺青、羨慕極道的刺青）在道場喝酒，醉倒的人閉眼沉睡
 （沉睡＝**醉夢描圖小遊戲**：割糖餅式沿線描、描出線重來、描完甦醒；作畫者可花錢
 搖他的夢拖時間），其他人用刺青機在他身上畫畫；醒來後巡禮指認作者，
-猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產；局內 HUD 用 canvas 畫、
-輸入用輪詢；**主選單自 08-06 起＝Slate C++ 直寫（仍零編輯器資產；user 裁決——
-canvas 做不到毛玻璃半透明）**。
-**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；**2026-09-06 中性制＝§11＋§12 為現行正本：白／黑／清酒金一個強調色、展示體 Oswald（大寫＋字距，住複合字體的 Serif 三槽）＋內文 Noto Sans 13 語、三級尺度 13/18/96、全站描邊、標誌貼圖 T_UI_Logo、Lucide 線圖示 T_Ico_*、主鈕實心、模態面板黑 62%、相位橫幅動畫——08-06 白卡明朝制已作廢；§12.11 血價＝交付前要把每個容器當物件看（`panel_bounds_check.py`／`inspect_sheet.py`），字在盒子裡的位置要量不准猜（Slate 字級是 pt ×96/72）；§12.13 大廳三修被 user 打回還原＝版面變動沒有「不需裁決」**；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock、`panel_bounds_check.py` 房碼面板包字閘門、`inspect_sheet.py` 交付前七區原生解析度檢視圖；**四人真局自駕截圖＝`Saved/UiMock/ref/lobby4_test.sh`**（主機 AutoHost→讀 log 房碼→三沙箱 NiMenuJoinCode→NiShot，零輸入注入）；robo 鉤子 `NiMenuBack <秒>`＝等同按 ESC）。
+猜錯的畫變成真刺青。UE 5.7 C++，無 Blueprint/UMG 資產；輸入用輪詢。
+**UI 自 2026-09-08 起全站 Slate C++ 直寫（仍零編輯器資產）**：主選單 08-06 先行，
+局內 09-08 跟上（user 定案「把遊戲中所有畫面都改成 Slate 架構」）——
+`Source/NiceInk/Private/SNiHud.cpp` 是局內的根節點，**排版與文字歸 Slate、
+幾何與著色留 canvas**（漸層地、描圖盤、針尖環、墨杯盤、轉盤、veil）。
+搬的理由不是潔癖：canvas 端每個座標都是手算的，於是「程式裡寫的數字不等於畫面上的距離」
+（寫 10 畫面 16、字級 64 上螢幕是 88px 墨跡）——**同一個 repo 裡有排版引擎的那一半一個這種錯都沒有**。
+規範與全部血價＝`Docs/UI_SYSTEM.md` §15。
+**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；**2026-09-06 中性制＝§11＋§12 為現行正本：白／黑／清酒金一個強調色、展示體 Oswald（大寫＋字距，住複合字體的 Serif 三槽）＋內文 Noto Sans 13 語、三級尺度 13/18/96、全站描邊、標誌貼圖 T_UI_Logo、Lucide 線圖示 T_Ico_*、主鈕實心、模態面板黑 62%、相位橫幅動畫——08-06 白卡明朝制已作廢；§12.11 血價＝交付前要把每個容器當物件看（`panel_bounds_check.py`／`inspect_sheet.py`），字在盒子裡的位置要量不准猜（Slate 字級是 pt ×96/72）；§12.13 大廳三修被 user 打回還原＝版面變動沒有「不需裁決」**；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；圖示烘焙＝`Tools/AssetPrep/lucide_icons.py`（Lucide 線圖示）與 `lucide_mouse_icons.py`（滑鼠左／右／滾輪＝Lucide 骨架＋自繪高亮，不開引擎、一輪 3 秒、`--preview` 附同家線寬對照）；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock、`panel_bounds_check.py` 房碼面板包字閘門、`inspect_sheet.py` 交付前七區原生解析度檢視圖；**四人真局自駕截圖＝`Saved/UiMock/ref/lobby4_test.sh`**（主機 AutoHost→讀 log 房碼→三沙箱 NiMenuJoinCode→NiShot，零輸入注入）；robo 鉤子 `NiMenuBack <秒>`＝等同按 ESC）。
 **設計的唯一權威是 `SPEC.md`**（**v4.0j——2026-09-03 作畫操作二次收斂（墨杯盤收成一排 #59 修訂、數字鍵退役、針尖指示器全制 #60）；v4.0i=09-02 作畫全制（#57~#59）；v4.0h——2026-08-29 開場動畫改制（#55 看電視版取代「目送極道壯漢」、待定 #14 結案）＋電視節目＝祭典的新聞畫面（#56）＋皮膚色度通道改裝解剖色調＋描圖帶寬勘誤 2.2→2.4**；v4.0g=08-18 入睡儀式（轉瓶→拾瓶→喝→醉倒、
 零硬切）與舞台移到道場正中央 #53/#54；v4.0f=08-10 首啟身分與強制上傳制
 #52 追記②；v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的

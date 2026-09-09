@@ -22,12 +22,23 @@ class NICEINK_API ANiceInkHUD : public AHUD
 
 public:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void DrawHUD() override;
+
+	/** Slate 層要用同一座複合字體矩陣（局內與選單只有一套字體人格） */
+	UFont* GetUiFont() const { return UiFont; }
+
+protected:
+	// 局內 HUD 的 Slate 根節點（2026-09-08 起：排版與文字歸 Slate，幾何仍在 canvas）。
+	// 不是 UPROPERTY——Slate widget 由 shared ptr 管生命週期。
+	TSharedPtr<class SNiHudRoot> HudRoot;
 
 protected:
 	// ---- 設計 token：字階（Slate 字級，乘 UiScale）／對齊 ----
 	// （protected：主選單 HUD 繼承共用同一套 token helpers——樣式只有一套）
+public:
 	enum class ETextTier : uint8 { Display, Title, Body, Small };
+protected:
 	enum class EHAlign : uint8 { Left, Center, Right };
 
 	float UiScale = 1.0f; // ClipY / 1080：所有尺寸的唯一縮放來源
@@ -55,12 +66,15 @@ protected:
 	// 都是一次性動作、裝睡（SHIFT）是按住不是切換。§4.2 鐵則「軸不存在的時候，
 	// 它的輸入、它的格子、它的操作表那一行都不該存在」同樣適用於狀態通道本身：
 	// 造一個沒有人用的視覺狀態，就是替下一個人埋一個「這個灰色是什麼意思」。
+public:
 	enum class ENiKeyState : uint8
 	{
 		Available,    // 現在可按（紙色鍵帽、白色滑鼠圖、紙色動詞）
 		Unavailable,  // 現在不可按（鍵帽／glyph／動詞**一起**淡下去——只淡一個會讀成排版錯誤）
 		OneShot,      // 一次性動作（酒金鍵帽）——按下去就發生、且要花掉某種東西
 	};
+
+protected:
 
 	float TierSize(ETextTier Tier) const;
 
@@ -113,7 +127,39 @@ protected:
 	// 疊出來的那一版被 robo 的 `cruise tipSpd` 契約抓到（2.05 對上限 2.00）——
 	// 那條契約只有 0.5% 餘裕，每幀成本會沿著針的離散步進洩漏進手感。
 	UPROPERTY() TObjectPtr<UTexture2D> ScrimTex;
+	// 墨＝全站唯一的簽名材質（2026-09-07 大改；Tools/AssetPrep/ink_ui_textures.py）：
+	// 印章墨漬／一筆刷痕／滲墨邊／軟墨點。白底 alpha、畫時吃 tint。
+	UPROPERTY() TObjectPtr<UTexture2D> InkSplatTex;
+	UPROPERTY() TObjectPtr<UTexture2D> InkBrushTex;
+	UPROPERTY() TObjectPtr<UTexture2D> InkEdgeTex;
+	UPROPERTY() TObjectPtr<UTexture2D> InkDotTex;
 	void EnsureUiAssets();
+
+	// ---- 墨的原語（2026-09-07）----
+	float InkIn01(double SinceS, float DurS) const;                       // smoothstep 0→1
+	void DrawInkLine(float X, float Y, float W, float H, const FLinearColor& Color, float Frac = 1.0f); // 一筆刷痕（Frac＝畫到幾成）
+	void DrawInkBand(float Y0, float Y1, float Alpha);                     // 全寬暗帶＋上下滲墨邊
+	void DrawBottomScrim(float TopY);                                       // 下緣漸層（與 DrawTopScrim 對稱）
+	// 作品的螢幕包圍盒（筆劃點 UV→世界→投影）＋手刷的框（2026-09-07：巡禮／指認／場間）
+	bool ComputeWorkScreenBox(class ANiceInkCharacter* WorkOwner, int32 WorkId, FBox2D& Out);
+	void DrawWorkFrame(const FBox2D& Box, float Alpha);
+	void DrawWorkFocusFrame(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
+	void DrawBodyMap(const class ANiceInkCharacter* MyChar);                 // 鎖定中：你在身體的哪裡
+	void DrawLaserTags(class ANiceInkCharacter* MyChar);                     // 場間：碳黑刺青旁的雷射標籤
+
+	// ---- 現金跳字（無主色之後「剛剛什麼變了」全靠動態）----
+	int32 LastFrameWorkId = INDEX_NONE;
+	double FrameShownAt = -1.0;
+	int32 LastCashSeen = INT32_MIN;
+	int32 CashDelta = 0;
+	double CashDeltaAt = -1.0;
+
+	// ---- ESC 選單頁（Root／怎麼玩／設定）----
+	enum class ESysMenuPage : uint8 { Root, HowTo, Settings };
+	ESysMenuPage SysMenuPage = ESysMenuPage::Root;
+public:
+	void SetSysMenuPage(int32 Page) { SysMenuPage = static_cast<ESysMenuPage>(FMath::Clamp(Page, 0, 2)); }
+protected:
 
 	// 臉像＝全 UI 身分載體（2026-08-06 SPEC #52 臉制定案：名字退出畫面）
 	UPROPERTY() TMap<int32, TObjectPtr<UTexture2D>> FaceIconCache;
@@ -171,16 +217,19 @@ protected:
 
 	// 即時模式按鈕：畫＋判定一次完成；回傳「本幀被點下」。
 	// bOnLight＝畫在白卡上（墨字墨填）；否則畫在深底上（紙字紙填）。
-	bool Button(const FString& Label, float CenterX, float Y, float W, float H,
-		bool bEnabled = true, bool bAccent = false, bool bOnLight = false);
 
 	// 左右調整列：回傳 -1／0／+1
-	int32 AdjustRow(const FString& Label, const FString& Value, float CenterX, float Y,
-		bool bLeftEnabled = true, bool bRightEnabled = true);
 
 	void DrawBigTitle(const FString& Text, float CenterX, float Y, float SizePx, const FLinearColor& Color);
 	FVector2D MeasureBig(const FString& Text, float SizePx);
-	float BigCapTopOffset(float SizePx, float& OutCapH);   // 展示體大寫墨跡：行框頂→大寫頂的距離與大寫高（Slate 基線）   // 與 DrawBigTitle 同字面同字距的量測（面板要包住字就得量，不能猜行高）
+	float BigCapTopOffset(float SizePx, float& OutCapH);
+	// 行框頂 → 基線（＝全大寫字串的**墨跡底**）。堆疊文字要量墨跡不能量行框：
+	// 行框底下那截下伸空白會偷偷加進間距（2026-09-08 血價：小標與房號之間我寫 10，眼睛看到 16）。
+	float TokBaselineFromTop(ETextTier Tier, bool bBold);
+	// 行框頂 → 大寫墨跡頂（DrawTok 版的 BigCapTopOffset；只在展示體有效，內文體回 0）
+	float TokCapTopOffset(ETextTier Tier, bool bBold);
+	// 依可用寬度斷行（局內說明用；Slate 那邊改用 AutoWrapText）
+	TArray<FString> WrapTok(const FString& Text, ETextTier Tier, float MaxW, bool bBold);
 
 	// ---- 畫面（相位 × 角色）----
 	void DrawTopBar(const class ANiceInkGameState* GS, const class ANiceInkPlayerState* MyPS, class ANiceInkCharacter* MyChar);
@@ -286,6 +335,7 @@ protected:
 	// 此前每個呼叫點手寫 `Rows.Add({ TEXT("Q"), ... })`，散在一個 120 行的 switch 裡。
 	// 沒有這一層，**手把支援或改鍵功能一到就要全站重寫**——這是建它的唯一理由，
 	// 不是為了好看。同時它讓「這個相位有哪些鍵」變成可以被閘門讀的資料。
+public:
 	struct FNiControlHint
 	{
 		const TCHAR* Key;        // 鍵名（鍵盤有刻字＝寫字）；nullptr＝用 Tex
@@ -298,4 +348,61 @@ protected:
 	// 差別只在 bPosture 這一欄。**一件事只講一次**由「同一份來源」在構造上保證。
 	void BuildControlHints(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar,
 		TArray<FNiControlHint>& Out) const;
+
+	// ---- Slate 層的取用面（2026-09-08）----
+	// 這些原本是 protected 的內部工具，改成 public 讓 widget 讀同一份來源：
+	// 「一件事只講一次」的保證來自共用來源，不是來自我記得要同步兩份。
+	bool CanHostStart(const class ANiceInkGameState* GS) const { return CanHostStartMatch(GS); }
+	UTexture2D* GetActionIcon(ENiLocKey Label) { return ActionIcon(Label); }
+	UTexture2D* GetIcon(const TCHAR* Name) { return Ico(Name); }
+	UTexture2D* GetCashIcon() const { return IconCash; }
+	UTexture2D* GetCupIcon() const { return IconCup; }
+	UTexture2D* GetInkBrushTex() const { return InkBrushTex; }
+	UTexture2D* GetInkDotTex() const { return InkDotTex; }
+	UTexture2D* GetInkSplatTex() const { return InkSplatTex; }
+	double GetPhaseChangedAt() const { return PhaseChangedAt; }
+	/** 開發者遙測的內容（ni.DebugHud 1）；排版歸 Slate（SNiDebugPanel） */
+	void BuildDebugLines(TArray<FString>& Out) const;
+	/** 某一件作品在螢幕上的框（世界錨定標籤要用；裝置像素） */
+	bool GetWorkScreenBox(int32 WorkId, FBox2D& Out);
+	int32 GetLaserCost() const;
+
+	// 底部狀態句（2026-09-08）：canvas 端的 DrawBottomHint 是指令式的，Slate 是保留模式
+	// ⇒ 這裡放「這一幀想說的話」，呼叫點原樣不動，widget 每幀讀它。DrawHUD 開頭清空。
+	FString BottomHintText;
+	FLinearColor BottomHintColor = FLinearColor::White;
+	FString GetImperative(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar, bool bIsVictim) const
+	{
+		return GetPhaseImperative(GS, MyChar, bIsVictim);
+	}
+	/** 滑鼠圖是哪一顆：0 左／1 右／2 滾輪／-1 不是滑鼠 */
+	int32 MouseButtonOf(const UTexture2D* Tex) const
+	{
+		if (Tex == InMouseRight) { return 1; }
+		if (Tex == InMouseScroll) { return 2; }
+		if (Tex == InMouseLeft || Tex == InMouseMove) { return 0; }
+		return -1;
+	}
+	/** 落筆時整條 chrome 淡下去（canvas 端是 ChromeAlphaMul；Slate 端綁在 widget 的 opacity 上） */
+	float GetChromeAlpha() const;
+	/** 那顆頭的肖像（頭像亭；缺席回 nullptr ⇒ 呼叫端不畫臉） */
+	/**
+	 * 臉像的來源：**一次回傳「哪張圖」與「要不要裁」**（2026-09-08 血價）。
+	 *
+	 * 這兩件事一開始是兩個函式（GetFacePortrait ／ FacePortraitNeedsCrop），而它們**必須互相同意**。
+	 * 頭像亭還在烘焙的那個時間窗裡它們會不同意：解析器一路退回「名冊的整張臉貼圖」，
+	 * 判定式卻只看到「這個席位有臉資料」就回答「不用裁」⇒ 拿一張要裁的圖不裁 ⇒
+	 * 整張臉縮進 64px 的框裡＝一顆很小的頭浮在空白中（user 實拍指出）。
+	 * **凡是「兩個回答必須一致」的東西，就不該是兩個函式。**
+	 *
+	 * 亭的肖像已經是裁好的頭形（不裁）；名冊整張臉貼圖要照 canvas 端同一組 FaceUV
+	 * （(0.30,0.22)+(0.40,0.40)）裁出臉。
+	 */
+	UTexture* GetFaceSource(const class APlayerState* PS, bool& bOutNeedsCrop);
+	/** 舊呼叫點的別名（不需要知道裁切與否時用） */
+	UTexture* GetFacePortrait(const class APlayerState* PS)
+	{
+		bool bUnused = false;
+		return GetFaceSource(PS, bUnused);
+	}
 };

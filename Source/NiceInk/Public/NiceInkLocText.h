@@ -165,6 +165,31 @@ enum class ENiLocKey : uint8
 	// 罰酒杯＝我們的比分——三杯就結束這一局，而它此前是三個 12px 的圖示
 	// 擠在受害者臉旁邊，畫面上沒有任何東西大到會被一眼看見。
 	ScorePenalty,
+	// --- 2026-09-07 UI 大改（user 全權委託）：暫停選單三頁、睜眼鍵帽、指認賭注、巡禮第幾幅 ---
+	MenuHowToPlay,
+	MenuSettings,
+	MenuBack,
+	HowTo1,
+	HowTo2,
+	HowTo3,
+	HowTo4,
+	HowTo5,
+	ActFeign,
+	ActGetUp,
+	ActPrevPiece,
+	ActNextPiece,
+	AccuseStake,
+	ResWrongStake,
+	TourPiece,
+	TagLaser,
+	TagLeft,
+	TagPermanent,
+	// 大廳（2026-09-07 二版：一句狀態、一張房碼卡、一列人、兩顆鍵）
+	LobbyStatusWaiting,
+	LobbyStatusReady,
+	ActMenu,
+	ActCopy,
+	LobbyCopied,
 	COUNT
 };
 

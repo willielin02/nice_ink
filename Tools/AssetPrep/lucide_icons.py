@@ -15,6 +15,9 @@ NAMES = [
     "log-out", "check", "copy", "languages", "eye", "gavel", "settings", "user", "log-in", "plus",
     "scan-eye", "rotate-ccw", "eraser", "alarm-clock", "route", "zap", "arrow-right", "layers",
     "sun", "moon", "bed", "refresh-cw", "hourglass", "x",
+    # 2026-09-07 UI 大改：現金／墨杯 chip／語音／房主／循環鍵／暫停選單
+    "banknote", "pen", "mic", "mic-off", "crown", "chevron-left", "chevron-right",
+    "circle-help", "volume-2", "mouse-pointer-2", "pause", "book-open", "image", "user-round",
 ]
 SIZE = 128
 
@@ -47,6 +50,9 @@ for name in NAMES:
     bbox = d.textbbox((0, 0), ch, font=font)
     w, h = bbox[2] - bbox[0], bbox[3] - bbox[1]
     d.text(((SIZE - w) / 2 - bbox[0], (SIZE - h) / 2 - bbox[1]), ch, font=font, fill=(255, 255, 255, 255))
+    from PIL import ImageFilter
+    a = img.split()[3].filter(ImageFilter.MaxFilter(3))   # 線寬 +2px@128 ⇒ 20px 下約 +0.3px
+    img.putalpha(a)
     img.save(os.path.join(OUT, f"ico_{name.replace('-', '_')}.png"))
     done.append(name)
 print("rendered", len(done), "missing", missing)

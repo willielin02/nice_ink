@@ -1,4 +1,5 @@
 #include "NiceInkHUD.h"
+#include "SNiHud.h"
 
 #include "NiceInkPortraitBooth.h"
 
@@ -45,6 +46,24 @@ void ANiceInkHUD::BeginPlay()
 	{
 		Inst->EnsureBgmPlaying(GetWorld());
 	}
+
+	// Slate 層（2026-09-08）：排版與文字搬到有排版引擎的地方。ZOrder 0＝在選單之下；
+	// 整棵樹 HitTestInvisible，不准吃輸入。
+	if (GEngine && GEngine->GameViewport && GetWorld() && GetWorld()->IsGameWorld())
+	{
+		HudRoot = SNew(SNiHudRoot).Hud(this);
+		GEngine->GameViewport->AddViewportWidgetContent(HudRoot.ToSharedRef(), /*ZOrder=*/0);
+	}
+}
+
+void ANiceInkHUD::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HudRoot.IsValid() && GEngine && GEngine->GameViewport)
+	{
+		GEngine->GameViewport->RemoveViewportWidgetContent(HudRoot.ToSharedRef());
+	}
+	HudRoot.Reset();
+	Super::EndPlay(EndPlayReason);
 }
 
 UFont* ANiceInkHUD::BuildCompositeUiFont(UObject* Outer, const TCHAR* FontName)
@@ -164,7 +183,7 @@ void ANiceInkHUD::EnsureUiAssets()
 	IconSpray  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Spray.T_UI_Spray"));
 	IconKick   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Kick.T_UI_Kick"));
 	IconMarker = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Marker.T_UI_Marker"));
-	IconCash   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_Ico_coins.T_Ico_coins"));
+	IconCash   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_Ico_banknote.T_Ico_banknote"));   // 2026-09-07：coins 在 20px 讀不出是什麼
 	IconRotate = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Rotate.T_UI_Rotate"));
 	IconEye    = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Eye.T_UI_Eye"));
 	IconTrap   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Trap.T_UI_Trap"));
@@ -176,6 +195,10 @@ void ANiceInkHUD::EnsureUiAssets()
 	InMouseMove   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseMove.T_InMouseMove"));
 	PenSprite  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
 	MarkerSprite = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_MarkerPen.T_UI_MarkerPen"));
+	InkSplatTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkSplat.T_UI_InkSplat"));
+	InkBrushTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkBrush.T_UI_InkBrush"));
+	InkEdgeTex  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkEdge.T_UI_InkEdge"));
+	InkDotTex   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkDot.T_UI_InkDot"));
 
 	// 圓角方塊紋理：96²、角半徑 32、SDF alpha 1px 羽化——9-slice 任意尺寸取用，
 	// 縮小取樣只會更平滑（canvas 三角形零 AA，圓角一律走紋理 alpha）
@@ -518,6 +541,19 @@ float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float S
 		// 直接畫、無框無底。AR 鏡像在此翻一次（臉本體不左右翻）
 		X = FlipXW(X, Size);
 		TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
+		// 說話中（2026-09-07）：臉外圈一道白環（EOS RTC；LAN／PIE 恆無）——語音是這個遊戲的
+		// 第一頻道。沉睡者端本來就不畫任何臉 ⇒ 無方位、不可歸屬的護欄自動成立。
+		if (UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this))
+		{
+			if (GI->IsPlayerTalking(PS))
+			{
+				const float B = FMath::Max(2.0f, 2.0f * UiScale);
+				FLinearColor Ring = NiHudColor::White; Ring.A = 0.95f;
+				DrawRoundedBox(X - B * 2.0f, Y - B * 2.0f, Size + B * 4.0f, Size + B * 4.0f, Size * 0.5f + B * 2.0f, Ring);
+				FLinearColor Hole = NiHudColor::Black; Hole.A = 0.35f;
+				DrawRoundedBox(X - B, Y - B, Size + B * 2.0f, Size + B * 2.0f, Size * 0.5f + B, Hole);
+			}
+		}
 		Canvas->K2_DrawTexture(Portrait, FVector2D(X, Y), FVector2D(Size, Size),
 			FVector2D::ZeroVector, FVector2D::UnitVector,
 			FLinearColor(1.0f, 1.0f, 1.0f, ChromeAlphaMul * ChromeAlphaBase), BLEND_Translucent);
@@ -560,6 +596,14 @@ void ANiceInkHUD::DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, con
 	X = FlipXW(X, Size); // AR 鏡像（位置翻面、圖示本體不左右翻）
 	FLinearColor T = Tint;
 	T.A *= ChromeAlphaMul * ChromeAlphaBase;
+	// 圖示與文字同一條規則：疊在世界上要有陰影（2026-09-07；20px 線圖示在膚色上讀成髒點）
+	if (bTokShadows)
+	{
+		const float O = FMath::Max(1.0f, UiScale);
+		FLinearColor Sh(0.0f, 0.0f, 0.0f, 0.55f * T.A);
+		Canvas->K2_DrawTexture(Tex, FVector2D(X + O, Y + O), FVector2D(Size, Size),
+			FVector2D::ZeroVector, FVector2D::UnitVector, Sh, BLEND_Translucent);
+	}
 	Canvas->K2_DrawTexture(Tex, FVector2D(X, Y), FVector2D(Size, Size),
 		FVector2D::ZeroVector, FVector2D::UnitVector, T, BLEND_Translucent);
 }
@@ -613,77 +657,7 @@ void ANiceInkHUD::BeginUiFrame()
 	}
 }
 
-bool ANiceInkHUD::Button(const FString& Label, float CenterX, float Y, float W, float H,
-	bool bEnabled, bool bAccent, bool bOnLight)
-{
-	const float X = CenterX - W * 0.5f;
-	// 命中判定用物理座標（滑鼠活在物理空間；AR 鏡像時按鈕畫在翻面位置）
-	const float HitX = FlipXW(X, W);
-	const bool bHover = bEnabled &&
-		MousePos.X >= HitX && MousePos.X <= HitX + W && MousePos.Y >= Y && MousePos.Y <= Y + H;
 
-	// 素色簡約風：無邊框、圓角；主按鈕（accent）＝實心酒金＋墨字；
-	// 白卡上（bOnLight）＝墨填墨字、深底上＝紙填紙字。
-	// hover＝填色階梯跳變（硬切、不做漸變動畫）
-	const float Radius = FMath::Min(12.0f * UiScale, H * 0.5f);
-	FLinearColor Fill;
-	FLinearColor TextColor;
-	if (!bEnabled)
-	{
-		Fill = bOnLight ? NiHudColor::Ink : NiHudColor::Paper;
-		Fill.A = 0.05f;
-		TextColor = bOnLight ? NiHudColor::InkDim : NiHudColor::PaperDim;
-		TextColor.A = 0.6f;
-	}
-	else if (bAccent)
-	{
-		// 中性制：主鈕＝強調色實填＋白字（強調色只落在深色面上——它自己就是那個面）
-		Fill = bHover ? NiHudColor::AccentText : NiHudColor::Accent;
-		Fill.A = 1.0f;
-		TextColor = NiHudColor::OnAccent;
-	}
-	else if (bOnLight)
-	{
-		Fill = NiHudColor::Ink;     Fill.A = bHover ? 0.16f : 0.07f;
-		TextColor = NiHudColor::Ink;
-	}
-	else
-	{
-		Fill = NiHudColor::Paper;   Fill.A = bHover ? 0.24f : 0.10f;
-		TextColor = NiHudColor::Paper;
-	}
-	DrawRoundedBox(X, Y, W, H, Radius, Fill);
-
-	const FVector2D TextSize = MeasureTok(Label, ETextTier::Body, bAccent);
-	DrawTok(Label, CenterX, Y + (H - TextSize.Y) * 0.5f, ETextTier::Body, TextColor, EHAlign::Center, bAccent);
-
-	if (bHover && bClickThisFrame && !bClickConsumed)
-	{
-		bClickConsumed = true;
-		NiAudio::Play(this, ENiSound::UiClick);
-		return true;
-	}
-	return false;
-}
-
-int32 ANiceInkHUD::AdjustRow(const FString& Label, const FString& Value, float CenterX, float Y,
-	bool bLeftEnabled, bool bRightEnabled)
-{
-	const float RowH = 40.0f * UiScale;
-	DrawTok(Label, CenterX - 40.0f * UiScale, Y + 8.0f * UiScale, ETextTier::Body, NiHudColor::PaperDim, EHAlign::Right, false);
-	DrawTok(Value, CenterX + 170.0f * UiScale, Y + 8.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
-
-	int32 Delta = 0;
-	if (Button(TEXT("<"), CenterX + 30.0f * UiScale, Y, 36.0f * UiScale, RowH, bLeftEnabled))
-	{
-		Delta = -1;
-	}
-	if (Button(TEXT(">"), CenterX + 310.0f * UiScale, Y, 36.0f * UiScale, RowH, bRightEnabled))
-	{
-		Delta = +1;
-	}
-	return Delta;
-}
 
 void ANiceInkHUD::DrawBigTitle(const FString& Text, float CenterX, float Y, float SizePx, const FLinearColor& Color)
 {
@@ -773,6 +747,8 @@ void ANiceInkHUD::DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHA
 void ANiceInkHUD::DrawHUD()
 {
 	Super::DrawHUD();
+	// 底部狀態句每幀重新徵求（沒有人喊就不顯示）——保留模式的狀態要有明確的清空點
+	BottomHintText.Reset();
 
 	if (!Canvas || !GetWorld())
 	{
@@ -815,8 +791,12 @@ void ANiceInkHUD::DrawHUD()
 		return;
 	}
 
-	// 沉睡端：視覺全遮蔽——黑屏＋醉夢迷宮＋姿勢面板，其他 HUD 一概不畫
-	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
+	// 沉睡端：視覺全遮蔽——黑屏＋醉夢迷宮＋姿勢面板，其他 HUD 一概不畫。
+	// **例外＝結局的輸家**（2026-09-07）：昏睡不醒的人此前看到的是深藍空畫面加一行紅字，
+	// 而結局是整場的結算——他要看到的是自己的身體、被鎖住的刺青、飛走的錢（鏡頭由
+	// 角色端 ViewOrbitSelf 接管）。
+	const bool bEndgame = GS && (GS->CurrentPhase == ENiceInkPhase::Finale || GS->CurrentPhase == ENiceInkPhase::PostGame);
+	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen && !bEndgame)
 	{
 		DrawVictimSleepUI(MyChar, GS, MyPS);
 		DrawControlStrip(GS, MyChar);
@@ -864,6 +844,8 @@ void ANiceInkHUD::DrawHUD()
 	}
 
 	DrawBlindOverlay(MyChar);
+	DrawWorkFocusFrame(GS, MyChar);   // 巡禮／指認：這一幅在哪（手刷的框；chrome 之下）
+	DrawLaserTags(MyChar);            // 場間：碳黑刺青旁的雷射標籤
 	DrawTopBar(GS, MyPS, MyChar);
 	DrawCenterBanners(GS);
 
@@ -921,22 +903,17 @@ void ANiceInkHUD::DrawHUD()
 				DrawBottomHint(NiLoc::T(this, ENiLocKey::HudOutOfReach), NiHudColor::Paper);
 			}
 			DrawInkChip(MyChar); // 手上裝的是哪一杯＝畫面上唯一一份
+			DrawBodyMap(MyChar); // 你鎖在身體的哪裡（2026-09-07）
 		}
 	}
-	else if (MyChar && MyChar->bAsleep && MyChar->bEyesOpen)
-	{
-		// 無聲甦醒中：實景視野；提示只給受害者本人
-		DrawBottomHint(NiLoc::T(this, ENiLocKey::HudEyesOpen), NiHudColor::Paper);
-	}
-	// 站著時的 F／G 提示已移進右緣操作列（DrawControlStrip）＝一件事只講一次
+	// 睜眼未現身的兩顆鍵（SHIFT 裝睡／WASD 起身）已進操作列（BuildControlHints）——
+	// 此前是一行小句子壓在底部，全遊戲後果最重的兩顆鍵用全站最小的形式（2026-09-07）。
 
-	// 搖晃購買回執（只給攻擊者本人；不透漏夢內結果）
-	if (MyChar && GetWorld() && GetWorld()->GetTimeSeconds() < MyChar->ShakeAckFlashUntil)
+	// 搖晃回執（2026-09-07）：買到＝現金跳字（右上「−500」）已經講了；只有被拒才需要一行。
+	// 此前「DREAM SHAKEN −500」48 級印在畫布正中央、被麥克筆擋一半。
+	if (MyChar && GetWorld() && GetWorld()->GetTimeSeconds() < MyChar->ShakeAckFlashUntil && !MyChar->bLastShakeAckBought)
 	{
-		DrawTok(NiLoc::T(this, MyChar->bLastShakeAckBought
-			? ENiLocKey::HudShakeBought : ENiLocKey::HudShakeRefused),
-			Canvas->ClipX * 0.5f, Canvas->ClipY * 0.22f, ETextTier::Title,
-			MyChar->bLastShakeAckBought ? NiHudColor::Paper : NiHudColor::Red, EHAlign::Center, true);
+		DrawBottomHint(NiLoc::T(this, ENiLocKey::HudShakeRefused), NiHudColor::Red);
 	}
 
 	DrawInkCrosshair(GS);
@@ -1003,13 +980,27 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	// 沒有邊界的漸層（DrawTopScrim），再畫字。見該函式的註解。
 	// 版面＝倒數（大數字）→ 祈使句 → 受害者，三行共用畫面中線。
 	const float Remaining = GS->GetPhaseTimeRemaining();
-	const FString Count = (Remaining > 0.0f)
-		? FString::FromInt(FMath::CeilToInt(Remaining)) : FString();
+	// 倒數數字退役（2026-09-07）：12 張截圖裡最大的字有 6 張是倒數，而那 6 個倒數玩家都不能干預。
+	// 玩家不能干預的時鐘不准是畫面最大的字——只在巡禮畫一條墨線（整段進度）。
+	const FString Count;
+	const bool bAwakeVictim = MyChar && MyChar->bAsleep && MyChar->bEyesOpen;
 
 	const ANiceInkPlayerState* VictimNIPS =
 		Cast<ANiceInkPlayerState>(GS->FindPlayerStateById(GS->VictimPlayerId));
 	const bool bIsVictim = MyPS && GS->VictimPlayerId == MyPS->GetPlayerId();
-	const FString Imp = GetPhaseImperative(GS, MyChar, bIsVictim);
+	FString Imp = GetPhaseImperative(GS, MyChar, bIsVictim);
+	// 大廳（2026-09-07 二版）：這一面只回答「人到齊了沒」——上緣一句狀態，人數屬於這一句
+	const bool bLobby = GS->CurrentPhase == ENiceInkPhase::Lobby;
+	if (bLobby)
+	{
+		const FString N = FString::FromInt(GS->PlayerArray.Num());
+		const FString Max = FString::FromInt(FMath::Clamp(GS->MaxPlayers, 4, 6));
+		// 房主看真判準（人數＋臉齊）；客戶端只看人數（臉齊的旗標在客戶端讀不到）
+		const bool bHostHere = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
+		const int32 MinStart = (GetWorld() && GetWorld()->WorldType == EWorldType::PIE) ? 2 : 4;
+		const bool bReady = bHostHere ? CanHostStartMatch(GS) : GS->PlayerArray.Num() >= MinStart;
+		Imp = NiLoc::TFmt(this, bReady ? ENiLocKey::LobbyStatusReady : ENiLocKey::LobbyStatusWaiting, N, Max);
+	}
 	// 大廳：房號＝畫面上唯一要唸給朋友聽的東西 ⇒ 主角數字（Hero），接在祈使句下方，
 	// 與它共用同一片漸層（房號在白障子牆前，沒有地就是隱形的）。
 	// 字母之間留空：它是四個要唸出來的字母，不是一個單字。
@@ -1033,15 +1024,14 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	// 相位鋪出一大片沒有理由的暗。
 	{
 		float ContentH = 0.0f;
-		if (!Count.IsEmpty())
-		{
-			TGuardValue<bool> SerifGuard(bSerifFace, true);
-			ContentH += MeasureTok(Count, ETextTier::Display, true).Y + Gap;
-		}
 		if (!Imp.IsEmpty())
 		{
 			TGuardValue<bool> ImpSerif(bSerifFace, true);
-			ContentH += MeasureTok(Imp, ETextTier::Title, true).Y + NiUi::GapM * UiScale;
+			ContentH += MeasureTok(Imp, ETextTier::Title, false).Y + NiUi::GapM * UiScale;
+		}
+		if (GS->CurrentPhase == ENiceInkPhase::Tour)
+		{
+			ContentH += MeasureTok(TEXT("Ag"), ETextTier::Body, false).Y + Gap + 6.0f * UiScale + Gap;
 		}
 		// 房碼已搬去右上面板（三批），不再算進上緣漸層
 		(void)bLobbyCode;
@@ -1056,99 +1046,42 @@ void ANiceInkHUD::DrawTopBar(const ANiceInkGameState* GS, const ANiceInkPlayerSt
 	}
 
 	float Y = M;
-	if (!Count.IsEmpty())
-	{
-		// 倒數＝畫面上最大的一個字形 ⇒ 品牌聲部（明朝體）。這是「一款遊戲一種
-		// 字體人格」那條規則落在局內的第一個位置。
-		TGuardValue<bool> SerifGuard(bSerifFace, true);
-		Y += DrawTok(Count, W * 0.5f, Y, ETextTier::Display, NiHudColor::Paper,
-			EHAlign::Center, true).Y + Gap;
-	}
-
 	if (!Imp.IsEmpty())
 	{
-		// 祈使句＝展示體大寫 32（2026-09-06）：它是這一面唯一的一句話，取代所有解釋句
-		// （REPO／Liar's Bar 的上緣句子都是大寫展示體；小寫內文體讀成佔位文案）。
-		// **相位橫幅動畫**（四批）：換相位的頭 1.4 秒，同一句話先在畫面中央以 96 級出現
-		// （0.25s 淡入、停、0.4s 淡出），上緣那句在它淡出時接手＝「相位」從標籤變成事件。
+		// 祈使句＝**已搬到 Slate**（SNiTopBar，2026-09-08）。這裡只留「它佔多高」，
+		// 因為漸層與底下的受害者列要接在它下面——量而不畫。
 		TGuardValue<bool> ImpSerif(bSerifFace, true);
-		const double Since = (PhaseChangedAt >= 0.0 && GetWorld()) ? (GetWorld()->GetTimeSeconds() - PhaseChangedAt) : 99.0;
-		const float BannerLife = 1.4f, BannerIn = 0.25f, BannerOut = 0.4f;
-		float Center = 0.0f;
-		if (Since < BannerLife && GS->CurrentPhase != ENiceInkPhase::Lobby)
-		{
-			Center = (Since < BannerIn) ? static_cast<float>(Since / BannerIn)
-				: (Since > BannerLife - BannerOut) ? static_cast<float>((BannerLife - Since) / BannerOut) : 1.0f;
-			Center = FMath::Clamp(Center, 0.0f, 1.0f);
-			Center = Center * Center * (3.0f - 2.0f * Center);
-			FLinearColor Big = NiHudColor::Paper; Big.A = Center;
-			DrawTok(Imp, W * 0.5f, Canvas->ClipY * 0.40f, ETextTier::Display, Big, EHAlign::Center, true);
-		}
-		FLinearColor TopC = NiHudColor::Paper; TopC.A = 1.0f - Center * 0.85f;
-		Y += DrawTok(Imp, W * 0.5f, Y, ETextTier::Title, TopC,
-			EHAlign::Center, true).Y + NiUi::GapM * UiScale;
+		Y += MeasureTok(Imp, ETextTier::Title, false).Y + NiUi::GapM * UiScale;
 	}
-
-	if (bLobbyCode)
+	if (GS->CurrentPhase == ENiceInkPhase::Tour)
 	{
-		// **房碼面板**（三批；2026-09-06 二修——user 拿四人真局截圖問「這個排版是有設計過的嗎」）：
-		// 一個可以獨立截圖傳給朋友的物件。二修定案：固定寬 320（80U）、與現金列留 16；
-		// 第一列＝小標（13、70%）靠左＋人數（18 級展示體 Medium）靠右＝同一物件的兩個屬性同一列；
-		// 房碼 **64 級**置中（96 是倒數的尺寸——一修用了 96，四個字母撐出畫面寬的五分之一、
-		// 比祈使句還大；人數 13 級與它差七倍讀不成同一塊）。
+		// 第幾幅／共幾幅＋整段墨線（巡禮是情緒爆點，此前上緣只有倒數 4）
 		TGuardValue<bool> Face(bSerifFace, true);
-		const float PadX = NiUi::GapL * UiScale;                 // 16
-		const float PadY = 3.0f * NiUi::U * UiScale;             // 12
-		const float PanelW = 80.0f * NiUi::U * UiScale;          // 320
-		const float CodePx = 64.0f;                              // 房碼字級（1080p 基準；DrawBigTitle 內乘 UiScale）
-		// **光學置中**（2026-09-06 三修；user：「字往下沉」）：行框含字型上伸的空白（Oswald 上伸 1.193em、
-		// 大寫墨跡從 0.371em 開始、到 1.208em）。面板高度用**墨跡高**算、繪製時把行框頂到墨跡頂的
-		// 空白扣掉 ⇒ 房碼上下的空氣相等。數字來源＝Oswald-Bold.ttf 實量（Tools 內 PIL getbbox）。
-		const float CodeFontPx = FMath::RoundToInt(CodePx * UiScale);
-		float CodeH = 0.0f;                                                 // 大寫墨跡高（0.81em）
-		const float CodeLead = BigCapTopOffset(CodePx, CodeH);              // 行框頂→墨跡頂（Slate 基線）
-		const FString CountLine = FString::Printf(TEXT("%d / %d"), GS->PlayerArray.Num(), FMath::Clamp(GS->MaxPlayers, 4, 6));
-		const FVector2D CountSize = MeasureTok(CountLine, ETextTier::Body, false);
-		// 小標讓位給人數：小視窗（540p）字級碰到 8px 下限不再等比縮，兩者會撞 ⇒ 小標截斷
-		const FString HintFit = FitTok(CodeHint, ETextTier::Small, PanelW - PadX * 2.0f - CountSize.X - Gap, false);
-		const FVector2D HintSize = MeasureTok(HintFit, ETextTier::Small, false);
-		const float RowH = FMath::Max(HintSize.Y, CountSize.Y);
-		// 列與房碼之間留 Gap（4）：小標行框底下本來就有 ~9px 的下伸留白，加上 4 才與底部內距 12 視覺相等
-		// （五修實量：用 PadY 時上空氣 24、下空氣 11）
-		const float PanelH = PadY + RowH + Gap + CodeH + PadY;
-		const float PX = W - M - PanelW;
-		const float PY = M + 5.0f * NiUi::U * UiScale + NiUi::GapL * UiScale;   // 現金列（20）之下留 16
-		FLinearColor Panel = NiHudColor::Black; Panel.A = 0.62f;
-		DrawRoundedBox(PX, PY, PanelW, PanelH, 2.0f * NiUi::Radius * UiScale, Panel);
-		const float RowY = PY + PadY;
-		DrawTok(HintFit, PX + PadX, RowY + (RowH - HintSize.Y) * 0.5f, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
-		DrawTok(CountLine, PX + PanelW - PadX, RowY + (RowH - CountSize.Y) * 0.5f, ETextTier::Body, NiHudColor::Paper, EHAlign::Right, false);
-		// 水平：字距會在最後一個字母後面多留半個字距 ⇒ 往左補一半才是墨跡置中
-		const float TrackHalf = (CodeH / 0.81f) * (NiDisplayTracking / 1000.0f) * 0.5f;   // em 像素＝大寫高/0.81
-		DrawBigTitle(SpacedCode, PX + PanelW * 0.5f - TrackHalf, RowY + RowH + Gap - CodeLead, CodePx, NiHudColor::Paper);
+		// 「第幾幅／共幾幅」＝已搬到 Slate（SNiTopBar）；這裡只量高度，墨線（幾何）留在 canvas
+		const FString Piece = NiLoc::TFmt(this, ENiLocKey::TourPiece,
+			FString::FromInt(FMath::Max(1, GS->TourWorkNumber)), FString::FromInt(FMath::Max(1, GS->TourWorkCount)));
+		Y += MeasureTok(Piece, ETextTier::Body, false).Y + Gap;
+		const float Total = FMath::Max(1.0f, GS->PhaseEndServerTime - (GS->PhaseEndServerTime - Remaining) );
+		(void)Total;
+		const float LineW = 60.0f * NiUi::U * UiScale;   // 240
+		const float Frac = (GS->TourWorkCount > 0)
+			? FMath::Clamp((GS->TourWorkNumber - 1 + 1.0f) / GS->TourWorkCount, 0.0f, 1.0f) : 0.0f;
+		FLinearColor LineC = NiHudColor::Paper; LineC.A = 0.9f;
+		DrawInkLine(W * 0.5f - LineW * 0.5f, Y, LineW, 6.0f * UiScale, LineC, FMath::Max(0.04f, Frac));
+		Y += 6.0f * UiScale + Gap;
 	}
 
-	if (bShowVictim)
-	{
-		const FString Name = FitTok(VictimNIPS->GetPlayerName(), ETextTier::Small,
-			60.0f * NiUi::U * UiScale);
-		const FVector2D NameSize = MeasureTok(Name, ETextTier::Small, false);
-		const float RowW = FaceSize + Gap + NameSize.X;
-		float X = W * 0.5f - RowW * 0.5f;
-		DrawFaceTok(VictimNIPS, X, Y, FaceSize);
-		X += FaceSize + Gap;
-		DrawTok(Name, X, Y + (FaceSize - NameSize.Y) * 0.5f, ETextTier::Small,
-			NiHudColor::Paper, EHAlign::Left, false);
-	}
+	(void)bLobbyCode; (void)SpacedCode; (void)CodeHint;   // 房碼卡搬去左下（DrawLobbyPanel，2026-09-07 二版）
 
-	// 現金（右上；與四邊共用同一個邊距）
-	if (MyPS)
-	{
-		const float CashIcon = 5.0f * NiUi::U * UiScale;  // 20
-		DrawIconTok(IconCash, W - M - CashIcon, M, CashIcon, NiHudColor::PaperDim);
-		DrawTok(FText::AsNumber(MyPS->Cash).ToString(), W - M - CashIcon - Gap, M,
-			ETextTier::Body, NiHudColor::Paper, EHAlign::Right, true);
-	}
+	// 上緣受害者＝**已搬到 Slate**（SNiVictimTag，2026-09-08）
+	(void)VictimNIPS; (void)FaceSize;
+
+	// 現金（右上；與四邊共用同一個邊距）。**跳字**（2026-09-07）：無主色之後「剛剛什麼變了」
+	// 全靠動態——金額改變的 1.6 秒內在數字下方浮一個 +／−差值（進帳白、扣款紅），
+	// 取代此前印在畫布正中央的「DREAM SHAKEN −500」。睜眼未現身的受害者不畫現金（那一刻
+	// 只有兩件事：他在看誰、要不要縮回去）。
+	// 右上現金＋跳字＝**已搬到 Slate**（SNiCash，2026-09-08）。
+	(void)bAwakeVictim; (void)bLobby;
 
 }
 
@@ -1163,7 +1096,7 @@ FString ANiceInkHUD::GetPhaseImperative(const ANiceInkGameState* GS,
 	}
 	if (MyChar)
 	{
-		if (MyChar->bAsleep && !MyChar->bEyesOpen) { return NiLoc::T(this, ENiLocKey::ImpDream); }
+		if (MyChar->bAsleep && !MyChar->bEyesOpen && GS->CurrentPhase == ENiceInkPhase::Drawing) { return NiLoc::T(this, ENiLocKey::ImpDream); }
 		if (MyChar->IsFeigningSleep())             { return NiLoc::T(this, ENiLocKey::ImpFeign); }
 	}
 	switch (GS->CurrentPhase)
@@ -1188,99 +1121,14 @@ FString ANiceInkHUD::GetPhaseImperative(const ANiceInkGameState* GS,
 void ANiceInkHUD::DrawRulesBlock(const ANiceInkGameState* GS,
 	ANiceInkCharacter* MyChar, bool bIsVictim)
 {
-	// **右下角常駐規則塊**（照抄 Meccha：模式名＋兩行「怎麼贏」）。
-	// 教「按哪顆鍵」與教「怎麼玩」是兩件事：兩個區塊、兩種顏色、兩個字級。
-	// 我們此前完全沒有這個東西——玩家無處得知猜錯會怎樣。
-	if (!GS || !Canvas)
-	{
-		return;
-	}
-	// **分時共用右下角**（2026-09-05；Meccha 同款）：他們搜索階段放模式名＋規則、
-	// 開打之後換成 `残り人数`。一格一職、佔用者隨相位輪替。
-	// 判準＝受害者的杯數：0＝這一局還沒有賭注可以顯示，正好是新玩家需要規則的時候；
-	// 第一次猜錯之後這個角永久變成計分板（DrawScoreCorner）。
-	if (GS->GetVictimPenaltyCups() > 0)
-	{
-		return;
-	}
-	ENiLocKey Title = ENiLocKey::COUNT, L1 = ENiLocKey::COUNT, L2 = ENiLocKey::COUNT;
-	if (MyChar && MyChar->bAsleep && !MyChar->bEyesOpen)
-	{
-		Title = ENiLocKey::PhaseDream; L1 = ENiLocKey::RuleDream1; L2 = ENiLocKey::RuleDream2;
-	}
-	else if (GS->CurrentPhase == ENiceInkPhase::Drawing)
-	{
-		Title = ENiLocKey::PhaseDrawing; L1 = ENiLocKey::RuleDraw1; L2 = ENiLocKey::RuleDraw2;
-	}
-	else if (GS->CurrentPhase == ENiceInkPhase::Tour ||
-			 GS->CurrentPhase == ENiceInkPhase::Accusation)
-	{
-		// **巡禮不再冒用指認的名字**（2026-09-05）：此前 Tour 與 Accusation 共用
-		// 同一組文案 ⇒ 巡禮那一幀上緣寫著「look at every piece」而右下角寫著
-		// 「ACCUSATION」＝一張畫面掛了兩個相位名。規則兩句可以共用（它們講的是
-		// 同一場賭），**標題必須是玩家現在所在的那個相位**。
-		Title = (GS->CurrentPhase == ENiceInkPhase::Tour)
-			? ENiLocKey::PhaseTour : ENiLocKey::PhaseAccusation;
-		L1 = ENiLocKey::RuleAccuse1; L2 = ENiLocKey::RuleAccuse2;
-	}
-	else
-	{
-		return;
-	}
-	const bool bInking = MyChar && MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal();
-	TGuardValue<float> ChromeDim(ChromeAlphaMul, bInking ? 0.25f : 1.0f);
-
-	const float M = NiUi::Margin * UiScale;
-	const float Gap = NiUi::GapS * UiScale;
-	const float RightX = Canvas->ClipX - M;
-	// **一行規則**（2026-09-06）：第二行刪除——每一秒都在的兩句解釋讀成工具提示；
-	// 大廠的規則塊是一句話（Meccha 兩行是因為他們有兩個隊伍）。L2 的字串留在表裡不畫。
-	(void)L2;
-	const FVector2D L1Size = MeasureTok(NiLoc::T(this, L1), ETextTier::Small, false);
-	float Y = Canvas->ClipY - M - L1Size.Y;
-	DrawTok(NiLoc::T(this, L1), RightX, Y, ETextTier::Small, NiHudColor::Paper, EHAlign::Right, false);
-	{
-		// 相位名＝**聲部**（明朝體）＋酒金。
-		// 綠色已拆除（2026-09-05）：那是抄「值」抄來的孤兒——實測局內用了 7 次、
-		// 選單 **0 次** ⇒ 兩個載體連強調色都不同。強調色的規則是「每軌一個語義、
-		// 兩個載體共用同一組」，我們的那一軌是酒金。
-		// （Green 只留給 CORRECT／WRONG 那一對——成敗是語義而不是品牌色，
-		// 而「成敗」這條軸在選單裡根本不存在，§4.2 的「軸不存在就不該存在」正好適用。）
-		TGuardValue<bool> SerifGuard(bSerifFace, true);
-		const FVector2D TSize = MeasureTok(NiLoc::T(this, Title), ETextTier::Title, true);
-		Y -= TSize.Y + Gap;
-		DrawTok(NiLoc::T(this, Title), RightX, Y, ETextTier::Title, NiHudColor::Paper, EHAlign::Right, true);
-	}
+	// **已搬到 Slate**（SNiCorner，2026-09-08）：右下規則塊。
+	// 兩者分時共用同一格、判準同源（受害者杯數），在 widget 裡是兩個 Visibility。
 }
 
 void ANiceInkHUD::DrawScoreCorner(const ANiceInkGameState* GS)
 {
-	// 右下角比分（Meccha 的 `残り人数` ＋巨大數字）。**我們的比分是罰酒杯**：
-	// 三杯就結束這一局，所以它就是這場的進度條。杯子本來就是「會被斟滿」的容器
-	// ——用形狀講狀態（他們的沙漏同理），比任何數字都直觀，所以這裡放大杯子而不是
-	// 印一個 "2/3"。
-	if (!GS || !Canvas)
-	{
-		return;
-	}
-	const int32 Cups = GS->GetVictimPenaltyCups();
-	if (Cups <= 0)
-	{
-		return;   // 沒有賭注 ⇒ 這個角讓給規則塊（DrawRulesBlock）
-	}
-	const float M = NiUi::Margin * UiScale;
-	const float Gap = NiUi::GapS * UiScale;
-	const float CupSize = 10.0f * NiUi::U * UiScale;   // 40＝上緣那版的兩倍
-	const float RightX = Canvas->ClipX - M;
-
-	TGuardValue<bool> LabelFace(bSerifFace, true);   // 狀態小字＝展示體小型大寫（全站同一聲部）
-	const FString Label = NiLoc::T(this, ENiLocKey::ScorePenalty);
-	const FVector2D LSize = MeasureTok(Label, ETextTier::Small, false);
-	const float CupsW = CupSize * 1.18f * 2.0f + CupSize;
-	float Y = Canvas->ClipY - M - CupSize;
-	DrawCupsRow(RightX - CupsW, Y, CupSize, Cups);
-	Y -= LSize.Y + Gap;
-	DrawTok(Label, RightX, Y, ETextTier::Small, NiHudColor::Paper, EHAlign::Right, false);
+	// **已搬到 Slate**（SNiCorner，2026-09-08）：右下比分（罰酒杯）。
+	// 兩者分時共用同一格、判準同源（受害者杯數），在 widget 裡是兩個 Visibility。
 }
 
 
@@ -1297,60 +1145,23 @@ void ANiceInkHUD::DrawRevealBand(float Y0, float Y1)
 
 void ANiceInkHUD::DrawCenterBanners(const ANiceInkGameState* GS)
 {
-	if (!GS)
+	// **文字已搬到 Slate**（SNiBanner，2026-09-08）。這裡只留下三分之一那條滲墨暗帶——
+	// 帶是著色，字是排版。
+	if (!GS || !Canvas)
 	{
 		return;
 	}
-	const float W = Canvas->ClipX;
-	const float H = Canvas->ClipY;
-	// 揭曉／結局的大橫幅＝**聲部**（明朝體）：這是全戲最重的兩拍，也是局內
-	// 唯一與主選單標題（`NICE INK`）同一個字級的東西 ⇒ 用同一個字體人格。
-	TGuardValue<bool> SerifGuard(bSerifFace, true);
-
-	if (GS->CurrentPhase == ENiceInkPhase::Resolution)
+	const bool bRes = GS->CurrentPhase == ENiceInkPhase::Resolution;
+	const bool bFin = GS->CurrentPhase == ENiceInkPhase::Finale;
+	if (!bRes && !bFin)
 	{
-		// 臉制（SPEC #52）：揭曉＝真作者的臉放大登場——全戲最重的一拍給臉
-		const bool bCorrect = GS->LastAccusationResult == ENiceInkAccusationResult::Correct;
-		const APlayerState* AuthorPS = GS->FindPlayerStateById(GS->RevealedAuthorId);
-		// 揭曉＝全戲最重的一拍 ⇒ 橫幅、臉、名字後面一道全寬暗帶（三批）：此前三層資訊直接
-		// 壓在受害者的臉與胸上。帶有邊界但沒有圓角框＝像燈光不像卡片。
-		DrawRevealBand(H * 0.22f, H * 0.62f);
-		// 臉接在橫幅**實際高度**之下（橫幅是 64 級，寫死 56 會疊在一起——09-06 截圖實錘）
-		const float BannerH = DrawTok(NiLoc::T(this, bCorrect ? ENiLocKey::BannerCorrect : ENiLocKey::BannerWrong),
-			W * 0.5f, H * 0.26f, ETextTier::Display, bCorrect ? NiHudColor::Paper : NiHudColor::Red, EHAlign::Center, true).Y;
-		const float RevealFace = NiUi::FaceL * UiScale;
-		const float FaceY = H * 0.26f + BannerH + NiUi::GapL * UiScale;
-		DrawFaceTok(AuthorPS, W * 0.5f - RevealFace * 0.5f, FaceY, RevealFace);
-		float RevealY = FaceY + RevealFace + NiUi::GapM * UiScale;
-		if (AuthorPS)
-		{
-			// v4.0e：臉像＋名字並列——揭曉的臉下方跟名字
-			DrawTok(FitTok(AuthorPS->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
-				W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
-			RevealY += 22.0f * UiScale;
-		}
-		DrawTok(NiLoc::T(this, bCorrect ? ENiLocKey::ResCorrect : ENiLocKey::ResWrong),
-			W * 0.5f, RevealY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
+		return;
 	}
-
-	if (GS->CurrentPhase == ENiceInkPhase::Finale || GS->CurrentPhase == ENiceInkPhase::PostGame)
+	if (bFin && !GS->FindPlayerStateById(GS->LoserPlayerId))
 	{
-		if (const APlayerState* LoserPS = GS->FindPlayerStateById(GS->LoserPlayerId))
-		{
-			DrawRevealBand(H * 0.16f, H * 0.58f);
-			const float BannerH = DrawTok(NiLoc::T(this, ENiLocKey::BannerOutCold), W * 0.5f, H * 0.2f,
-				ETextTier::Display, NiHudColor::Red, EHAlign::Center, true).Y;
-			const float LoserFace = NiUi::FaceL * UiScale;
-			const float FaceY = H * 0.2f + BannerH + NiUi::GapL * UiScale;
-			DrawFaceTok(LoserPS, W * 0.5f - LoserFace * 0.5f, FaceY, LoserFace);
-			float LoserY = FaceY + LoserFace + NiUi::GapM * UiScale;
-			DrawTok(FitTok(LoserPS->GetPlayerName(), ETextTier::Body, 320.0f * UiScale, true),
-				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
-			LoserY += 22.0f * UiScale;
-			DrawTok(NiLoc::T(this, ENiLocKey::FinaleNote),
-				W * 0.5f, LoserY, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
-		}
+		return;
 	}
+	DrawInkBand(Canvas->ClipY * 0.60f, Canvas->ClipY * 0.92f, 0.62f);
 }
 
 void ANiceInkHUD::TickAudioCues(const ANiceInkGameState* GS)
@@ -1401,80 +1212,30 @@ void ANiceInkHUD::TickAudioCues(const ANiceInkGameState* GS)
 
 void ANiceInkHUD::DrawLobbyPanel(const ANiceInkGameState* GS)
 {
-	// 大廳（2026-09-05 中性制）：**無面板**。玩家在這個面上只問三件事——
-	// 房號是什麼（上緣主角數字，DrawTopBar 畫、與祈使句共用同一片漸層）、
-	// 誰來了（底部中央一排臉：到齊的亮、空位是淡框）、什麼時候開始（底部一行計數；
-	// 房主的 ENTER 在右緣操作列，人數不足時灰）。此前那塊浮在牆上的深色面板
-	// （seat 1／256／host／10,000）讀起來是一張 debug 表，拆除。
+	// 大廳（2026-09-07 二版；user：「大廠的整個版面會怎麼布置？」→「去改」）。
+	// 一個場景（固定機位看著圈裡的人）＋一句狀態（上緣）＋一張房碼卡（左下）＋一列人（底部中央）
+	// ＋兩顆鍵（右緣）。四個角落各掛一個物件、右緣只有一條線、右上留空。此前四個資訊各自找角落站，
+	// 右上疊了現金、面板、鍵帽三種右緣。
+	if (!GS || !Canvas)
+	{
+		return;
+	}
 	const float W = Canvas->ClipX;
 	const float H = Canvas->ClipY;
 	const float CX = W * 0.5f;
+	const float M = NiUi::Margin * UiScale;
 	const float Gap = NiUi::GapM * UiScale;
 	const float GapL = NiUi::GapL * UiScale;
+	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
 
-	TArray<const ANiceInkPlayerState*> Sorted;
-	for (const APlayerState* PS : GS->PlayerArray)
-	{
-		if (const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
-		{
-			Sorted.Add(NIPS);
-		}
-	}
-	Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
+	// 地：底部一層與上緣對稱的無邊界漸層（房碼與臉列都站在同一片地上；此前房碼是整個畫面上唯一有框的東西
+	// ＝讀成另一套 UI，2026-09-08 user 打回）
+	DrawBottomScrim(H - 60.0f * NiUi::U * UiScale);   // 240
 
-	// 身分列（2026-09-06 二修）：大廳最重要的問題是「誰來了」，所以它是畫面上最實的一層——
-	// 臉 64（16U）、席距 112（28U）、名字預算＝席距−8（一修的預算 88 > 席距 72 ⇒ 四個真名疊在一起，
-	// 兩位數的 PIE 名字從來看不出來）；貼底（下方那句狀態已搬到列的上方，且只在需要解釋時出現）。
-	const int32 NumIn = Sorted.Num();
-	const int32 Slots = FMath::Clamp(GS->MaxPlayers, 4, 6);
-	const float M = NiUi::Margin * UiScale;
-	const float Face = 16.0f * NiUi::U * UiScale;        // 64
-	const float Pitch = 28.0f * NiUi::U * UiScale;       // 112
-	const float NameBudget = Pitch - NiUi::GapM * UiScale;
-	const float NameH = MeasureTok(TEXT("Ag"), ETextTier::Small, false).Y;
-	const float NameY = H - M - NameH;
-	const float FaceY = NameY - Gap - Face;
-	float X = CX - Slots * Pitch * 0.5f + (Pitch - Face) * 0.5f;
-	for (int32 i = 0; i < Slots; ++i, X += Pitch)
-	{
-		if (i < NumIn)
-		{
-			const ANiceInkPlayerState* PS = Sorted[i];
-			DrawFaceTok(PS, X, FaceY, Face);
-			const bool bHost = PS->bIsRoomHost;
-			DrawTok(FitTok(PS->GetPlayerName(), ETextTier::Small, NameBudget, bHost),
-				X + Face * 0.5f, NameY, ETextTier::Small, NiHudColor::Paper, EHAlign::Center, bHost);
-		}
-		else
-		{
-			// 空位＝1px 白 25% 框＋黑 25% 底：讀成「還有位子」，不是一塊污漬
-			const float B = FMath::Max(1.0f, UiScale);
-			FLinearColor Frame = NiHudColor::White; Frame.A = 0.25f;
-			FLinearColor Empty = NiHudColor::Black; Empty.A = 0.25f;
-			DrawRoundedBox(X, FaceY, Face, Face, NiUi::Radius * UiScale, Frame);
-			DrawRoundedBox(X + B, FaceY + B, Face - B * 2.0f, Face - B * 2.0f, FMath::Max(0.0f, NiUi::Radius * UiScale - B), Empty);
-		}
-	}
-
-	// 狀態句只在需要解釋的時候出現：房主人數不足（為什麼 ENTER 是灰的）、非房主（等房主）。
-	// 能開始時什麼都不畫——右緣的 [ENTER] START 已經說了，一件事只講一次。
-	const FString CountText = FString::Printf(TEXT("%d/%d"), NumIn, Slots);
-	const bool bIsHost = GetWorld() && GetWorld()->GetNetMode() != NM_Client;
-	FString Status;
-	if (bIsHost)
-	{
-		if (!CanHostStartMatch(GS)) { Status = NiLoc::TFmt(this, ENiLocKey::LobbyWaiting, CountText); }
-	}
-	else
-	{
-		Status = NiLoc::TFmt(this, ENiLocKey::LobbyWaitingHost, CountText);
-	}
-	if (!Status.IsEmpty())
-	{
-		TGuardValue<bool> StatusFace(bSerifFace, true);
-		const float SH = MeasureTok(Status, ETextTier::Small, false).Y;
-		DrawTok(Status, CX, FaceY - GapL - SH, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
-	}
+	// 底部中央的人列＝**已搬到 Slate**（SNiPlayerRow，2026-09-08）：臉＋冠＋名字是純排版，
+	// 名字截斷也交給 Slate 的 OverflowPolicy（此前是自己一個字一個字量）。
+	// 左下房碼＝**已搬到 Slate**（SNiLobbyCode，2026-09-08）：標籤／房碼／複製鍵是純排版，
+	// 位置交給排版引擎算，這裡不再手算座標。
 }
 
 bool ANiceInkHUD::CanHostStartMatch(const ANiceInkGameState* GS) const
@@ -1506,196 +1267,33 @@ bool ANiceInkHUD::CanHostStartMatch(const ANiceInkGameState* GS) const
 
 void ANiceInkHUD::DrawSystemMenu(ANiceInkCharacter* MyChar)
 {
-	if (!MyChar || !MyChar->IsSystemMenuOpen())
-	{
-		return;
-	}
-	const float W = Canvas->ClipX;
-	const float H = Canvas->ClipY;
-	const float CX = W * 0.5f;
-
-	// 壓暗全畫面（menu 在最上層；沉睡黑屏之上也可讀）
-	FLinearColor Dim = NiHudColor::Ink;
-	Dim.A = NiUi::ModalDim;
-	DrawRect(Dim, 0, 0, W, H);
-
-	DrawBigTitle(NiLoc::T(this, ENiLocKey::MenuTitle), CX, H * 0.22f, NiType::HudTitle, NiHudColor::Paper);
-
-	UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
-	const float RowX = CX - 40.0f * UiScale;
-	float Y = H * 0.22f + 96.0f * UiScale;
-	const float Step = 64.0f * UiScale;
-
-	if (GI)
-	{
-		const int32 SensDelta = AdjustRow(NiLoc::T(this, ENiLocKey::MenuSensitivity),
-			FString::Printf(TEXT("%.1f"), GI->MouseSensitivityScale), RowX, Y,
-			GI->MouseSensitivityScale > 0.25f, GI->MouseSensitivityScale < 2.95f);
-		if (SensDelta != 0)
-		{
-			GI->MouseSensitivityScale = FMath::Clamp(GI->MouseSensitivityScale + SensDelta * 0.1f, 0.2f, 3.0f);
-			GI->SaveSettings();
-		}
-		Y += Step;
-
-		const int32 VolDelta = AdjustRow(NiLoc::T(this, ENiLocKey::MenuVolume),
-			FString::Printf(TEXT("%d%%"), FMath::RoundToInt(GI->MasterVolume * 100.0f)), RowX, Y,
-			GI->MasterVolume > 0.01f, GI->MasterVolume < 0.99f);
-		if (VolDelta != 0)
-		{
-			GI->MasterVolume = FMath::Clamp(GI->MasterVolume + VolDelta * 0.05f, 0.0f, 1.0f);
-			GI->UpdateBgmVolume();
-			GI->SaveSettings();
-		}
-		Y += Step + 24.0f * UiScale;
-	}
-
-	const float BtnW = 300.0f * UiScale;
-	const float BtnH = 52.0f * UiScale;
-	if (Button(NiLoc::T(this, ENiLocKey::MenuResume), CX, Y, BtnW, BtnH, true, true))
-	{
-		MyChar->SetSystemMenuOpen(false);
-	}
-	Y += BtnH + 14.0f * UiScale;
-	if (Button(NiLoc::T(this, ENiLocKey::MenuLeave), CX, Y, BtnW, BtnH))
-	{
-		if (GI)
-		{
-			GI->ReturnToMainMenu(FString());
-		}
-	}
-	Y += BtnH + 18.0f * UiScale;
-
-	// 房主管理段（2026-08-13 踢人制）：listen server 上 HUD 就在伺服器行程
-	// ＝直呼 GameMode 免 RPC；踢出＋本場拒再入（公開房搗亂管理）
-	if (GetWorld() && GetWorld()->GetNetMode() != NM_Client)
-	{
-		if (ANiceInkGameState* GS = GetWorld()->GetGameState<ANiceInkGameState>())
-		{
-			TArray<ANiceInkPlayerState*> Others;
-			for (APlayerState* PS : GS->PlayerArray)
-			{
-				if (ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS))
-				{
-					if (!NIPS->bIsRoomHost)
-					{
-						Others.Add(NIPS);
-					}
-				}
-			}
-			if (Others.Num() > 0)
-			{
-				Others.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
-					{ return A.SeatIndex < B.SeatIndex; });
-				DrawTok(NiLoc::T(this, ENiLocKey::MenuPlayers), CX, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Center, false);
-				Y += 26.0f * UiScale;
-				const float KickW = 84.0f * UiScale;
-				const float KickH = 34.0f * UiScale;
-				for (ANiceInkPlayerState* NIPS : Others)
-				{
-					DrawTok(FitTok(NIPS->GetPlayerName(), ETextTier::Body, 200.0f * UiScale),
-						CX - 150.0f * UiScale, Y + 5.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Left, false);
-					if (Button(NiLoc::T(this, ENiLocKey::MenuKick), CX + 110.0f * UiScale, Y, KickW, KickH))
-					{
-						if (ANiceInkGameMode* GM = GetWorld()->GetAuthGameMode<ANiceInkGameMode>())
-						{
-							GM->HostKickPlayer(NIPS);
-						}
-					}
-					Y += KickH + 8.0f * UiScale;
-				}
-				Y += 10.0f * UiScale;
-			}
-		}
-	}
-
+	// **已搬到 Slate**（SNiSystemMenu，2026-09-08）：三頁、四顆動詞、設定的加減列、
+	// 玩家列與 KICK 全部是 widget。命中判定歸 Slate——canvas 版是自己拿 GetMousePosition
+	// 跟矩形比對，還要自己處理 AR 鏡像的翻面。
 }
 
 void ANiceInkHUD::DrawAccusePanel(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
 {
-	// 指認（受害者本人；2026-09-05 中性制）：**無面板**。「這件是誰畫的」本來就是
-	// 指著一張臉 ⇒ 底部中央一排候選的臉（在場所有人、受害者除外、依席位）；
-	// 當前嫌疑人＝黑 60% 底＋強調色底線＋名字用強調文字（強調色只落在深色面上，
-	// 那塊底就是為它鋪的）。第幾件（work n/m）一行在臉列上方。
-	const float W = Canvas->ClipX;
-	const float H = Canvas->ClipY;
-	const float CX = W * 0.5f;
-	const float Gap = NiUi::GapM * UiScale;
-	const float GapL = NiUi::GapL * UiScale;
-
-	TArray<const ANiceInkPlayerState*> Cands;
-	for (const APlayerState* PS : GS->PlayerArray)
-	{
-		const ANiceInkPlayerState* NIPS = Cast<ANiceInkPlayerState>(PS);
-		if (NIPS && NIPS->GetPlayerId() != GS->VictimPlayerId)
-		{
-			Cands.Add(NIPS);
-		}
-	}
-	Cands.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
-	if (Cands.Num() == 0)
+	// **文字與臉列已搬到 Slate**（SNiAccuse，2026-09-08）。這裡只留「地」——
+	// 字壓在身體上要有地（截圖實錘：賭注那行在肚子上讀不出來），而漸層是著色不是排版。
+	if (!GS || !MyChar || !Canvas)
 	{
 		return;
 	}
-
-	const APlayerState* Suspect = MyChar->GetAccuseSuspect();
-	const float Face = NiUi::FaceM * UiScale;
-	const float NameH = MeasureTok(TEXT("Ag"), ETextTier::Small, false).Y;
-	const float HintY = H - 46.0f * UiScale;
-	const float NameY = HintY - GapL - NameH;
-	const float FaceY = NameY - Gap - Face;
-	const float RowW = Cands.Num() * Face + (Cands.Num() - 1) * GapL;
-	const float BarH = 3.0f * UiScale;
-
-	{ TGuardValue<bool> StatusFace(bSerifFace, true);
-	DrawTok(NiLoc::TFmt(this, ENiLocKey::AccuseWork, FString::FromInt(MyChar->AccusePickNumber), FString::FromInt(GS->TourWorkCount)),
-		CX, FaceY - Gap - GapL - MeasureTok(TEXT("Ag"), ETextTier::Body, true).Y,
-		ETextTier::Body, NiHudColor::Paper, EHAlign::Center, true);
-	}
-
-	float X = CX - RowW * 0.5f;
-	for (const ANiceInkPlayerState* PS : Cands)
-	{
-		const bool bSel = (Suspect == PS);
-		if (bSel)
-		{
-			FLinearColor Bg = NiHudColor::Black;
-			Bg.A = NiUi::ModalDim;
-			const float BgTop = FaceY - Gap;
-			const float BgBottom = NameY + NameH + Gap + BarH + Gap;
-			DrawRoundedBox(X - Gap, BgTop, Face + Gap * 2.0f, BgBottom - BgTop, NiUi::Radius * UiScale, Bg);
-			DrawRoundedBox(X, NameY + NameH + Gap, Face, BarH, BarH * 0.5f, NiHudColor::Accent);
-		}
-		DrawFaceTok(PS, X, FaceY, Face);
-		DrawTok(FitTok(PS->GetPlayerName(), ETextTier::Small, Face + GapL), X + Face * 0.5f, NameY,
-			ETextTier::Small, bSel ? NiHudColor::AccentText : NiHudColor::PaperDim, EHAlign::Center, false);
-		X += Face + GapL;
-	}
+	DrawBottomScrim(Canvas->ClipY - 250.0f * UiScale);
 }
 
 void ANiceInkHUD::DrawPostGamePanel(ANiceInkCharacter* MyChar)
 {
-	if (!MyChar || !MyChar->InkCanvas)
-	{
-		return;
-	}
-	const float W = Canvas->ClipX;
-	const float H = Canvas->ClipY;
-	const int32 CarbonCount = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Carbon).Num();
-	const int32 PermanentCount = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Permanent).Num();
-
-	// 場間大廳：端詳刺青、自費雷射、開下一場
-	{ TGuardValue<bool> StatusFace(bSerifFace, true);
-	DrawTok(NiLoc::TFmt(this, ENiLocKey::PostInk, FString::FromInt(CarbonCount), FString::FromInt(PermanentCount)),
-		W * 0.5f, H - 96.0f * UiScale, ETextTier::Body, NiHudColor::Paper, EHAlign::Center, false);
-	}
+	// **已搬到 Slate**（SNiPostGame，2026-09-08）：一行「身上有幾件」＝純文字。
 }
 
 void ANiceInkHUD::DrawBottomHint(const FString& Text, const FLinearColor& Color)
 {
-	// 底部狀態句＝展示體小型大寫（三批）：與鍵帽動詞同一個聲部
-	TGuardValue<bool> Face(bSerifFace, true);
-	DrawTok(Text, Canvas->ClipX * 0.5f, Canvas->ClipY - 46.0f * UiScale, ETextTier::Small, Color, EHAlign::Center, false);
+	// **已搬到 Slate**（SNiBottomHint，2026-09-08）。呼叫點是指令式的（各相位當幀喊一句），
+	// 而 Slate 是保留模式 ⇒ 這裡只記下「這一幀想說什麼」，由 widget 畫。
+	BottomHintText = Text;
+	BottomHintColor = Color;
 }
 
 void ANiceInkHUD::DrawInkCup(float X, float Y, float W, float H,
@@ -1734,56 +1332,9 @@ void ANiceInkHUD::DrawInkCup(float X, float Y, float W, float H,
 
 void ANiceInkHUD::DrawInkChip(const ANiceInkCharacter* MyChar)
 {
-	// 「我現在裝的是哪一杯」＝作畫時**唯一**的常駐狀態顯示（畫面清單 2026-09-02）。
-	// 為什麼只剩一枚 chip：
-	//   ①「哪支筆」不需要文字——三支筆在針尖的視覺本來就完全不同（稿筆紫點＋2D
-	//     麥克筆／割線細針＋行進蟻／打霧粗針＋範圍圈），筆名只活在托盤（選的時候）。
-	//   ②「什麼顏色」在螢幕中心的落點指示上已經有了，那裡是視線落點。
-	//   ③ 只剩「濃度」需要一份持久記憶：誤用濃度是**單向不可逆**的（想要 30% 卻
-	//     下了 100%＝救不回來；反過來再掃一趟就補滿），所以它值得一個常駐位置。
-	// 舊 cluster 的三格直排已退役：23px 下的棋盤讀成髒點（在托盤 60px 有效的裝置
-	// 縮到 23px 就失效），而且你要知道的是「我在哪一檔」不是「另外兩檔長怎樣」。
-	if (!MyChar || !Canvas)
-	{
-		return;
-	}
-	// AR 鏡像豁免：與托盤同理（格序＝物理域非版面域）
-	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
-	// 落筆中一起淡（與上方 chrome 同一條原則：落筆的那幾秒畫面上只留皮膚、
-	// 機器、veil、落點；放開就回來）
-	TGuardValue<float> ChromeDim(ChromeAlphaMul,
-		MyChar->IsPenTriggerHeldLocal() ? 0.35f : 1.0f);
-
-	// **無面板**（2026-09-04）：與上緣同一條規則。此前這裡是 Ink α0.62 的卡片，
-	// 而全站面板 alpha 有七種、沒有規則；拆掉面板，對比交給杯子自己的邊框與文字陰影。
-	const float Cell = 7.0f * NiUi::U * UiScale;   // 28
-	const bool bStencil = (MyChar->SelectedNeedle == EInkNeedle::Stencil);
-	const bool bShowPct = (MyChar->SelectedNeedle == EInkNeedle::Shader);
-	const FLinearColor ChipColor = bStencil
-		? NiceInkStencil::Color() : FNiceInkPalette::Get(MyChar->SelectedColorIndex);
-	const int32 ChipTier = bShowPct ? MyChar->ShaderTierIdx : 2; // 非打霧＝恆實墨
-	// 百分比＝**與托盤列標同一個來源**（TierLabel），不要自己從位元組除。
-	const FString Pct = bShowPct
-		? FNiInkTrayLayout::TierLabel(FNiInkTrayLayout::RowFromTier(MyChar->ShaderTierIdx))
-		: FString();
-	const FVector2D PctSize = bShowPct ? MeasureTok(Pct, ETextTier::Body, true) : FVector2D::ZeroVector;
-	const float Gap = NiUi::GapM * UiScale;
-	const float RowW = Cell + (bShowPct ? Gap + PctSize.X : 0.0f);
-	const float X = Canvas->ClipX * 0.5f - RowW * 0.5f;
-	const float Y = Canvas->ClipY - NiUi::Margin * UiScale - Cell;
-	{
-		// 1px 白框：與鍵帽同一個邊處理——沒有邊的色塊讀成漏畫的方塊
-		FLinearColor Ring = NiHudColor::White;
-		Ring.A = 0.70f;
-		const float B = FMath::Max(1.0f, UiScale);
-		DrawRoundedBox(X - B, Y - B, Cell + B * 2.0f, Cell + B * 2.0f, NiUi::Radius * UiScale, Ring);
-	}
-	DrawInkCup(X, Y, Cell, Cell, ChipColor, ChipTier);
-	if (bShowPct)
-	{
-		DrawTok(Pct, X + Cell + Gap, Y + (Cell - PctSize.Y) * 0.5f,
-			ETextTier::Body, NiHudColor::Paper, EHAlign::Left, true);
-	}
+	// **已搬到 Slate**（SNiInkChip，2026-09-08）：筆的剪影＋墨杯＋濃度是一句話，
+	// 三者的相對位置是排版。墨杯本身（棋盤地＋半透明墨）改成有 desired size 的葉節點
+	// ⇒ 它參與版面，但畫法沒有變。
 }
 
 
@@ -1801,14 +1352,16 @@ float ANiceInkHUD::DrawKeycap(float X, float Y, const FString& Key, ENiKeyState 
 	const float Rad = NiUi::Radius * UiScale;
 	const float B = FMath::Max(1.0f, UiScale);
 
-	FLinearColor Frame = (State == ENiKeyState::OneShot) ? NiHudColor::AccentText : NiHudColor::White;
-	Frame.A = (State == ENiKeyState::Unavailable) ? 0.25f : 0.85f;
-	FLinearColor Fill = (State == ENiKeyState::OneShot) ? NiHudColor::Accent : NiHudColor::Black;
-	Fill.A = (State == ENiKeyState::Unavailable) ? 0.30f : ((State == ENiKeyState::OneShot) ? 0.45f : 0.70f);
+	// 無主色（2026-09-07）：三態靠形狀與明度——可按＝黑 70% 底白字；**現在該按的那一顆**
+	// （一次性動作）＝實心白底黑字；不可按＝白 35% 空心。
+	FLinearColor Frame = NiHudColor::White;
+	Frame.A = (State == ENiKeyState::Unavailable) ? 0.35f : ((State == ENiKeyState::OneShot) ? 1.0f : 0.85f);
+	FLinearColor Fill = (State == ENiKeyState::OneShot) ? NiHudColor::White : NiHudColor::Black;
+	Fill.A = (State == ENiKeyState::Unavailable) ? 0.20f : ((State == ENiKeyState::OneShot) ? 1.0f : 0.70f);
 	DrawRoundedBox(X, Y, W, H, Rad, Frame);
 	DrawRoundedBox(X + B, Y + B, W - B * 2.0f, H - B * 2.0f, FMath::Max(0.0f, Rad - B), Fill);
 
-	FLinearColor KeyInk = NiHudColor::White;
+	FLinearColor KeyInk = (State == ENiKeyState::OneShot) ? NiHudColor::Black : NiHudColor::White;
 	KeyInk.A = (State == ENiKeyState::Unavailable) ? 0.45f : 1.0f;
 	TGuardValue<bool> NoShadow(bTokShadows, false);
 	DrawTok(Key, X + W * 0.5f, Y + (H - Size.Y) * 0.5f, ETextTier::Body, KeyInk, EHAlign::Center, true);
@@ -1837,7 +1390,7 @@ float ANiceInkHUD::DrawMouseGlyph(float LeftX, float Y, float H, int32 Button, E
 	{
 		DrawRoundedBox(LeftX + W * 0.5f - B * 0.5f, Y + B, B, Split - B, 0.0f, Frame);
 	}
-	FLinearColor Hot = NiHudColor::Accent;
+	FLinearColor Hot = NiHudColor::White;   // 無主色：按下的那顆＝白（2026-09-07）
 	Hot.A = (State == ENiKeyState::Unavailable) ? 0.35f : 0.95f;
 	const float BtnW = W * 0.5f - B * 1.5f;
 	const float BtnH = Split - B * 2.0f;
@@ -1891,12 +1444,24 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 
 	if (MyChar->bAsleep && !MyChar->bEyesOpen)
 	{
+		if (GS->CurrentPhase == ENiceInkPhase::Finale || GS->CurrentPhase == ENiceInkPhase::PostGame)
+		{
+			return;   // 昏睡不醒：沒有活著的鍵（此前結局畫面右緣還掛著 TRACE）
+		}
 		Out.Add({ nullptr, InMouseLeft, ENiLocKey::ActTrace, ENiKeyState::Available, false });
 		return;
 	}
 	if (MyChar->IsFeigningSleep())
 	{
 		Out.Add({ TEXT("SHIFT"), nullptr, ENiLocKey::ActWake, ENiKeyState::Available, false });
+		return;
+	}
+	if (MyChar->bAsleep && MyChar->bEyesOpen)
+	{
+		// 睜眼未現身（2026-09-07）：全遊戲後果最重的兩顆鍵——縮回去、或起身結束整個作畫階段。
+		// 此前它們是一行小句子壓在底部。
+		Out.Add({ TEXT("SHIFT"), nullptr, ENiLocKey::ActFeign, ENiKeyState::Available, false });
+		Out.Add({ TEXT("WASD"), nullptr, ENiLocKey::ActGetUp, ENiKeyState::OneShot, true });
 		return;
 	}
 	if (MyChar->bLeanLocked)
@@ -1924,9 +1489,10 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 			// 人數不足＝**不可按**。此前這顆 ENTER 長得跟可以按的一樣，而「還差幾個人」
 			// 只寫在底部一行小字裡——玩家按下去沒事發生，然後去讀那行字。
 			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActStartMatch,
-				CanHostStartMatch(GS) ? ENiKeyState::Available : ENiKeyState::Unavailable, false });
-			Out.Add({ TEXT("ESC"), nullptr, ENiLocKey::ActKick, ENiKeyState::Available, false });
+				CanHostStartMatch(GS) ? ENiKeyState::OneShot : ENiKeyState::Unavailable, false });
 		}
+		// 踢人住在 ESC 選單裡（玩家列的 KICK 鈕）；右緣只講「打開選單」
+		Out.Add({ TEXT("ESC"), nullptr, ENiLocKey::ActMenu, ENiKeyState::Available, false });
 		break;
 	case ENiceInkPhase::Drawing:
 		if (!bIsVictim)
@@ -1939,9 +1505,12 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 	case ENiceInkPhase::Accusation:
 		if (bIsVictim)
 		{
-			Out.Add({ TEXT("1-9"),   nullptr, ENiLocKey::ActPickWork, ENiKeyState::Available, false });
-			Out.Add({ TEXT("TAB"),   nullptr, ENiLocKey::ActSuspect,  ENiKeyState::Available, false });
-			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActAccuse,   ENiKeyState::Available, false });
+			// 1-9 退役（2026-09-07）：作品在世界裡沒有編號可以對應，數字鍵是任意映射
+			// ——與 09-03 砍掉數字鍵選色同一個判準。E／Q 循環，鏡頭跟著飛到那一幅。
+			Out.Add({ TEXT("E"),     nullptr, ENiLocKey::ActNextPiece, ENiKeyState::Available, false });
+			Out.Add({ TEXT("Q"),     nullptr, ENiLocKey::ActPrevPiece, ENiKeyState::Available, false });
+			Out.Add({ TEXT("TAB"),   nullptr, ENiLocKey::ActSuspect,   ENiKeyState::Available, false });
+			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActAccuse,    ENiKeyState::OneShot, false });
 		}
 		break;
 	case ENiceInkPhase::PostGame:
@@ -1992,113 +1561,25 @@ UTexture2D* ANiceInkHUD::ActionIcon(ENiLocKey Label)
 	case ENiLocKey::ActAccuse:     return Ico(TEXT("gavel"));
 	case ENiLocKey::ActSuspect:    return Ico(TEXT("arrow_right"));
 	case ENiLocKey::ActPickWork:   return Ico(TEXT("layers"));
+	case ENiLocKey::ActFeign:      return Ico(TEXT("moon"));
+	case ENiLocKey::ActMenu:       return Ico(TEXT("pause"));
+	case ENiLocKey::ActGetUp:      return Ico(TEXT("footprints"));
+	case ENiLocKey::ActPrevPiece:  return Ico(TEXT("chevron_left"));
+	case ENiLocKey::ActNextPiece:  return Ico(TEXT("chevron_right"));
 	default:                       return nullptr;
 	}
 }
 
 void ANiceInkHUD::DrawControlStrip(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
 {
-	// 常駐操作列（右緣；2026-09-06 二版）：**「動詞 [鍵]」橫排成一句**，鍵貼在右緣。
-	// 一版把 glyph 放上、動詞放下，兩者被讀成兩個獨立物件；橫排讀起來是「按 Q 換針」。
-	// 內容來自 BuildControlHints 的單一正本；這裡只畫模式與動作（bPosture=false）。
-	if (!MyChar || !Canvas || !GS)
-	{
-		return;
-	}
-	TArray<FNiControlHint> All;
-	BuildControlHints(GS, MyChar, All);
-	TArray<const FNiControlHint*> Rows;
-	for (const FNiControlHint& H : All)
-	{
-		if (!H.bPosture) { Rows.Add(&H); }
-	}
-	if (Rows.Num() == 0)
-	{
-		return;
-	}
-	TGuardValue<float> ChromeDim(ChromeAlphaMul,
-		(MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal()) ? 0.30f : 1.0f);
-	// 動詞＝展示體 Medium 小型大寫（2026-09-06）：小寫內文體的動詞在鍵帽旁讀成註解
-	TGuardValue<bool> VerbFace(bSerifFace, true);
-
-	const float Pitch  = 11.0f * NiUi::U * UiScale;   // 44：一列一句
-	const float CapH   = NiUi::KeycapH * UiScale;
-	const float Gap    = NiUi::GapM * UiScale;
-	const float RightX = Canvas->ClipX - NiUi::Margin * UiScale;
-	const float VerbH  = MeasureTok(TEXT("Ag"), ETextTier::Small, false).Y;
-	float Y = Canvas->ClipY * 0.5f - Rows.Num() * Pitch * 0.5f;
-	for (const FNiControlHint* R : Rows)
-	{
-		const float GW = DrawInputGlyph(RightX, Y, R->Key, R->Tex, R->State);
-		FLinearColor Verb = NiHudColor::Paper;
-		if (R->State == ENiKeyState::Unavailable) { Verb.A = 0.45f; }
-		const FVector2D VerbSize = DrawTok(NiLoc::T(this, R->Label), RightX - GW - Gap, Y + (CapH - VerbH) * 0.5f,
-			ETextTier::Small, Verb, EHAlign::Right, false);
-		// 圖示在動詞左側（二批）：「[圖示] 動詞 [鍵]」一句
-		if (UTexture2D* IcoTex = ActionIcon(R->Label))
-		{
-			const float IcoS = 5.0f * NiUi::U * UiScale;   // 20
-			DrawIconTok(IcoTex, RightX - GW - Gap - VerbSize.X - Gap - IcoS, Y + (CapH - IcoS) * 0.5f, IcoS, Verb);
-		}
-		Y += Pitch;
-	}
+	// **已搬到 Slate**（SNiHintList，2026-09-08）：右緣操作列＝[鍵][圖示][動詞] 的純排版。
+	// 兩個方向共用同一份 BuildControlHints，位置由排版引擎算。
 }
 
 void ANiceInkHUD::DrawPostureCluster(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
 {
-	// 姿勢／移動群＝底部中央（2026-09-06 二版）：每一欄「[鍵] 動詞」橫排，欄與欄之間 GapL。
-	// 版位：墨杯 chip 在最底，本群排在它正上方。
-	if (!MyChar || !Canvas || !GS)
-	{
-		return;
-	}
-	TArray<FNiControlHint> All;
-	BuildControlHints(GS, MyChar, All);
-	TArray<const FNiControlHint*> Rows;
-	for (const FNiControlHint& H : All)
-	{
-		if (H.bPosture) { Rows.Add(&H); }
-	}
-	if (Rows.Num() == 0)
-	{
-		return;
-	}
-	TGuardValue<float> ChromeDim(ChromeAlphaMul,
-		(MyChar->bLeanLocked && MyChar->IsPenTriggerHeldLocal()) ? 0.30f : 1.0f);
-
-	const float CapH = NiUi::KeycapH * UiScale;
-	const float Gap  = NiUi::GapM * UiScale;
-	const float ColGap = NiUi::GapL * UiScale;
-	const float ChipH = 7.0f * NiUi::U * UiScale;
-	TGuardValue<bool> VerbFace(bSerifFace, true);   // 同操作列：展示體小型大寫
-	const float VerbH = MeasureTok(TEXT("Ag"), ETextTier::Small, false).Y;
-	const float BaseY = Canvas->ClipY - NiUi::Margin * UiScale - ChipH - ColGap - CapH;
-
-	const float IcoS = 5.0f * NiUi::U * UiScale;   // 20：動詞前的圖示（二批）
-	float TotalW = 0.0f;
-	for (int32 i = 0; i < Rows.Num(); ++i)
-	{
-		TotalW += MeasureInputGlyph(Rows[i]->Key, Rows[i]->Tex) + Gap
-			+ (ActionIcon(Rows[i]->Label) ? IcoS + Gap : 0.0f)
-			+ MeasureTok(NiLoc::T(this, Rows[i]->Label), ETextTier::Small, false).X
-			+ (i > 0 ? ColGap : 0.0f);
-	}
-	float X = Canvas->ClipX * 0.5f - TotalW * 0.5f;
-	for (const FNiControlHint* R : Rows)
-	{
-		const float GW = DrawInputGlyph(X, BaseY, R->Key, R->Tex, R->State, /*bLeftAnchor=*/true);
-		const FString Verb = NiLoc::T(this, R->Label);
-		FLinearColor VerbC = NiHudColor::Paper;
-		if (R->State == ENiKeyState::Unavailable) { VerbC.A = 0.45f; }
-		float TX = X + GW + Gap;
-		if (UTexture2D* IcoTex = ActionIcon(R->Label))
-		{
-			DrawIconTok(IcoTex, TX, BaseY + (CapH - IcoS) * 0.5f, IcoS, VerbC);
-			TX += IcoS + Gap;
-		}
-		DrawTok(Verb, TX, BaseY + (CapH - VerbH) * 0.5f, ETextTier::Small, VerbC, EHAlign::Left, false);
-		X = TX + MeasureTok(Verb, ETextTier::Small, false).X + ColGap;
-	}
+	// **已搬到 Slate**（SNiHintList，2026-09-08）：底部姿勢列＝[鍵][圖示][動詞] 的純排版。
+	// 兩個方向共用同一份 BuildControlHints，位置由排版引擎算。
 }
 
 float ANiceInkHUD::MeasureInputGlyph(const TCHAR* Key, UTexture2D* Tex) const
@@ -2172,6 +1653,7 @@ void ANiceInkHUD::DrawInkTray(const ANiceInkCharacter* MyChar)
 		: (MyChar->SelectedNeedle == EInkNeedle::Liner ? 1 : 2);
 	{
 		// 抬頭＝現在的筆 ＋ 換筆的鍵帽（鍵位畫成鍵盤上的樣子，不是句子裡的一個詞）
+		TGuardValue<bool> HeadFace(bSerifFace, true);   // 2026-09-07：托盤抬頭與全站同一聲部
 		const FString PenName = NiLoc::T(this, PenKeys[PenIdx]);
 		const float HeadY = L.CardPos.Y + L.Pad;
 		const FVector2D NameSize = MeasureTok(PenName, ETextTier::Small, true);
@@ -2279,19 +1761,9 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	// 視覺全遮蔽：看不到任何人、任何筆跡、自己身上任何刺青
 	// 夢的載體（三批）：不是一張黑紙——靛藍的地＋上下兩道無邊界暗帶（暈眩的隧道感）。
 	// 顏色是「夢」的訊號，不是 chrome；描圖線（薰衣草紫）在它上面對比更足。
+	// 夢的地＝一整面靛藍（2026-09-07：上下兩道暗帶拆除——截圖裡它讀成畫錯的漸層，不是隧道）
 	DrawRect(FLinearColor(0.030f, 0.028f, 0.070f, 1.0f), 0.0f, 0.0f, W, H);
 	EnsureUiAssets();
-	if (ScrimTex)
-	{
-		FLinearColor Band = FLinearColor(0.0f, 0.0f, 0.02f, 0.85f);
-		FCanvasTileItem Top(FVector2D(0.0f, 0.0f), ScrimTex->GetResource(), FVector2D(W, H * 0.34f), Band);
-		Top.BlendMode = SE_BLEND_Translucent;
-		Canvas->DrawItem(Top);
-		FCanvasTileItem Bottom(FVector2D(0.0f, H * 0.66f), ScrimTex->GetResource(), FVector2D(W, H * 0.34f),
-			FVector2D(0.0f, 1.0f), FVector2D(1.0f, 0.0f), Band);   // UV 上下翻＝暗在底
-		Bottom.BlendMode = SE_BLEND_Translucent;
-		Canvas->DrawItem(Bottom);
-	}
 
 	if (!GS)
 	{
@@ -2323,25 +1795,12 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		Trace->DrawTracePanel(Canvas, PanelAvail, PanelAvoid);
 
 		// 事件行（搖晃顯名＝怒氣要有地址；失敗＝當場明講重來）——蓋在圖上、瞬態
+		// 被搖（2026-09-07）：線本身在抖就是訊息——此前 96 級紅字橫跨上三分之一、正好蓋在
+		// 你此刻要描的線上。現制＝上緣一行 32 級展示體，滲入，不遮線。
+		// 事件行與進度＝**已搬到 Slate**（SNiDream，2026-09-08）。地（被搖時的上緣漸層）是著色，留著。
 		if (Trace->IsShakeActive())
 		{
-			DrawTok(NiLoc::TFmt(this, ENiLocKey::DreamShake, Trace->GetShakeAttackerName().ToUpper()),
-				W * 0.5f, H * 0.16f, ETextTier::Display,
-				NiHudColor::Red, EHAlign::Center, true);
-		}
-		else if (Trace->IsFailFlashing())
-		{
-			DrawTok(NiLoc::T(this, ENiLocKey::DreamSlipped),
-				W * 0.5f, H * 0.16f, ETextTier::Title,
-				NiHudColor::Red, EHAlign::Center, true);
-		}
-		{
-			// 進度＝這個畫面唯一的分數 ⇒ 展示體大數字（三批），不是底部一行小字
-			TGuardValue<bool> Face(bSerifFace, true);
-			const FString Pct = FString::Printf(TEXT("%d%%"), FMath::RoundToInt(Trace->GetProgress01() * 100.0f));
-			// 右上（右下是規則塊的位置；一版兩者疊在一起）
-			DrawTok(Pct, W - NiUi::Margin * UiScale, NiUi::Margin * UiScale,
-				ETextTier::Display, NiHudColor::Lavender, EHAlign::Right, true);
+			DrawTopScrim(NiUi::Margin * UiScale + 40.0f * UiScale);
 		}
 	}
 	else if (Maze && Maze->IsMazeActive())
@@ -2383,10 +1842,8 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 	{
 		// 沒有迷宮＝終局昏死（server 不發夢）：昏睡不醒
 		// 副標接在主標實際高度之下（Display 已是 64 級；寫死 52 會疊在一起——09-06 截圖實錘）
-		const float BannerH = DrawTok(NiLoc::T(this, ENiLocKey::BannerOutCold), W * 0.5f, H * 0.4f,
-			ETextTier::Display, NiHudColor::Red, EHAlign::Center, true).Y;
-		DrawTok(NiLoc::T(this, ENiLocKey::DreamCash), W * 0.5f, H * 0.4f + BannerH + NiUi::GapM * UiScale,
-			ETextTier::Body, NiHudColor::PaperDim, EHAlign::Center, false);
+		// 昏死橫幅＝**已搬到 Slate**（SNiDream）：主標與副標的行距是排版問題——
+		// 此前寫死 52 會疊在一起（09-06 截圖實錘），現在由 SVerticalBox 決定。
 	}
 
 	// 姿勢面板（左下）：自己身體的示意——當前姿勢與朝向。
@@ -2406,7 +1863,8 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		const float BodyCX = PanelX + PanelW * 0.5f;
 		const float BodyCY = PanelY + PanelH * 0.56f;
 		const float B = UiScale;
-		const FLinearColor BodyColor = NiHudColor::Skin;
+		FLinearColor BodyColor = NiHudColor::White;   // 2026-09-07：膚色火柴人讀成佔位圖；改白 70% 線稿
+		BodyColor.A = 0.70f;
 		DrawRect(BodyColor, BodyCX - 10.0f * B, BodyCY - 68.0f * B, 20.0f * B, 20.0f * B);           // 頭
 		DrawRect(BodyColor, BodyCX - 16.0f * B, BodyCY - 46.0f * B, 32.0f * B, 66.0f * B);           // 軀幹
 		Canvas->K2_DrawLine(FVector2D(BodyCX - 14.0f * B, BodyCY - 40.0f * B), FVector2D(BodyCX - 48.0f * B, BodyCY - 10.0f * B), 6.0f * B, BodyColor); // 左臂
@@ -2513,7 +1971,18 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS)
 	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 
 	FLinearColor CrosshairColor = FLinearColor::White;
-	if (const ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr)
+	const ANiceInkCharacter* MyCharPtr = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	// 準星只在有東西可瞄的相位出現（2026-09-07）：站著作畫／鎖定／結局的作畫者／指認的受害者。
+	// 此前大廳、巡禮、指認旁觀、判決的正中央都掛著一個十字＝讀成除錯記號。
+	bool bShowPlus = false;
+	if (MyCharPtr && GS && MyCharPtr->GetPlayerState())
+	{
+		const bool bVictim = GS->VictimPlayerId == MyCharPtr->GetPlayerState()->GetPlayerId();
+		const ENiceInkPhase Ph = GS->CurrentPhase;
+		bShowPlus = ((Ph == ENiceInkPhase::Drawing || Ph == ENiceInkPhase::Finale) && !bVictim && !MyCharPtr->bAsleep)
+			|| (Ph == ENiceInkPhase::Accusation && bVictim);
+	}
+	if (const ANiceInkCharacter* MyChar = MyCharPtr)
 	{
 		if (MyChar->bAsleep)
 		{
@@ -2937,6 +2406,10 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS)
 	// **十字本身留著**（Meccha 局內也有一根細白十字）：它是第一人稱的視線錨點。
 	// 顏色改成紙色而不是 `GetCurrentColor()`——09-03 已經學過一次「指示器不准用
 	// 內容的顏色」：預設墨色近黑，畫在暗處等於沒有準星。
+	if (!bShowPlus)
+	{
+		return;
+	}
 	const float CenterX = Canvas->ClipX * 0.5f;
 	const float CenterY = Canvas->ClipY * 0.5f;
 	const float Arm = 7.0f * UiScale;
@@ -2952,74 +2425,58 @@ void ANiceInkHUD::DrawInkCrosshair(const ANiceInkGameState* GS)
 
 void ANiceInkHUD::DrawDebugPanel(const ANiceInkGameState* GS, const ANiceInkPlayerState* MyPS, ANiceInkCharacter* MyChar)
 {
+	// **已搬到 Slate**（SNiDebugPanel，2026-09-08）：內容由 BuildDebugLines 算，排版歸 widget。
+}
+
+void ANiceInkHUD::BuildDebugLines(TArray<FString>& Out) const
+{
 	if (CVarNiDebugHud.GetValueOnGameThread() == 0)
 	{
 		return;
 	}
-	const float M = 16.0f * UiScale;
-	const float LineH = 22.0f * UiScale;
-	DrawPanelBox(M, M, 470.0f * UiScale, LineH * 4.0f + 16.0f * UiScale, 0.6f);
-	float Y = M + 8.0f * UiScale;
-	DrawTok(TEXT("hud-v1  ·  ni.DebugHud 1"), M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::Green, EHAlign::Left, true);
-	Y += LineH;
+	const UWorld* World = GetWorld();
+	const ANiceInkGameState* GS = World ? World->GetGameState<ANiceInkGameState>() : nullptr;
+	const ANiceInkPlayerState* MyPS = PlayerOwner ? Cast<ANiceInkPlayerState>(PlayerOwner->PlayerState) : nullptr;
+	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+
+	Out.Add(TEXT("hud-v1  ·  ni.DebugHud 1"));
 	if (MyPS)
 	{
-		DrawTok(FString::Printf(TEXT("me: %s  seat %d  id %d"), *MyPS->GetPlayerName(), MyPS->SeatIndex, MyPS->GetPlayerId()),
-			M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+		Out.Add(FString::Printf(TEXT("me: %s  seat %d  id %d"),
+			*MyPS->GetPlayerName(), MyPS->SeatIndex, MyPS->GetPlayerId()));
 	}
-	Y += LineH;
 	if (GS)
 	{
-		DrawTok(FString::Printf(TEXT("phase %d  round %d  victim id %d"), static_cast<int32>(GS->CurrentPhase), GS->CurrentRound, GS->VictimPlayerId),
-			M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
+		Out.Add(FString::Printf(TEXT("phase %d  round %d  victim id %d"),
+			static_cast<int32>(GS->CurrentPhase), GS->CurrentRound, GS->VictimPlayerId));
 	}
-	Y += LineH;
-	DrawTok(TEXT("console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"),
-		M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::PaperDim, EHAlign::Left, false);
-
-	// 朝向對賬（08-15 user 抓「醒來全員鏡像到對側」、PIE 重現不出）：本人 actor/控制器/
-	// 相機 yaw＋每個他人的世界方位角（相對本人）——與 server 視窗同一行對照即定罪
-	if (MyChar)
+	Out.Add(TEXT("console: NiStart | NiEmerge | NiAccuse <workNo> <seat>"));
+	if (MyChar && World)
 	{
-		Y += LineH * 1.2f;
-		const AController* Ctl = MyChar->GetController();
-		const float CtlYaw = Ctl ? Ctl->GetControlRotation().Yaw : 999.0f;
-		const float CamYaw = MyChar->FirstPersonCamera ? MyChar->FirstPersonCamera->GetComponentRotation().Yaw : 999.0f;
 		FString Line = FString::Printf(TEXT("YAW me actor=%.0f ctrl=%.0f cam=%.0f asleep=%d eyes=%d |"),
-			MyChar->GetActorRotation().Yaw, CtlYaw, CamYaw, MyChar->bAsleep ? 1 : 0, MyChar->bEyesOpen ? 1 : 0);
-		for (TActorIterator<ANiceInkCharacter> It(GetWorld()); It; ++It)
+			MyChar->GetActorRotation().Yaw,
+			MyChar->GetControlRotation().Yaw,
+			MyChar->GetViewRotation().Yaw,
+			MyChar->bAsleep ? 1 : 0, MyChar->bEyesOpen ? 1 : 0);
+		for (TActorIterator<ANiceInkCharacter> It(const_cast<UWorld*>(World)); It; ++It)
 		{
-			ANiceInkCharacter* O = *It;
-			if (O == MyChar || !O->GetPlayerState())
-			{
-				continue;
-			}
-			const FVector D = O->GetActorLocation() - MyChar->GetActorLocation();
-			Line += FString::Printf(TEXT(" id%d brg=%.0f d=%.0f"),
-				O->GetPlayerState()->GetPlayerId(), FMath::RadiansToDegrees(FMath::Atan2(D.Y, D.X)), D.Size2D());
+			ANiceInkCharacter* Other = *It;
+			if (!Other || Other == MyChar) { continue; }
+			const FVector D = Other->GetActorLocation() - MyChar->GetActorLocation();
+			const ANiceInkPlayerState* OPS = Other->GetPlayerState<ANiceInkPlayerState>();
+			Out.Add(FString::Printf(TEXT("%s id%d brg=%.0f d=%.0f"), *Line,
+				OPS ? OPS->GetPlayerId() : -1, D.Rotation().Yaw, D.Size()));
+			Line.Reset();
 		}
-		DrawTok(Line, M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
+		if (!Line.IsEmpty()) { Out.Add(Line); }
 	}
-
-	// 描圖現場（v4.0）：受害者端即時 summary
-	if (MyChar && MyChar->DreamTrace && MyChar->DreamTrace->IsTraceActive())
+	if (MyChar && MyChar->DreamTrace)
 	{
-		Y += LineH * 1.2f;
-		DrawTok(MyChar->DreamTrace->GetDebugSummary(), M + 10.0f * UiScale, Y,
-			ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
+		Out.Add(MyChar->DreamTrace->GetDebugSummary());
 	}
-
-	// 迷宮現場（出口卡死診斷 2026-07-15）：受害者端即時 summary，兩行折顯
-	if (MyChar && MyChar->DreamMaze && MyChar->DreamMaze->IsMazeActive())
+	if (MyChar && MyChar->DreamMaze)
 	{
-		const FString Summary = MyChar->DreamMaze->GetDebugSummary();
-		FString L1 = Summary;
-		FString L2;
-		Summary.Split(TEXT(" cpS="), &L1, &L2);
-		Y += LineH * 1.2f;
-		DrawTok(L1, M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
-		Y += LineH;
-		DrawTok(TEXT("cpS=") + L2, M + 10.0f * UiScale, Y, ETextTier::Small, NiHudColor::Green, EHAlign::Left, false);
+		Out.Add(MyChar->DreamMaze->GetDebugSummary());
 	}
 }
 
@@ -3041,3 +2498,443 @@ FString ANiceInkHUD::GetPhaseLabel(ENiceInkPhase Phase) const
 	default: return FString();
 	}
 }
+
+
+// ============================================================================
+// 墨的原語（2026-09-07 大改）——墨是全站唯一的簽名材質；其他一切中性讓位。
+// ============================================================================
+
+float ANiceInkHUD::InkIn01(double SinceS, float DurS) const
+{
+	const float T = FMath::Clamp(static_cast<float>(SinceS / FMath::Max(0.01f, DurS)), 0.0f, 1.0f);
+	return T * T * (3.0f - 2.0f * T);
+}
+
+void ANiceInkHUD::DrawInkLine(float X, float Y, float W, float H, const FLinearColor& ColorIn, float Frac)
+{
+	if (!Canvas || W <= 0.0f || H <= 0.0f || Frac <= 0.0f)
+	{
+		return;
+	}
+	FLinearColor C = ColorIn;
+	C.A *= ChromeAlphaMul * ChromeAlphaBase;
+	X = FlipXW(X, W);
+	if (!InkBrushTex)
+	{
+		DrawRect(C, X, Y, W * Frac, H);
+		return;
+	}
+	Canvas->K2_DrawTexture(InkBrushTex, FVector2D(X, Y), FVector2D(W * Frac, H),
+		FVector2D::ZeroVector, FVector2D(Frac, 1.0f), C, BLEND_Translucent);
+}
+
+void ANiceInkHUD::DrawInkBand(float Y0, float Y1, float Alpha)
+{
+	if (!Canvas)
+	{
+		return;
+	}
+	const float W = Canvas->ClipX;
+	FLinearColor Band = NiHudColor::Black;
+	Band.A = Alpha * ChromeAlphaBase;
+	DrawRect(Band, 0.0f, Y0, W, Y1 - Y0);
+	if (InkEdgeTex)
+	{
+		// 滲墨邊：貼圖 y=0 是實邊。上緣翻轉讓實邊接帶；下緣原樣。橫向平鋪、錯相避免上下對齊。
+		const float EdgeH = 14.0f * UiScale;
+		const float Tiles = W / (512.0f * FMath::Max(UiScale, 0.5f));
+		Canvas->K2_DrawTexture(InkEdgeTex, FVector2D(0.0f, Y0 - EdgeH), FVector2D(W, EdgeH),
+			FVector2D(0.0f, 1.0f), FVector2D(Tiles, -1.0f), Band, BLEND_Translucent);
+		Canvas->K2_DrawTexture(InkEdgeTex, FVector2D(0.0f, Y1), FVector2D(W, EdgeH),
+			FVector2D(0.37f, 0.0f), FVector2D(Tiles, 1.0f), Band, BLEND_Translucent);
+	}
+}
+
+
+TArray<FString> ANiceInkHUD::WrapTok(const FString& Text, ETextTier Tier, float MaxW, bool bBold)
+{
+	// 貪婪換行：有空白按詞、沒空白（CJK）按字。給「怎麼玩」這種一段話用。
+	TArray<FString> Out;
+	if (Text.IsEmpty())
+	{
+		return Out;
+	}
+	TArray<FString> Words;
+	Text.ParseIntoArray(Words, TEXT(" "), true);
+	const bool bByChar = Words.Num() <= 1 && MeasureTok(Text, Tier, bBold).X > MaxW;
+	if (bByChar)
+	{
+		FString Line;
+		for (int32 i = 0; i < Text.Len(); ++i)
+		{
+			const FString Try = Line + Text.Mid(i, 1);
+			if (!Line.IsEmpty() && MeasureTok(Try, Tier, bBold).X > MaxW)
+			{
+				Out.Add(Line);
+				Line = Text.Mid(i, 1);
+			}
+			else
+			{
+				Line = Try;
+			}
+		}
+		if (!Line.IsEmpty()) { Out.Add(Line); }
+		return Out;
+	}
+	FString Line;
+	for (const FString& Wd : Words)
+	{
+		const FString Try = Line.IsEmpty() ? Wd : Line + TEXT(" ") + Wd;
+		if (!Line.IsEmpty() && MeasureTok(Try, Tier, bBold).X > MaxW)
+		{
+			Out.Add(Line);
+			Line = Wd;
+		}
+		else
+		{
+			Line = Try;
+		}
+	}
+	if (!Line.IsEmpty()) { Out.Add(Line); }
+	return Out;
+}
+
+
+// ============================================================================
+// 世界當 UI 用（2026-09-07 大改）：這遊戲所有證據都在皮膚上，HUD 此前一直在皮膚旁邊寫字。
+// ============================================================================
+
+void ANiceInkHUD::DrawBottomScrim(float TopY)
+{
+	if (!Canvas || !ScrimTex || TopY >= Canvas->ClipY)
+	{
+		return;
+	}
+	const float H = Canvas->ClipY - TopY;
+	FLinearColor C = NiHudColor::Ink;
+	C.A = 0.34f * ChromeAlphaMul * ChromeAlphaBase;
+	// 同一張 1×64 漸層貼圖、UV 上下翻＝暗在底
+	FCanvasTileItem Tile(FVector2D(0.0f, TopY), ScrimTex->GetResource(),
+		FVector2D(Canvas->ClipX, H), FVector2D(0.0f, 1.0f), FVector2D(1.0f, 0.0f), C);
+	Tile.BlendMode = SE_BLEND_Translucent;
+	Canvas->DrawItem(Tile);
+}
+
+bool ANiceInkHUD::ComputeWorkScreenBox(ANiceInkCharacter* WorkOwner, int32 WorkId, FBox2D& Out)
+{
+	if (!WorkOwner || !WorkOwner->InkCanvas || !WorkOwner->Body || !Canvas)
+	{
+		return false;
+	}
+	FInkWork Work;
+	if (!WorkOwner->InkCanvas->GetWork(WorkId, Work))
+	{
+		return false;
+	}
+	Out = FBox2D(ForceInit);
+	int32 N = 0;
+	for (const FInkStroke& St : Work.Strokes)
+	{
+		const int32 Step = FMath::Max(1, St.Points.Num() / 12);
+		for (int32 i = 0; i < St.Points.Num(); i += Step)
+		{
+			FVector Wp, Nrm;
+			if (!WorkOwner->Body->ResolveUVToWorldWithNormal(St.Points[i], Wp, Nrm))
+			{
+				continue;
+			}
+			// 背面點過濾試過一版（法線對鏡頭）：框跑到肩膀上、把看得見的那條線排除在外（截圖實錘）
+			// ——法線方向不可信（掃描網格繞向，陷阱年鑑既有）。寧可框大一點也不能框錯。
+			(void)Nrm;
+			const FVector Pr = Project(Wp);
+			if (Pr.Z <= 0.0f)
+			{
+				continue;
+			}
+			Out += FVector2D(Pr.X, Pr.Y);
+			++N;
+		}
+	}
+	return N > 0;
+}
+
+void ANiceInkHUD::DrawWorkFrame(const FBox2D& BoxIn, float Alpha)
+{
+	// 手刷的框：四邊各一筆刷痕、角不閉合（差半個筆寬）——不是幾何矩形。最小 120px（一條 2cm 的線也框得出來）。
+	if (!Canvas || Alpha <= 0.0f)
+	{
+		return;
+	}
+	const float MinS = 30.0f * NiUi::U * UiScale;   // 120
+	FVector2D C = BoxIn.GetCenter();
+	FVector2D Half = BoxIn.GetExtent() + FVector2D(8.0f * NiUi::U * UiScale, 8.0f * NiUi::U * UiScale);
+	Half.X = FMath::Max(Half.X, MinS * 0.5f);
+	Half.Y = FMath::Max(Half.Y, MinS * 0.5f);
+	const float X0 = C.X - Half.X, X1 = C.X + Half.X, Y0 = C.Y - Half.Y, Y1 = C.Y + Half.Y;
+	const float T = 9.0f * UiScale;
+	const float Gap = 3.0f * NiUi::U * UiScale;   // 角不閉合
+	FLinearColor Col = NiHudColor::Paper;
+	Col.A = 0.9f * Alpha * ChromeAlphaBase;
+	TGuardValue<bool> Mirror(bMirrorSuspended, true);   // 世界幾何：不隨語言鏡像
+	// 水平兩筆
+	DrawInkLine(X0 + Gap, Y0 - T * 0.5f, (X1 - X0) - Gap * 2.0f, T, Col);
+	DrawInkLine(X0 + Gap, Y1 - T * 0.5f, (X1 - X0) - Gap * 2.0f, T, Col);
+	// 垂直兩筆：同一張刷痕轉 90°（以左中為樞軸向下）
+	if (InkBrushTex)
+	{
+		const float L = (Y1 - Y0) - Gap * 2.0f;
+		for (float X : { X0, X1 })
+		{
+			FCanvasTileItem Tile(FVector2D(X, Y0 + Gap), InkBrushTex->GetResource(), FVector2D(L, T), Col);
+			Tile.BlendMode = SE_BLEND_Translucent;
+			Tile.Rotation = FRotator(0.0f, 90.0f, 0.0f);
+			Tile.PivotPoint = FVector2D(0.0f, 0.5f);
+			Canvas->DrawItem(Tile);
+		}
+	}
+	else
+	{
+		DrawRect(Col, X0 - T * 0.5f, Y0 + Gap, T, (Y1 - Y0) - Gap * 2.0f);
+		DrawRect(Col, X1 - T * 0.5f, Y0 + Gap, T, (Y1 - Y0) - Gap * 2.0f);
+	}
+}
+
+void ANiceInkHUD::DrawWorkFocusFrame(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
+{
+	// 巡禮：這一幅在哪；指認（受害者本人）：正在考慮的那一幅。判決：被指認的那一幅。
+	if (!GS || !Canvas)
+	{
+		return;
+	}
+	int32 WorkId = INDEX_NONE;
+	switch (GS->CurrentPhase)
+	{
+	case ENiceInkPhase::Tour:       WorkId = GS->TourWorkId; break;
+	case ENiceInkPhase::Resolution: WorkId = GS->ResolutionWorkId; break;
+	case ENiceInkPhase::Accusation:
+		if (MyChar && MyChar->GetPlayerState() && GS->VictimPlayerId == MyChar->GetPlayerState()->GetPlayerId()
+			&& GS->TourWorkIdList.IsValidIndex(MyChar->AccusePickNumber - 1))
+		{
+			WorkId = GS->TourWorkIdList[MyChar->AccusePickNumber - 1];
+		}
+		break;
+	default: break;
+	}
+	if (WorkId == INDEX_NONE)
+	{
+		return;
+	}
+	ANiceInkCharacter* Victim = ANiceInkCharacter::FindByPlayerId(GetWorld(), GS->VictimPlayerId);
+	FBox2D Box;
+	if (!ComputeWorkScreenBox(Victim, WorkId, Box))
+	{
+		return;
+	}
+	// 換幅時重新滲入（鏡頭 blend 0.45s 之後才框——框在鏡頭飛的時候會跟著滑）
+	if (WorkId != LastFrameWorkId)
+	{
+		LastFrameWorkId = WorkId;
+		FrameShownAt = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	}
+	const double Since = (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0) - FrameShownAt - 0.45;
+	DrawWorkFrame(Box, InkIn01(Since, NiUi::InkInS));
+}
+
+void ANiceInkHUD::DrawBodyMap(const ANiceInkCharacter* MyChar)
+{
+	// 鎖定後你看到的是一整面皮膚，看不出自己在肚子還是大腿（截圖實錘）。
+	// 右上一枚 96px 的身體剪影（白 60% 線稿）＋一顆點＝鎖點；背面＝空心點。
+	if (!Canvas || !MyChar || !MyChar->bLeanLocked || !MyChar->LeanTarget || !MyChar->LeanTarget->Body)
+	{
+		return;
+	}
+	TGuardValue<float> ChromeDim(ChromeAlphaMul, MyChar->IsPenTriggerHeldLocal() ? 0.35f : 1.0f);
+	const FTransform BT = MyChar->LeanTarget->Body->GetComponentTransform();
+	const FVector L = BT.InverseTransformPosition(MyChar->LeanPoint);
+	// 身體局部：Z 沿身長（腳 0 → 頭 ~206）、Y 左右（±55）、X 前後（−X＝正面）
+	const float MapH = 24.0f * NiUi::U * UiScale;   // 96
+	const float MapW = MapH * 0.5f;
+	const float M = NiUi::Margin * UiScale;
+	const float X0 = Canvas->ClipX - M - MapW;
+	const float Y0 = M + 9.0f * NiUi::U * UiScale;   // 現金列之下
+	FLinearColor Line = NiHudColor::White; Line.A = 0.55f;
+	const float U = MapH / 206.0f;
+	auto Rect = [&](float CY, float HalfW, float H, float R) { DrawRoundedBox(X0 + MapW * 0.5f - HalfW, Y0 + MapH - (CY + H * 0.5f) * U, HalfW * 2.0f, H * U, R, Line); };
+	Rect(192.0f, 10.0f, 24.0f, 10.0f * UiScale);   // 頭
+	Rect(148.0f, 28.0f, 50.0f, 12.0f * UiScale);   // 胸（肩寬）
+	Rect(104.0f, 36.0f, 46.0f, 16.0f * UiScale);   // 肚（最寬）
+	Rect(42.0f, 22.0f, 74.0f, 8.0f * UiScale);     // 腿（合併成一根粗柱）
+	// 鎖點＝黑心白環（白點在白剪影上看不見——截圖實錘）；背面＝只剩白環
+	const float PX = X0 + MapW * 0.5f + FMath::Clamp(L.Y / 55.0f, -1.0f, 1.0f) * (MapW * 0.5f - 4.0f * UiScale);
+	const float PY = Y0 + MapH - FMath::Clamp(L.Z / 206.0f, 0.0f, 1.0f) * MapH;
+	const float R = 2.5f * NiUi::U * UiScale;   // 10
+	const bool bBack = L.X > 0.0f;
+	DrawRoundedBox(PX - R, PY - R, R * 2.0f, R * 2.0f, R, NiHudColor::White);
+	FLinearColor Core = NiHudColor::Black; Core.A = bBack ? 0.0f : 0.95f;
+	const float Ri = R - FMath::Max(2.0f, 2.0f * UiScale);
+	if (!bBack)
+	{
+		DrawRoundedBox(PX - Ri, PY - Ri, Ri * 2.0f, Ri * 2.0f, Ri, Core);
+	}
+	else
+	{
+		FLinearColor Hole = NiHudColor::Black; Hole.A = 0.35f;
+		DrawRoundedBox(PX - Ri, PY - Ri, Ri * 2.0f, Ri * 2.0f, Ri, Hole);
+	}
+}
+
+void ANiceInkHUD::DrawLaserTags(ANiceInkCharacter* MyChar)
+{
+	// 場間：每一幅碳黑刺青掛一個標籤（雷射・價格／還需幾次）；第一幅＝按 L 會打的那一幅（實）。
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::PostGame || !MyChar || !MyChar->InkCanvas || !Canvas)
+	{
+		return;
+	}
+	TGuardValue<bool> Face(bSerifFace, true);
+	const int32 Cost = GetDefault<ANiceInkGameMode>()->LaserCostPerPass;
+	const float Gap = NiUi::GapS * UiScale;
+	auto Tag = [&](int32 WorkId, const FString& L1, const FString& L2, float Alpha, bool bFrame)
+	{
+		FBox2D Box;
+		if (!ComputeWorkScreenBox(MyChar, WorkId, Box))
+		{
+			return;
+		}
+		if (bFrame)
+		{
+			DrawWorkFrame(Box, Alpha);
+		}
+		const FVector2D C = Box.GetCenter();
+		const float Top = FMath::Min(Box.Min.Y, C.Y - 60.0f * UiScale) - 9.0f * NiUi::U * UiScale;
+		FLinearColor A = NiHudColor::Paper; A.A = Alpha;
+		FLinearColor B = NiHudColor::PaperDim; B.A = Alpha;
+		// 兩行字＝**已搬到 Slate**（SNiWorldTags）：位置來自投影（不是版面），
+		// 但兩行的相對關係是版面 ⇒ 交給 SVerticalBox。這裡只留框。
+		(void)Top; (void)A; (void)B; (void)L1; (void)L2;
+	};
+	const TArray<int32> Carbon = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Carbon);
+	for (int32 i = 0; i < Carbon.Num(); ++i)
+	{
+		FInkWork Wk;
+		int32 Left = 3;
+		if (MyChar->InkCanvas->GetWork(Carbon[i], Wk))
+		{
+			Left = FMath::Max(1, 3 - Wk.LaserLevel);
+		}
+		Tag(Carbon[i], NiLoc::TFmt(this, ENiLocKey::TagLaser, FText::AsNumber(Cost).ToString()),
+			NiLoc::TFmt(this, ENiLocKey::TagLeft, FString::FromInt(Left)), i == 0 ? 1.0f : 0.55f, i == 0);
+	}
+	const TArray<int32> Perm = MyChar->InkCanvas->GetWorkIdsByState(EInkWorkState::Permanent);
+	for (int32 Id : Perm)
+	{
+		Tag(Id, NiLoc::T(this, ENiLocKey::TagPermanent), FString(), 0.55f, false);
+	}
+}
+
+
+float ANiceInkHUD::TokBaselineFromTop(ETextTier Tier, bool bBold)
+{
+	// **只用 Slate 自己的度量**，不猜字型常數（09-06 血價：拿 PIL 的上伸推行框頂→墨跡頂，實拍字掉出盒子；
+	// 換成 GetBaseline 才對）。GetBaseline 是「行框底→基線」的負值 ⇒ 行框高 + 它＝行框頂→基線。
+	// 展示體一律 ToUpper（DrawTok），全大寫沒有下伸 ⇒ 基線就是墨跡底。
+	if (!Canvas || !UiFont || !FSlateApplication::IsInitialized())
+	{
+		return 0.0f;
+	}
+	const int32 SizePx = FMath::Max(8, FMath::RoundToInt(TierSize(Tier) * UiScale));
+	FSlateFontInfo Info(UiFont, SizePx, bSerifFace
+		? (bBold ? FName("SerifBlack") : FName("SerifRegular"))
+		: (bBold ? FName("Bold") : FName("Regular")));
+	Info.LetterSpacing = bSerifFace ? NiDisplayTracking : 0;
+	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+	const float DPI = Canvas->GetDPIScale();
+	return Measure->GetMaxCharacterHeight(Info, DPI) + Measure->GetBaseline(Info, DPI);
+}
+
+float ANiceInkHUD::TokCapTopOffset(ETextTier Tier, bool bBold)
+{
+	// 行框頂 → 大寫墨跡頂（DrawTok 版的 BigCapTopOffset）。展示體的 em 從行框反推
+	// （Oswald 行框 1.482em、大寫 0.81em，09-06 實拍校過）；內文體沒有校過的常數 ⇒ 回傳 0
+	// （呼叫端只在展示體的堆疊上用它）。
+	if (!Canvas || !UiFont || !FSlateApplication::IsInitialized() || !bSerifFace)
+	{
+		return 0.0f;
+	}
+	const int32 SizePx = FMath::Max(8, FMath::RoundToInt(TierSize(Tier) * UiScale));
+	FSlateFontInfo Info(UiFont, SizePx, bBold ? FName("SerifBlack") : FName("SerifRegular"));
+	Info.LetterSpacing = NiDisplayTracking;
+	const TSharedRef<FSlateFontMeasure> Measure = FSlateApplication::Get().GetRenderer()->GetFontMeasureService();
+	const float DPI = Canvas->GetDPIScale();
+	const float LineH = Measure->GetMaxCharacterHeight(Info, DPI);
+	const float BaselineUp = -Measure->GetBaseline(Info, DPI);
+	const float EmPx = LineH / 1.482f;
+	return LineH - BaselineUp - EmPx * 0.81f;
+}
+
+float ANiceInkHUD::GetChromeAlpha() const
+{
+	// 落筆時 chrome 讓開（canvas 端是 TGuardValue<float> ChromeAlphaMul；Slate 端是同一個判準）
+	const ANiceInkCharacter* C = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	const bool bInking = C && C->bLeanLocked && C->IsPenTriggerHeldLocal();
+	return bInking ? 0.30f : 1.0f;
+}
+
+UTexture* ANiceInkHUD::GetFaceSource(const APlayerState* PS, bool& bOutNeedsCrop)
+{
+	// 與 DrawFaceTok 同一條解析鏈（頭像亭優先、名冊次之、最後才是整張臉貼圖）。
+	// **裁切旗標跟著實際挑中的那一張走**——不是另外再判斷一次。
+	bOutNeedsCrop = false;
+	const ANiceInkPlayerState* NIPS = Cast<const ANiceInkPlayerState>(PS);
+	if (!NIPS)
+	{
+		return nullptr;
+	}
+	if (ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(this))
+	{
+		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+		{
+			if (UTexture2D* Open = Share->GetOpen(NIPS->SeatIndex))
+			{
+				// 快取鍵含分發版本＝換臉自動重烘；**烘焙未完成時這裡會是 null**，
+				// 於是往下退——而旗標也跟著往下走，兩者不可能不同意。
+				if (UTexture* P = Booth->GetPortraitKeyed(
+					FString::Printf(TEXT("seat%d_v%d"), NIPS->SeatIndex, Share->GetRevision(NIPS->SeatIndex)),
+					Open, Share->GetClosed(NIPS->SeatIndex), Share->GetMask(NIPS->SeatIndex),
+					Share->GetTone(NIPS->SeatIndex)))
+				{
+					return P;   // 已經是裁好的頭形
+				}
+			}
+		}
+		if (UTexture* P = Booth->GetPortraitRoster(NIPS->AvatarIndex))
+		{
+			return P;           // 同上
+		}
+	}
+	// 亭缺席／未就緒：退回**整張臉貼圖** ⇒ 一定要裁。
+	// 順序與 canvas 端的墊檔路一致：**自訂臉優先**（Share），沒有才用名冊的預設臉。
+	// （搬遷時我只讀了 DrawFaceTok 的前半就開始寫，漏了這一段——見 UI_SYSTEM §15.5）
+	bOutNeedsCrop = true;
+	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
+	{
+		if (UTexture2D* Open = Share->GetOpen(NIPS->SeatIndex))
+		{
+			return Open;
+		}
+	}
+	return GetFaceIcon(NIPS->AvatarIndex);
+}
+
+bool ANiceInkHUD::GetWorkScreenBox(int32 WorkId, FBox2D& Out)
+{
+	// 世界錨定標籤要的投影框：受害者就是這一相位的畫布擁有者
+	ANiceInkCharacter* MyChar = PlayerOwner ? Cast<ANiceInkCharacter>(PlayerOwner->GetPawn()) : nullptr;
+	return MyChar ? ComputeWorkScreenBox(MyChar, WorkId, Out) : false;
+}
+
+int32 ANiceInkHUD::GetLaserCost() const
+{
+	return GetDefault<ANiceInkGameMode>()->LaserCostPerPass;
+}
+

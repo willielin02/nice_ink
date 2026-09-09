@@ -572,17 +572,17 @@ namespace
 		TEXT("새기기"), TEXT("tatuar"), TEXT("encrer"), TEXT("inchiostrare"), TEXT("tätowieren"),
 		TEXT("tatuar"), TEXT("колоть"), TEXT("mürekkep"), TEXT("وشم") } },
 	// ActCups
-	{ { TEXT("ink cups"), TEXT("インクカップ"), TEXT("墨杯"), TEXT("墨杯"),
-		TEXT("잉크 컵"), TEXT("tinteros"), TEXT("godets"), TEXT("colori"), TEXT("Farbnäpfe"),
-		TEXT("potes de tinta"), TEXT("стаканчики"), TEXT("kaplar"), TEXT("أكواب الحبر") } },
+	{ { TEXT("dip"), TEXT("墨をつける"), TEXT("沾墨"), TEXT("蘸墨"),
+		TEXT("잉크 찍기"), TEXT("mojar"), TEXT("tremper"), TEXT("intingere"), TEXT("eintauchen"),
+		TEXT("molhar"), TEXT("макнуть"), TEXT("batır"), TEXT("اغمس") } },
 	// ActWash
 	{ { TEXT("wash"), TEXT("濃さ"), TEXT("濃淡"), TEXT("浓淡"),
 		TEXT("농도"), TEXT("dilución"), TEXT("dilution"), TEXT("diluizione"), TEXT("Verdünnung"),
 		TEXT("diluição"), TEXT("разбавка"), TEXT("seyreltme"), TEXT("تخفيف") } },
-	// ActNeedle
-	{ { TEXT("needle"), TEXT("針"), TEXT("換針"), TEXT("换针"),
-		TEXT("바늘"), TEXT("aguja"), TEXT("aiguille"), TEXT("ago"), TEXT("Nadel"),
-		TEXT("agulha"), TEXT("игла"), TEXT("iğne"), TEXT("إبرة") } },
+	// ActNeedle（2026-09-07：動詞化）
+	{ { TEXT("switch pen"), TEXT("ペンを替える"), TEXT("換筆"), TEXT("换笔"), TEXT("펜 바꾸기"),
+		TEXT("cambiar pluma"), TEXT("changer d'outil"), TEXT("cambia penna"), TEXT("Stift wechseln"),
+		TEXT("trocar caneta"), TEXT("сменить перо"), TEXT("kalem değiştir"), TEXT("بدّل القلم") } },
 	// ActShake
 	{ { TEXT("shake his dream"), TEXT("夢を揺らす"), TEXT("搖他的夢"), TEXT("摇他的梦"),
 		TEXT("꿈 흔들기"), TEXT("sacudir su sueño"), TEXT("secouer son rêve"), TEXT("scuoti il suo sogno"), TEXT("seinen Traum schütteln"),
@@ -863,6 +863,99 @@ namespace
 	{ { TEXT("penalty"), TEXT("罰杯"), TEXT("罰酒"), TEXT("罚酒"),
 		TEXT("벌주"), TEXT("castigo"), TEXT("gage"), TEXT("penitenza"), TEXT("Strafe"),
 		TEXT("castigo"), TEXT("штраф"), TEXT("ceza"), TEXT("عقاب") } },
+	// --- 2026-09-07 UI 大改 ---
+	// MenuHowToPlay
+	{ { TEXT("how to play"), TEXT("遊び方"), TEXT("怎麼玩"), TEXT("怎么玩"), TEXT("게임 방법"),
+		TEXT("cómo jugar"), TEXT("comment jouer"), TEXT("come si gioca"), TEXT("so wird gespielt"),
+		TEXT("como jogar"), TEXT("как играть"), TEXT("nasıl oynanır"), TEXT("طريقة اللعب") } },
+	// MenuSettings
+	{ { TEXT("settings"), TEXT("設定"), TEXT("設定"), TEXT("设置"), TEXT("설정"),
+		TEXT("ajustes"), TEXT("options"), TEXT("impostazioni"), TEXT("Einstellungen"),
+		TEXT("configurações"), TEXT("настройки"), TEXT("ayarlar"), TEXT("الإعدادات") } },
+	// MenuBack
+	{ { TEXT("back"), TEXT("戻る"), TEXT("返回"), TEXT("返回"), TEXT("뒤로"),
+		TEXT("atrás"), TEXT("retour"), TEXT("indietro"), TEXT("zurück"),
+		TEXT("voltar"), TEXT("назад"), TEXT("geri"), TEXT("رجوع") } },
+	// HowTo1
+	{ { TEXT("one rikishi drinks, falls asleep and gets inked by everyone else."), TEXT("一人が酒を飲んで眠り、残りの全員がその体に墨を入れる。"), TEXT("一個力士喝酒睡著，其他人在他身上刺青。"), TEXT("一个力士喝酒睡着，其他人在他身上刺青。"), TEXT("한 명이 술을 마시고 잠들면 나머지가 그 몸에 문신을 새깁니다."),
+		TEXT("un rikishi bebe, se duerme y los demás lo tatúan."), TEXT("un rikishi boit, s'endort et les autres le tatouent."), TEXT("un rikishi beve, si addormenta e gli altri lo tatuano."), TEXT("ein Rikishi trinkt, schläft ein und alle anderen tätowieren ihn."),
+		TEXT("um rikishi bebe, dorme e os outros o tatuam."), TEXT("один рикиси выпивает, засыпает, остальные его татуируют."), TEXT("bir rikişi içer, uyur ve diğerleri onu dövmeler."), TEXT("يشرب أحد الريكيشي وينام ويوشمه الآخرون.") } },
+	// HowTo2
+	{ { TEXT("the sleeper traces a dream to wake up. artists can pay to shake it."), TEXT("眠っている人は夢をなぞって目を覚ます。描く側は金を払って夢を揺らせる。"), TEXT("沉睡者描完夢中的圖就醒來；作畫者可以花錢搖他的夢。"), TEXT("沉睡者描完梦中的图就醒来；作画者可以花钱摇他的梦。"), TEXT("잠든 사람은 꿈을 따라 그려 깨어납니다. 그리는 쪽은 돈을 내고 꿈을 흔들 수 있습니다."),
+		TEXT("el dormido traza un sueño para despertar; los artistas pueden pagar para sacudirlo."), TEXT("le dormeur trace un rêve pour se réveiller ; les artistes peuvent payer pour le secouer."), TEXT("chi dorme ricalca un sogno per svegliarsi; gli artisti possono pagare per scuoterlo."), TEXT("der Schläfer zeichnet einen Traum nach, um aufzuwachen; Künstler können zahlen, um ihn zu rütteln."),
+		TEXT("quem dorme traça um sonho para acordar; os artistas podem pagar para sacudi-lo."), TEXT("спящий обводит сон, чтобы проснуться; художники могут заплатить и встряхнуть его."), TEXT("uyuyan kişi uyanmak için bir rüyayı çizer; çizenler para ödeyip onu sallayabilir."), TEXT("يتتبّع النائم حلمًا ليستيقظ، ويمكن للرسامين الدفع لهزّه.") } },
+	// HowTo3
+	{ { TEXT("he may wake silently and catch you in the act."), TEXT("音もなく目を覚まし、現行犯を押さえるかもしれない。"), TEXT("他可能無聲睜眼，抓你現行。"), TEXT("他可能无声睁眼，抓你现行。"), TEXT("소리 없이 깨어나 현장을 잡을 수도 있습니다."),
+		TEXT("puede despertar en silencio y pillarte con las manos en la masa."), TEXT("il peut se réveiller sans bruit et te prendre sur le fait."), TEXT("può svegliarsi in silenzio e coglierti sul fatto."), TEXT("er kann lautlos aufwachen und dich auf frischer Tat ertappen."),
+		TEXT("ele pode acordar em silêncio e te pegar no flagra."), TEXT("он может проснуться беззвучно и поймать тебя с поличным."), TEXT("sessizce uyanıp seni suçüstü yakalayabilir."), TEXT("قد يستيقظ بصمت ويضبطك متلبسًا.") } },
+	// HowTo4
+	{ { TEXT("after the gallery tour he picks one piece and names its artist."), TEXT("ギャラリー巡りのあと、一つの作品を選んで作者を指名する。"), TEXT("巡禮結束後，他挑一幅指認作者。"), TEXT("巡礼结束后，他挑一幅指认作者。"), TEXT("갤러리 투어 후 작품 하나를 골라 작가를 지목합니다."),
+		TEXT("tras la galería, elige una obra y nombra a su autor."), TEXT("après la galerie, il choisit une œuvre et en nomme l'auteur."), TEXT("dopo la galleria sceglie un'opera e ne nomina l'autore."), TEXT("nach der Galerie wählt er ein Werk und nennt dessen Künstler."),
+		TEXT("após a galeria, ele escolhe uma obra e nomeia o autor."), TEXT("после галереи он выбирает работу и называет её автора."), TEXT("galeri turundan sonra bir eser seçer ve sanatçısını söyler."), TEXT("بعد جولة المعرض يختار عملًا ويسمّي رسّامه.") } },
+	// HowTo5
+	{ { TEXT("right: the artist takes the seat. wrong: that ink stays, and he drinks. three cups and he is out cold."), TEXT("正解なら作者が次に眠る。外れならその墨は残り、一杯飲む。三杯で昏倒。"), TEXT("猜對：作者換上來睡。猜錯：那幅留在身上，再喝一杯。三杯就昏死。"), TEXT("猜对：作者换上来睡。猜错：那幅留在身上，再喝一杯。三杯就昏死。"), TEXT("맞히면 작가가 잠듭니다. 틀리면 그 문신은 남고 한 잔 더. 세 잔이면 뻗습니다."),
+		TEXT("acierto: el autor se duerme. fallo: esa tinta se queda y él bebe. tres copas y cae."), TEXT("juste : l'artiste prend la place. faux : l'encre reste et il boit. trois verres et il tombe."), TEXT("giusto: l'artista prende il posto. sbagliato: l'inchiostro resta e lui beve. tre bicchieri e va giù."), TEXT("richtig: der Künstler übernimmt den Platz. falsch: die Tinte bleibt und er trinkt. drei Becher und er ist weg."),
+		TEXT("certo: o artista toma o lugar. errado: a tinta fica e ele bebe. três copos e ele apaga."), TEXT("верно: художник занимает место. неверно: чернила остаются, и он пьёт. три чаши — и он в отключке."), TEXT("doğru: sanatçı yerine geçer. yanlış: dövme kalır ve o içer. üç kadehte bayılır."), TEXT("صحيح: يأخذ الرسام مكانه. خطأ: يبقى الحبر ويشرب. ثلاثة أقداح ويسقط.") } },
+	// ActFeign
+	{ { TEXT("feign sleep (hold)"), TEXT("寝たふり（長押し）"), TEXT("裝睡（按住）"), TEXT("装睡（按住）"), TEXT("자는 척 (길게)"),
+		TEXT("fingir dormir (mantener)"), TEXT("faire semblant (maintenir)"), TEXT("fingi di dormire (tieni)"), TEXT("schlafen vortäuschen (halten)"),
+		TEXT("fingir dormir (segurar)"), TEXT("притвориться спящим (удерж.)"), TEXT("uyuyor gibi yap (basılı tut)"), TEXT("تظاهر بالنوم (استمر)") } },
+	// ActGetUp
+	{ { TEXT("get up · ends the round"), TEXT("起きる・ラウンド終了"), TEXT("起身・結束作畫"), TEXT("起身・结束作画"), TEXT("일어나기 · 라운드 종료"),
+		TEXT("levantarse · termina la ronda"), TEXT("se lever · fin de la manche"), TEXT("alzati · fine del turno"), TEXT("aufstehen · beendet die Runde"),
+		TEXT("levantar · encerra a rodada"), TEXT("встать · конец раунда"), TEXT("kalk · turu bitirir"), TEXT("انهض · ينهي الجولة") } },
+	// ActPrevPiece
+	{ { TEXT("previous piece"), TEXT("前の作品"), TEXT("上一幅"), TEXT("上一幅"), TEXT("이전 작품"),
+		TEXT("obra anterior"), TEXT("œuvre précédente"), TEXT("opera precedente"), TEXT("voriges Werk"),
+		TEXT("obra anterior"), TEXT("предыдущая работа"), TEXT("önceki eser"), TEXT("العمل السابق") } },
+	// ActNextPiece
+	{ { TEXT("next piece"), TEXT("次の作品"), TEXT("下一幅"), TEXT("下一幅"), TEXT("다음 작품"),
+		TEXT("obra siguiente"), TEXT("œuvre suivante"), TEXT("opera successiva"), TEXT("nächstes Werk"),
+		TEXT("próxima obra"), TEXT("следующая работа"), TEXT("sonraki eser"), TEXT("العمل التالي") } },
+	// AccuseStake
+	{ { TEXT("wrong: this ink stays on you · cup {0} / 3"), TEXT("外れ：この墨は残る・{0}杯目 / 3"), TEXT("猜錯：這幅留在你身上・第 {0} / 3 杯"), TEXT("猜错：这幅留在你身上・第 {0} / 3 杯"), TEXT("틀리면 이 문신이 남습니다 · {0} / 3 잔"),
+		TEXT("fallo: esta tinta se queda · copa {0} / 3"), TEXT("faux : cette encre reste · verre {0} / 3"), TEXT("sbagliato: l'inchiostro resta · bicchiere {0} / 3"), TEXT("falsch: die Tinte bleibt · Becher {0} / 3"),
+		TEXT("errado: esta tinta fica · copo {0} / 3"), TEXT("неверно: чернила останутся · чаша {0} / 3"), TEXT("yanlış: bu dövme kalır · kadeh {0} / 3"), TEXT("خطأ: يبقى هذا الحبر · قدح {0} / 3") } },
+	// ResWrongStake
+	{ { TEXT("the ink stays · cup {0} / 3"), TEXT("墨は残る・{0}杯目 / 3"), TEXT("墨留在身上・第 {0} / 3 杯"), TEXT("墨留在身上・第 {0} / 3 杯"), TEXT("문신이 남습니다 · {0} / 3 잔"),
+		TEXT("la tinta se queda · copa {0} / 3"), TEXT("l'encre reste · verre {0} / 3"), TEXT("l'inchiostro resta · bicchiere {0} / 3"), TEXT("die Tinte bleibt · Becher {0} / 3"),
+		TEXT("a tinta fica · copo {0} / 3"), TEXT("чернила остаются · чаша {0} / 3"), TEXT("dövme kalır · kadeh {0} / 3"), TEXT("يبقى الحبر · قدح {0} / 3") } },
+	// TourPiece
+	{ { TEXT("piece {0} / {1}"), TEXT("作品 {0} / {1}"), TEXT("第 {0} / {1} 幅"), TEXT("第 {0} / {1} 幅"), TEXT("작품 {0} / {1}"),
+		TEXT("obra {0} / {1}"), TEXT("œuvre {0} / {1}"), TEXT("opera {0} / {1}"), TEXT("Werk {0} / {1}"),
+		TEXT("obra {0} / {1}"), TEXT("работа {0} / {1}"), TEXT("eser {0} / {1}"), TEXT("العمل {0} / {1}") } },
+	// TagLaser（場間：碳黑刺青旁的雷射標籤）
+	{ { TEXT("laser · ${0}"), TEXT("レーザー・${0}"), TEXT("雷射・${0}"), TEXT("激光・${0}"), TEXT("레이저 · ${0}"),
+		TEXT("láser · ${0}"), TEXT("laser · ${0}"), TEXT("laser · ${0}"), TEXT("Laser · ${0}"),
+		TEXT("laser · ${0}"), TEXT("лазер · ${0}"), TEXT("lazer · ${0}"), TEXT("ليزر · ${0}") } },
+	// TagLeft
+	{ { TEXT("{0} left"), TEXT("あと{0}回"), TEXT("還需 {0} 次"), TEXT("还需 {0} 次"), TEXT("{0}회 남음"),
+		TEXT("faltan {0}"), TEXT("encore {0}"), TEXT("ancora {0}"), TEXT("noch {0}"),
+		TEXT("faltam {0}"), TEXT("ещё {0}"), TEXT("{0} kaldı"), TEXT("بقي {0}") } },
+	// TagPermanent
+	{ { TEXT("permanent"), TEXT("永久"), TEXT("永久"), TEXT("永久"), TEXT("영구"),
+		TEXT("permanente"), TEXT("permanent"), TEXT("permanente"), TEXT("dauerhaft"),
+		TEXT("permanente"), TEXT("навсегда"), TEXT("kalıcı"), TEXT("دائم") } },
+	// LobbyStatusWaiting
+	{ { TEXT("waiting for players · {0} / {1}"), TEXT("プレイヤー待ち · {0} / {1}"), TEXT("等人進來 · {0} / {1}"), TEXT("等人进来 · {0} / {1}"), TEXT("플레이어 대기 중 · {0} / {1}"),
+		TEXT("esperando jugadores · {0} / {1}"), TEXT("en attente de joueurs · {0} / {1}"), TEXT("in attesa di giocatori · {0} / {1}"), TEXT("warten auf Spieler · {0} / {1}"),
+		TEXT("esperando jogadores · {0} / {1}"), TEXT("ждём игроков · {0} / {1}"), TEXT("oyuncular bekleniyor · {0} / {1}"), TEXT("بانتظار اللاعبين · {0} / {1}") } },
+	// LobbyStatusReady
+	{ { TEXT("ready · {0} / {1}"), TEXT("準備完了 · {0} / {1}"), TEXT("可以開始 · {0} / {1}"), TEXT("可以开始 · {0} / {1}"), TEXT("준비 완료 · {0} / {1}"),
+		TEXT("listos · {0} / {1}"), TEXT("prêts · {0} / {1}"), TEXT("pronti · {0} / {1}"), TEXT("bereit · {0} / {1}"),
+		TEXT("prontos · {0} / {1}"), TEXT("готовы · {0} / {1}"), TEXT("hazır · {0} / {1}"), TEXT("جاهزون · {0} / {1}") } },
+	// ActMenu
+	{ { TEXT("menu"), TEXT("メニュー"), TEXT("選單"), TEXT("菜单"), TEXT("메뉴"),
+		TEXT("menú"), TEXT("menu"), TEXT("menu"), TEXT("Menü"),
+		TEXT("menu"), TEXT("меню"), TEXT("menü"), TEXT("القائمة") } },
+	// ActCopy
+	{ { TEXT("copy"), TEXT("コピー"), TEXT("複製"), TEXT("复制"), TEXT("복사"),
+		TEXT("copiar"), TEXT("copier"), TEXT("copia"), TEXT("kopieren"),
+		TEXT("copiar"), TEXT("копировать"), TEXT("kopyala"), TEXT("نسخ") } },
+	// LobbyCopied
+	{ { TEXT("copied"), TEXT("コピーした"), TEXT("已複製"), TEXT("已复制"), TEXT("복사됨"),
+		TEXT("copiado"), TEXT("copié"), TEXT("copiato"), TEXT("kopiert"),
+		TEXT("copiado"), TEXT("скопировано"), TEXT("kopyalandı"), TEXT("تم النسخ") } },
 	};
 
 	// 表的大小寫在兩個地方必有一邊會舊：改成推導長度＋編譯期對賬。

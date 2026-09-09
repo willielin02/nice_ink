@@ -260,6 +260,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboFinale();
 
+	// robo：把受害者身上第一幅會消失的刺青當眾轉碳黑（拍場間雷射標籤用；兩人房走不到猜錯）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboCarbonize();
+
+	// 大廳（2026-09-07 二版）：在場的人依席位排成鏡頭對面的弧（置中、24° 一席），面向鏡頭
+	void PlaceLobbyArc();
+	FTimerHandle LobbyArcTimer;
+
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSpray(float AimYawWorld, uint8 OriginType);
 

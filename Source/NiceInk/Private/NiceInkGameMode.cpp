@@ -113,6 +113,28 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 
 	Super::PostLogin(NewPlayer);
 
+	// 大廳：pawn 生成後讓新來的人面向圈心（晚一拍讓 pawn 就位）。只轉新人——已經在走動的人不動。
+	{
+		TWeakObjectPtr<APlayerController> NewPC = NewPlayer;
+		GetWorldTimerManager().SetTimer(LobbyArcTimer, FTimerDelegate::CreateWeakLambda(this, [this, NewPC]()
+		{
+			ANiceInkGameState* GS = NIState();
+			APawn* Pawn = NewPC.IsValid() ? NewPC->GetPawn() : nullptr;
+			if (!GS || !Pawn || GS->CurrentPhase != ENiceInkPhase::Lobby || GS->CeremonyCenter.IsNearlyZero())
+			{
+				return;
+			}
+			FRotator Face = (GS->CeremonyCenter - Pawn->GetActorLocation()).Rotation();
+			Face.Pitch = 0.0f; Face.Roll = 0.0f;
+			Pawn->SetActorRotation(Face);
+			NewPC->SetControlRotation(Face);
+			if (ANiceInkCharacter* C = Cast<ANiceInkCharacter>(Pawn))
+			{
+				C->ClientLobbyFace(Face);
+			}
+		}), 0.3f, false);
+	}
+
 	// 跨場資產還原（延遲讓新客戶端的 actor channel 就緒，multicast 才到得了它）。
 	// B3 起＝編排制：LAN/PIE 首 tick 即走本機槽（時序與舊制同＝+2s）；
 	// EOS 玩家等雲端（主機本人）或上行列車（遠端），逾時 fallback 本機槽。
@@ -2383,6 +2405,55 @@ void ANiceInkGameMode::DebugRoboFinale()
 			VictimPS->PenaltyCups = PenaltyCupsToFinale;
 		}
 		EnterFinale();
+	}), 0.1f, false);
+}
+
+void ANiceInkGameMode::PlaceLobbyArc()
+{
+	// 大廳＝第一人稱自由走動（2026-09-08 user 打回固定機位＋列隊：Among Us／Lethal Company／Phasmophobia 的大廳
+	// 都是局內視角自由走動）。這裡只做一件事：出生時面向圈心，第一眼看到的是其他人，不是牆。
+	ANiceInkGameState* GS = NIState();
+	if (!GS || GS->CurrentPhase != ENiceInkPhase::Lobby || GS->CeremonyCenter.IsNearlyZero())
+	{
+		return;
+	}
+	for (APlayerState* PS : GS->PlayerArray)
+	{
+		APawn* Pawn = PS ? PS->GetPawn() : nullptr;
+		if (!Pawn)
+		{
+			continue;
+		}
+		FRotator Face = (GS->CeremonyCenter - Pawn->GetActorLocation()).Rotation();
+		Face.Pitch = 0.0f; Face.Roll = 0.0f;
+		Pawn->SetActorRotation(Face);
+		if (AController* Ctl = Pawn->GetController())
+		{
+			Ctl->SetControlRotation(Face);
+		}
+		if (ANiceInkCharacter* C = Cast<ANiceInkCharacter>(Pawn))
+		{
+			C->ClientLobbyFace(Face);   // 擁有端的控制旋轉才算數
+		}
+	}
+}
+
+void ANiceInkGameMode::DebugRoboCarbonize()
+{
+	FTimerHandle Unused;
+	GetWorldTimerManager().SetTimer(Unused, FTimerDelegate::CreateWeakLambda(this, [this]()
+	{
+		ANiceInkCharacter* V = GetVictimCharacter();
+		if (!V || !V->InkCanvas)
+		{
+			return;
+		}
+		const TArray<int32> Ids = V->InkCanvas->GetWorkIdsByState(EInkWorkState::Marker);
+		if (Ids.IsEmpty())
+		{
+			return;
+		}
+		V->MulticastConvertWorkToCarbon(Ids[0]);
 	}), 0.1f, false);
 }
 

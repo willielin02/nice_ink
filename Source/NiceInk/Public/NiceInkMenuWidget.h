@@ -58,6 +58,9 @@ public:
 	// 開個人檔案頁（robo 鉤子 NiMenuShowProfile 與主選單按鈕共用；含名字欄播種）
 	void OpenProfilePage();
 
+	// 舞台讀：個人檔案頁開著＝力士停下來轉台（2026-09-07：這一頁是唯一能端詳自己身體與刺青的地方）
+	bool IsProfilePageOpen() const { return Page == EPage::Profile; }
+
 private:
 	enum class EPage : uint8 { Root, Host, Join, Settings, Credits, Language, Profile };
 	EPage Page = EPage::Root;

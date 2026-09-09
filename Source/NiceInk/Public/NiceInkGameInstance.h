@@ -142,6 +142,16 @@ public:
 	// 主選單 HUD 取用：讀出上次斷線原因並清除
 	FString ConsumeDisconnectReason();
 
+	// 語音：這位玩家現在在說話嗎（EOS RTC；NULL／LAN／未入頻道＝恆 false）。
+	// 2026-09-07：這是一個靠語音推理的遊戲而全站沒有說話者指示；沉睡者端不畫（感官剝奪是設計）。
+	bool IsPlayerTalking(const class APlayerState* PS);
+private:
+	// 快取（2026-09-07 血價）：一版每幀每張臉都叫 EOS 的 GetVoiceChatUserInterface ⇒ PIE 開始 5 秒
+	// D3D12 E_OUTOFMEMORY。只在 Game 世界查、每 0.1s 一次、結果按 PlayerId 快取。
+	TMap<int32, bool> TalkingCache;
+	double TalkingCacheAt = -1.0;
+public:
+
 private:
 	// --- EOS 語音探針（PostLoadMap 掛起；NULL/LAN 下零行為）---
 	// lobby 的 bUseLobbiesVoiceChatIfAvailable 契約＝成員進房自動入 RTC 語音房。

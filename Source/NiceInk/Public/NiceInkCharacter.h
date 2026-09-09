@@ -1289,6 +1289,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboPaintHold(bool bHold);
 
+	// robo：模擬按住 RMB 開墨杯盤（拍畫面用；bInkTrayOpen 會被 PollLockedDraw 每 tick
+	// 依真實 RMB 覆蓋，python 直設旗標下一幀就被收掉——與 bDebugPaintHeld 同一款輸入源）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboInkTray(bool bHeld) { bDebugTrayHeld = bHeld; }
+
 	// robo：合成滑鼠增量（稿筆游標制的真人管線探針——角度命令會 relatch 游標＝
 	// 測不到增益/漂移；此鉤子走與真滑鼠同一條 UpdateStencilCursor）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
@@ -1328,6 +1333,10 @@ public:
 	// robo：開／關 ESC 系統選單（拍畫面用；bSystemMenuOpen 不是 UPROPERTY、python 設不到）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSystemMenu(bool bOpen) { SetSystemMenuOpen(bOpen); }
+
+	// robo：切 ESC 選單的頁（0 Root／1 怎麼玩／2 設定；拍畫面用）
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	void DebugRoboSystemMenuPage(int32 Page);
 
 	// robo：從「當前真實眼位」朝 AimPoint 打入座射線——驗「站在外面點不點得到」
 	// 這一段（DebugRoboEnterLean 先傳送到點旁＝跳過此段）。
@@ -1654,6 +1663,7 @@ private:
 
 	bool bHasPendingDebugDrawAim = false;   // DebugRoboDrawAim 待消化（本地 tick）
 	FVector2D PendingDebugDrawAim = FVector2D::ZeroVector;
+	bool bDebugTrayHeld = false;            // robo「模擬按住右鍵」輸入源（DebugRoboInkTray）
 	bool bDebugPaintHeld = false;           // robo「模擬按住左鍵」輸入源
 	bool bHasPendingDebugMouse = false;     // DebugRoboMouse 待消化（合成滑鼠增量、
 	FVector2D PendingDebugMouse = FVector2D::ZeroVector; // 走真人游標管線；robo 橋接
@@ -1917,6 +1927,25 @@ private:
 	UPROPERTY()
 	TObjectPtr<class UAudioComponent> IntroMachineLoop;
 	void ViewSelfThirdPerson(APlayerController* PC);
+	// 結局的輸家（2026-09-07）：鏡頭繞自己的身體慢慢轉——被鎖住的刺青、飛走的錢都在這一鏡裡。
+	// 此前昏睡不醒的人看到的是深藍空畫面加一行紅字。
+	void ViewOrbitSelf(APlayerController* PC);
+	bool bOrbitActive = false;
+	// 大廳（2026-09-07 二版）：固定機位看著圈裡的力士——等待的一到三分鐘有東西看（Liar's Bar／Among Us／PEAK 同做法）
+	void ViewLobby(APlayerController* PC);
+	bool bLobbyViewActive = false;
+public:
+	// 大廳排位：朝向是客戶端權威（控制旋轉），伺服器 SetControlRotation 到不了 ⇒ Client RPC 送到擁有端
+	UFUNCTION(Client, Reliable)
+	void ClientLobbyFace(FRotator Face);
+private:
+public:
+	// 大廳 C＝複製房碼；HUD 讀這個時間顯示「已複製」
+	double LobbyCopiedUntil = -1.0;
+private:
+	double OrbitStartTime = 0.0;
+	// 相位切換偵測（作畫開始那一幀把視線落到受害者身上；截圖實錘：畫面是天花板，body 在畫面外）
+	ENiceInkPhase LastCamPhaseSeen = ENiceInkPhase::Lobby;
 	void RestoreView(APlayerController* PC);
 	ACameraActor* GetOrSpawnCinematicCamera();
 

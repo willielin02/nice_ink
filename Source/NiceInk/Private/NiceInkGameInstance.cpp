@@ -6,6 +6,9 @@
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
 #include "GameFramework/GameUserSettings.h"
+#include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
+#include "GameFramework/GameStateBase.h"
 #include "IOnlineSubsystemEOS.h"
 #include "Interfaces/OnlineIdentityInterface.h"
 #include "Kismet/GameplayStatics.h"
@@ -104,6 +107,62 @@ void UNiceInkGameInstance::ProbeVoiceChatOnce(UWorld* World)
 		UE_LOG(LogTemp, Warning, TEXT("NiVoice: not in any voice channel after 30s — lobby RTC auto-join did NOT happen; check Dev Portal Client Policy has Voice permission, or wire manual JoinChannel"));
 		World->GetTimerManager().ClearTimer(VoiceProbeTimer);
 	}
+}
+
+bool UNiceInkGameInstance::IsPlayerTalking(const APlayerState* PS)
+{
+	if (!PS)
+	{
+		return false;
+	}
+	UWorld* World = GetWorld();
+	// 只在真的遊戲世界查（PIE／robo 零干擾；語音在 PIE 裡本來就不存在）
+	if (!World || World->WorldType != EWorldType::Game || World->GetNetMode() == NM_Standalone)
+	{
+		return false;
+	}
+	if (!UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		return false;
+	}
+	const double Now = World->GetRealTimeSeconds();
+	if (Now - TalkingCacheAt > 0.1)
+	{
+		TalkingCacheAt = Now;
+		TalkingCache.Reset();
+		IOnlineSubsystem* OSS = Online::GetSubsystem(World);
+		if (OSS && OSS->GetSubsystemName() == FName(TEXT("EOS")))
+		{
+			IOnlineSubsystemEOS* EOS = static_cast<IOnlineSubsystemEOS*>(OSS);
+			const ULocalPlayer* LP = GetFirstGamePlayer();
+			const FUniqueNetIdRepl NetId = LP ? LP->GetPreferredUniqueNetId() : FUniqueNetIdRepl();
+			IVoiceChatUser* Voice = NetId.IsValid() ? EOS->GetVoiceChatUserInterface(*NetId) : nullptr;
+			if (Voice && Voice->IsLoggedIn())
+			{
+				if (const AGameStateBase* GSB = World->GetGameState())
+				{
+					for (const APlayerState* Other : GSB->PlayerArray)
+					{
+						if (!Other) { continue; }
+						FString Name;
+						if (LP && LP->PlayerController && LP->PlayerController->PlayerState == Other)
+						{
+							Name = Voice->GetLoggedInPlayerName();
+						}
+						else
+						{
+							Name = Other->GetUniqueId().ToString();
+							int32 Bar = INDEX_NONE;
+							if (Name.FindChar(TEXT('|'), Bar)) { Name = Name.Mid(Bar + 1); }
+						}
+						TalkingCache.Add(Other->GetPlayerId(), !Name.IsEmpty() && Voice->IsPlayerTalking(Name));
+					}
+				}
+			}
+		}
+	}
+	const bool* Found = TalkingCache.Find(PS->GetPlayerId());
+	return Found && *Found;
 }
 
 UNiceInkGameInstance* UNiceInkGameInstance::Get(const UObject* WorldContext)

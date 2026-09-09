@@ -106,6 +106,7 @@ private:
 	UPROPERTY() TObjectPtr<ACameraActor> Camera;
 
 	int32 LastBeat = -1;
+	bool bShowcaseActive = false;   // 個人檔案頁：停舞、慢轉台（2026-09-07）
 	float SpinYawRemaining = 0.0f; // >0＝旋轉中（每拍觸發後遞減到 0）
 	float CurrentYaw = 180.0f;     // 面向相機（見 FaceCameraYaw）
 

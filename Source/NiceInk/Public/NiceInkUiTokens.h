@@ -32,8 +32,15 @@ namespace NiHudColor
 	// Accent＝填色（選中 chip／房號塊；上面放**黑字** OnAccent 9:1，白字只有 1.9:1 禁用）
 	// AccentText＝深底上的強調文字與外框（對黑 12:1；**不准落在世界上**）
 	// 結晶紫退役：它是稿線的墨色，畫面上那支筆就是紫的＝一色兩義。
-	static const FLinearColor Accent     = FLinearColor::FromSRGBColor(FColor(217, 178, 74));
-	static const FLinearColor AccentText = FLinearColor::FromSRGBColor(FColor(240, 203, 91));
+	// **無主色**（2026-09-07 user 定案：「UI 一定需要一個主色嗎？」→ 拿掉）：這是一個
+	// 關於「顏色落在皮膚上」的遊戲——Crayola 十色的墨、碳黑、皮膚、木頭、榻榻米，畫面裡的
+	// 色彩全是內容，HUD 再帶一個主色就是跟墨搶；清酒金尤其糟（與皮膚、木頭同是暖色，
+	// G 鍵帽在膚色上那塊金幾乎讀不出來）。主色的兩份工作改由別的通道做：
+	// 「現在能按」＝形狀與明度（實心白鍵帽 vs 黑底白字 vs 35% 空心）；
+	// 「剛剛什麼變了」＝動態（滲入、印章落下、現金跳字）。紅保留＝語義色（失去東西）。
+	// 舊名 Accent／AccentText／OnAccent 保留為白／白／黑，既有呼叫點不必改。
+	static const FLinearColor Accent     = FLinearColor::FromSRGBColor(FColor(242, 242, 242));
+	static const FLinearColor AccentText = FLinearColor::FromSRGBColor(FColor(242, 242, 242));
 	static const FLinearColor OnAccent   = FLinearColor::FromSRGBColor(FColor(10, 10, 12));
 	static const FLinearColor Red      = FLinearColor::FromSRGBColor(FColor(224, 82, 70));
 
@@ -47,9 +54,9 @@ namespace NiHudColor
 	static const FLinearColor PaperDim = White70;      // 次要文字（標籤、說明）
 	static const FLinearColor Ink      = Black;        // 面板底／壓暗／鍵帽字
 	static const FLinearColor InkDim   = FLinearColor::FromSRGBColor(FColor(96, 96, 100));
-	static const FLinearColor Amber    = AccentText;   // 舊「酒金文字」＝強調文字
-	static const FLinearColor AmberDeep = Accent;      // 舊「深酒金」＝強調填色
-	static const FLinearColor Green    = AccentText;   // 成功＝強調色（失敗＝Red）
+	static const FLinearColor Amber    = White;        // 舊「酒金文字」＝現在就是白（無主色）
+	static const FLinearColor AmberDeep = White;       // 舊「深酒金」＝白
+	static const FLinearColor Green    = White;        // 成功＝白（失敗＝Red，語義色）
 	// 遊戲幾何專用（沉睡黑屏／墨杯棋盤）——不是 chrome 色
 	static const FLinearColor Skin     = FLinearColor::FromSRGBColor(FColor(238, 195, 168));
 	static const FLinearColor Lavender = FLinearColor::FromSRGBColor(FColor(169, 163, 207));
@@ -116,11 +123,17 @@ namespace NiUi
 	constexpr float GapM      = 2.0f * U;   //  8
 	constexpr float GapL      = 4.0f * U;   // 16 段落之間
 	constexpr float FaceS     = 6.0f * U;   // 24 上緣受害者臉
-	constexpr float FaceM     = 14.0f * U;  // 56 大廳席位／指認候選的臉
+	constexpr float FaceM     = 16.0f * U;  // 64 列表的臉（大廳席位）
 	constexpr float FaceL     = 24.0f * U;  // 96 揭曉的臉
 	constexpr float Radius    = 1.0f * U;   //  4 全站唯一的圓角（面板、chip、鍵帽同值）
-	constexpr float ModalDim  = 0.60f;      // 模態底（黑 60%）
+	constexpr float ModalDim  = 0.62f;      // 模態底（黑 62%）
 	constexpr float FadeS     = 0.25f;      // 相位切換 chrome 淡入淡出（秒）
+	// 動態（2026-09-07）：單色 UI 沒有主色告訴你「什麼變了」，全靠這兩個數字。
+	// 滲入＝alpha 0→1 同時往上浮 InkRisePx；印章落下＝縮放 1.06→1.0。
+	constexpr float InkInS    = 0.18f;
+	constexpr float InkOutS   = 0.12f;
+	constexpr float InkRisePx = 6.0f;
+	constexpr float StampS    = 0.12f;
 }
 
 // --- 間距網格（4 的倍數；選單 Slate 版面用）---

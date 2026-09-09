@@ -31,6 +31,7 @@ public class NiceInk : ModuleRules
 			"ImageWrapper",
 			"ImageCore",
 			"Json",               // skin_color.json 解析（自拍臉 runtime 匯入）
+			"ApplicationCore",   // 大廳 C 複製房碼（FPlatformApplicationMisc::ClipboardCopy）
 			"VoiceChat",          // IVoiceChatUser（EOS lobby RTC 語音探針）
 			"OnlineSubsystemEOS", // IOnlineSubsystemEOS::GetVoiceChatUserInterface
 			"AIModule",           // 主選單舞台的 AAIController（力士編舞直驅）

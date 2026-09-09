@@ -28,7 +28,7 @@ FString UNiceInkSessionSubsystem::MakeRoomCode()
 	// 只用子音（2026-09-06：user 真局抽到 FCUM）——四個隨機字母含母音就會拼出髒字；
 	// 子音串幾乎拼不出詞，再加一張短黑名單擋剩下的縮寫。仍剔除 I/L/O（與 1/0 混形）。
 	// 20 個字母 4 位＝16 萬組合，撞碼機率可忽略。
-	static const TCHAR Charset[] = TEXT("BCDFGHJKMNPQRSTVWXYZ");
+	static const TCHAR Charset[] = TEXT("BCDFGHKMNPRSTVWXYZ");   // 2026-09-06 定案剔 J／Q（下伸尾巴）；09-07 才真的落地——此前只改了文件
 	constexpr int32 N = UE_ARRAY_COUNT(Charset) - 1;
 	static const TCHAR* Blocked[] = {
 		TEXT("FCK"), TEXT("FKK"), TEXT("CNT"), TEXT("KNT"), TEXT("DCK"), TEXT("CCK"), TEXT("SHT"),

@@ -226,3 +226,9 @@ void ANiceInkMenuHUD::RoboGoBack()
 		Menu->RoboBack();
 	}
 }
+
+
+bool ANiceInkMenuHUD::IsProfileShowcase() const
+{
+	return Menu.IsValid() && Menu->IsProfilePageOpen();
+}

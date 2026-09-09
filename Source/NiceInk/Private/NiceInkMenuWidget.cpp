@@ -3,6 +3,7 @@
 
 #include "NiceInkLocText.h"
 #include "NiceInkMenuHUD.h"
+#include "Engine/Font.h"
 
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -1713,7 +1714,16 @@ TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 TSharedRef<SWidget> SNiMenu::MakeProfileCashBlock()
 {
 	// 現金（僅日常模式；空值不領大字——$ —/$ … 用內文級、有真數字才 Value）
+	// 2026-09-07：沒有值（LAN／未登入）就整塊不畫——出貨畫面上不准有「$ —」這種佔位符
 	return SNew(SVerticalBox)
+		.Visibility_Lambda([this]()
+		{
+			UNiceInkPersonaSubsystem* P = Persona();
+			const UNiceInkSessionSubsystem* S = Sessions();
+			const bool bHasData = P && P->GetCloudSaveView();
+			return (bHasData || (S && S->IsLoggedIn()) || (!IsLan() && S && !S->IsLoggedIn()))
+				? EVisibility::Visible : EVisibility::Collapsed;
+		})
 		+ SVerticalBox::Slot().AutoHeight()
 		[
 			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)

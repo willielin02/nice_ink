@@ -16,6 +16,7 @@
 #include "Materials/MaterialInstanceDynamic.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkGameInstance.h"
+#include "NiceInkMenuHUD.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSaveGame.h"
 
@@ -285,6 +286,41 @@ void ANiceInkMenuStage::Tick(float DeltaSeconds)
 	}
 
 	DressDancerFromPersona(); // 自訂臉／雲端刺青到貨即穿上（輪詢冪等）
+
+	// 個人檔案頁＝轉台（2026-09-07）：這一頁是玩家唯一能端詳自己身體與永久刺青的地方
+	// （SPEC 場間第三人稱的選單版）。力士停在舞台中央、每 8 秒轉一圈；離開頁面回到跳舞。
+	bool bShowcase = false;
+	if (APlayerController* PC = World->GetFirstPlayerController())
+	{
+		if (const ANiceInkMenuHUD* Hud = Cast<ANiceInkMenuHUD>(PC->GetHUD()))
+		{
+			bShowcase = Hud->IsProfileShowcase();
+		}
+	}
+	if (bShowcase)
+	{
+		if (!bShowcaseActive)
+		{
+			bShowcaseActive = true;
+			DancerAI->StopMovement();
+			DancerAI->ClearFocus(EAIFocusPriority::Gameplay);
+			DancerAI->MoveToLocation(FVector(GetActorLocation().X, GetActorLocation().Y + StageBiasCm, Dancer->GetActorLocation().Z),
+				12.0f, false, false, false, true);
+		}
+		CurrentYaw += 45.0f * DeltaSeconds;
+		DancerAI->SetControlRotation(FRotator(0, CurrentYaw, 0));
+		return;
+	}
+	if (bShowcaseActive)
+	{
+		bShowcaseActive = false;
+		CurrentYaw = FaceCameraYaw;
+		if (Camera)
+		{
+			DancerAI->SetFocalPoint(Camera->GetActorLocation());
+		}
+		LastBeat = -1;   // 回到舞步：下一拍重新起步
+	}
 
 	const int32 Beat = FMath::Max(0, FMath::FloorToInt32(BeatClock(World) / FMath::Max(0.1f, BeatSec)));
 	if (Beat != LastBeat)

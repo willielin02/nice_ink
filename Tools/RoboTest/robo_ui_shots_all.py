@@ -1,13 +1,21 @@
-# 全站 UI 稽核用的真機截圖（2026-09-05）。robo_ui_shots.py 只拍三態（大廳／站著／
-# 鎖定），而 ui_coverage.py 的缺口全在**後半場相位**（巡禮／指認／判決／場間刺青房）
-# ——那幾個面至今零截圖證據。這支把整局跑完，沿路每個相位各拍一張。
+# 全站 UI 稽核用的真機截圖（2026-09-05；2026-09-07 二版補齊缺的畫面）。
+# robo_ui_shots.py 只拍三態（大廳／站著／鎖定），而 ui_coverage.py 的缺口全在
+# **後半場相位**（巡禮／指認／判決／場間刺青房）——這支把整局跑完，沿路每個相位各拍一張。
+#
+# 二版補拍（一版拍不到的五個面）：
+#   墨杯盤開著（一版直設 bInkTrayOpen，下一 tick 就被 RMB 輪詢收掉 ⇒ 改走 DebugRoboInkTray 鉤子）
+#   搖夢：受害者端的搖晃＋攻擊者顯名／作畫者端的回執（DebugRoboShake）
+#   睜眼未現身／環視／裝睡黑屏（DebugRoboWake → DebugRoboSleepLook → DebugRoboFeignSleep）
+#   場間刺青房（一版比對字串寫 "POSTGAME"，引擎印的是 "POST_GAME" ⇒ 永遠比不中）
+#   ESC 選單再試一次（一版拍到的是大廳，開了沒畫上）；作畫站著時也拍一張
+#   猜錯（真作者上碳黑）＝兩人房做不到（DebugRoboAccuse(false) 需要第三人；3-client PIE OOM 鐵坑）
 #
 # 兩種角色分歧要跑兩次（HighResShot 只拍伺服器視窗）：
 #   VICTIM_SEAT=1 → host 是作畫者（本檔預設；拍前半場＋巡禮／指認旁觀／判決／刺青房）
-#   VICTIM_SEAT=0 → host 是受害者（拍醉夢描圖／裝睡／指認本人）
+#   VICTIM_SEAT=0 → host 是受害者（拍醉夢描圖／搖晃／睜眼／裝睡／指認本人）
 # 由環境變數 NI_VICTIM_SEAT 指定，預設 1。
 #
-# 產出：Saved/robo_ui_shots_all_result.txt + Saved/Screenshots/WindowsEditor/uiall_*.png
+# 產出：Saved/robo_ui_shots_all_<tag>.txt + Saved/Screenshots/WindowsEditor/uiall_*.png
 import os
 import time
 import traceback
@@ -69,6 +77,28 @@ class Shots:
         w = self.server()
         return unreal.GameplayStatics.get_game_mode(w) if w else None
 
+    def host(self):
+        w = self.server()
+        return unreal.GameplayStatics.get_player_pawn(w, 0) if w else None
+
+    def local_pawns(self):
+        # 截圖視窗會隨焦點在 server／client 之間跳（2026-09-07 五輪實錘），
+        # 純本地旗標（ESC／墨杯盤／臉指向）一律同時設在兩個世界的本地角色上。
+        out = []
+        for w in unreal.ObjectIterator(unreal.World):
+            if "UEDPIE_" not in w.get_path_name():
+                continue
+            for c in unreal.GameplayStatics.get_all_actors_of_class(w, unreal.NiceInkCharacter):
+                if c.is_locally_controlled():
+                    out.append(c)
+        if not out:
+            out = [self.host()]
+        return out
+
+    def call_local(self, name, args=()):
+        for c in self.local_pawns():
+            self.call(c, name, args)
+
     def phase(self):
         gs = self.gs()
         if not gs:
@@ -76,9 +106,33 @@ class Shots:
         return str(gs.get_editor_property("CurrentPhase"))
 
     def shot(self, name):
+        if os.environ.get("NI_NOSHOT"):
+            log("SKIPSHOT %s" % name)   # 診斷：不拍圖，看 PIE 本身活不活
+            return
+        # **HighResShot 不含 Slate UI**（2026-09-08 血價：局內 HUD 全面 Slate 化之後，
+        # 這條驗證線拍出來的每一張都沒有 HUD，而畫面本身是好的——**工具對受測物是瞎的**）。
+        # 'Shot showui' 必須走 PlayerController 的 exec 鏈（NiShot 的註解早就寫了），
+        # 所以 execute_console_command 要帶第三個參數 specific_player。
+        pc = unreal.GameplayStatics.get_player_controller(self.server(), 0)
         unreal.SystemLibrary.execute_console_command(
-            self.server(), "HighResShot 1920x1080 filename=uiall_%s_%s" % (TAG, name))
+            self.server(), "Shot showui filename=uiall_%s_%s" % (TAG, name), pc)
         log("SHOT uiall_%s_%s" % (TAG, name))
+
+    def probe_menu(self):
+        try:
+            pc = unreal.GameplayStatics.get_player_controller(self.server(), 0)
+            log("probe show_mouse_cursor=%s" % pc.get_editor_property("show_mouse_cursor"))
+        except Exception as e:
+            log("probe menu failed: %s" % e)
+
+    def call(self, obj, name, args=()):
+        try:
+            r = obj.call_method(name, args)
+            log("%s%s -> %s" % (name, args, r))
+            return r
+        except Exception as e:
+            log("%s failed: %s" % (name, e))
+            return None
 
     def tick(self, dt):
         try:
@@ -93,11 +147,22 @@ class Shots:
         w = self.server()
         gs = self.gs()
         ph = self.phase()
+        up = ph.upper()
 
         if s == "boot":
-            # 等到 LevelEditorSubsystem 真的存在再叫 PIE（2026-09-06：新貼圖首次編譯讓編輯器
-            # 啟動變慢，8 秒到了子系統還是 None ⇒ AttributeError 整輪零圖）
             if self.elapsed() > 8.0:
+                # 編輯器失焦節流（陷阱年鑑：Use Less CPU in Background ⇒ 3~6fps）：user 在機時編輯器
+                # 永遠在背景；壞掉的 log 全有「max tick rate 3」、接著 D3D12 E_OUTOFMEMORY。
+                # 屬性名要用原始 bThrottleCPUWhenNotForeground（snake 名 5.7 解析失敗）。
+                try:
+                    cdo = unreal.find_object(None, "/Script/UnrealEd.Default__EditorPerformanceSettings")
+                    if cdo:
+                        cdo.set_editor_property("bThrottleCPUWhenNotForeground", False)
+                        log("throttle off")
+                    else:
+                        log("WARN EditorPerformanceSettings CDO not found")
+                except Exception as e:
+                    log("WARN throttle off failed: %s" % e)
                 les = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
                 if les is None:
                     if self.elapsed() > 120.0:
@@ -112,13 +177,17 @@ class Shots:
             gm = self.gm()
             if gm:
                 gm.set_editor_property("DebugForcedVictimSeat", VICTIM_SEAT)
-                # 演出計時放長一點才拍得到（預設會一閃而過）
                 try:
                     gm.set_editor_property("tour_seconds_per_work", 6.0)
                     gm.set_editor_property("resolution_seconds", 8.0)
                     gm.set_editor_property("finale_seconds", 8.0)
                 except Exception as e:
                     log("timing tweak skipped: %s" % e)
+                if os.environ.get("NI_HUDOFF"):
+                    for w2 in unreal.ObjectIterator(unreal.World):
+                        if "UEDPIE_" in w2.get_path_name():
+                            unreal.SystemLibrary.execute_console_command(w2, "showhud")
+                    log("HUD OFF (diag)")
                 self.advance("lobby")
             elif self.elapsed() > 90:
                 log("FAIL no PIE")
@@ -128,92 +197,168 @@ class Shots:
         if s == "lobby":
             if self.elapsed() > 1.0:
                 self.shot("01_lobby")
-                self.advance("esc_open")
+                # ESC 只在作畫者路線拍（受害者路線在這一站卡死過一次：無崩潰、無 EXC、tick 停擺）
+                self.advance("esc_open" if VICTIM_SEAT == 1 else "wait_spin")
             return
 
-        # ESC 系統選單（模態面板；2026-09-06 補拍）：鉤子開→拍→關
+        # ESC 系統選單：鉤子開→等 2.5s→拍→關（一版 1.5s 拍到的是沒開的大廳）
         if s == "esc_open":
             if self.elapsed() > 1.0:
-                host = unreal.GameplayStatics.get_player_pawn(w, 0)
-                try:
-                    host.call_method("DebugRoboSystemMenu", (True,))
-                except Exception as e:
-                    log("esc open failed: %s" % e)
+                self.call_local("DebugRoboSystemMenu", (True,))
                 self.advance("esc_shot")
             return
 
         if s == "esc_shot":
-            if self.elapsed() > 1.5:
+            if self.elapsed() > 2.5:
+                self.probe_menu()
                 self.shot("01b_esc_menu")
-                host = unreal.GameplayStatics.get_player_pawn(w, 0)
-                try:
-                    host.call_method("DebugRoboSystemMenu", (False,))
-                except Exception:
-                    pass
+                self.advance("esc_close")
+            return
+
+        if s == "esc_close":
+            if self.elapsed() > 0.6:
+                self.call_local("DebugRoboSystemMenu", (False,))
                 self.advance("wait_spin")
             return
 
-        # 開場儀式：轉瓶／入座各拍一張（ui_coverage 說這兩個相位祈使句有、操作列無）
         if s == "wait_spin":
-            if "BOTTLESPIN" in ph.upper():
+            if os.environ.get("NI_MEMREPORT") and not getattr(self, "_memrep", False) and self.elapsed() > 2.0:
+                self._memrep = True
+                unreal.SystemLibrary.execute_console_command(self.server(), "memreport -full")
+                log("MEMREPORT issued")
+            if "BOTTLESPIN" in up:
                 self.shot("02_bottlespin")
                 self.advance("wait_seating")
-            elif "SEATING" in ph.upper():
+            elif "SEATING" in up:
                 self.advance("wait_seating")
-            elif "DRAWING" in ph.upper():
+            elif "DRAWING" in up:
                 self.advance("draw_stand")
             elif self.elapsed() > 90:
                 self.advance("wait_draw")
             return
 
         if s == "wait_seating":
-            if "SEATING" in ph.upper():
+            if "SEATING" in up:
                 if self.elapsed() > 1.5:
                     self.shot("03_seating")
                     self.advance("wait_draw")
-            elif "DRAWING" in ph.upper():
+            elif "DRAWING" in up:
                 self.advance("draw_stand")
             elif self.elapsed() > 60:
                 self.advance("wait_draw")
             return
 
         if s == "wait_draw":
-            if "DRAWING" in ph.upper():
+            if "DRAWING" in up:
                 self.advance("draw_stand")
             elif self.elapsed() > 120:
                 log("FAIL never reached Drawing (phase=%s)" % ph)
                 self.finish()
             return
 
-        # --- 受害者路線（host 是受害者：沉睡描圖畫面）---
+        # ---------------- 受害者路線（host 是受害者）----------------
         if s == "draw_stand" and VICTIM_SEAT == 0:
             if self.elapsed() > 3.0:
                 self.shot("04_dream_trace")
-                self.advance("dream2")
+                self.advance("vic_shake")
             return
 
-        if s == "dream2":
-            if self.elapsed() > 6.0:
-                self.shot("05_dream_trace_b")
+        # 搖夢：攻擊者＝第一位非受害者；受害者端要看到搖晃＋攻擊者顯名
+        if s == "vic_shake":
+            if self.elapsed() > 2.0:
+                self.call(self.gm(), "DebugRoboShake", ())
+                self.advance("vic_shake_shot")
+            return
+
+        if s == "vic_shake_shot":
+            if self.elapsed() > 0.7:
+                self.shot("05_dream_shaken")
+                self.advance("vic_wake")
+            return
+
+        # 睜眼未現身：第一人稱、滑鼠＝臉指向、WASD 才現身
+        if s == "vic_wake":
+            if self.elapsed() > 2.5:
+                self.call(self.gm(), "DebugRoboWake", ())
+                self.advance("vic_awake_shot")
+            return
+
+        if s == "vic_awake_shot":
+            if self.elapsed() > 4.0:
+                self.shot("06_awake_first_look")
+                self.call_local("DebugRoboSleepLook", (180.0, 10.0))
+                self.advance("vic_look_shot")
+            return
+
+        if s == "vic_look_shot":
+            if self.elapsed() > 4.0:
+                self.shot("06b_awake_look_turned")
+                self.call_local("DebugRoboSleepLook", (0.0, 40.0))
+                self.advance("vic_look_shot2")
+            return
+
+        if s == "vic_look_shot2":
+            if self.elapsed() > 4.0:
+                self.shot("06d_awake_look_down")
+                self.call(self.host(), "DebugRoboFeignSleep", (True,))
+                self.advance("vic_feign_shot")
+            return
+
+        if s == "vic_feign_shot":
+            if self.elapsed() > 1.5:
+                self.shot("06c_feign_sleep")
+                self.call(self.host(), "DebugRoboFeignSleep", (False,))
                 self.advance("mkwork")
             return
 
-        # --- 作畫者路線 ---
+        # ---------------- 作畫者路線 ----------------
         if s == "draw_stand":
             if self.elapsed() > 2.5:
                 self.shot("04_draw_standing")
+                self.advance("esc_open2")
+            return
+
+        if s == "esc_open2":
+            if self.elapsed() > 0.5:
+                self.call_local("DebugRoboSystemMenu", (True,))
+                self.advance("esc_shot2")
+            return
+
+        if s == "esc_shot2":
+            if self.elapsed() > 2.5:
+                self.probe_menu()
+                self.shot("04b_esc_menu_ingame")
+                self.advance("esc_page")
+            return
+
+        if s == "esc_page":
+            if self.elapsed() > 0.6:
+                self.call_local("DebugRoboSystemMenuPage", (1,))
+                self.advance("esc_howto")
+            return
+
+        if s == "esc_howto":
+            if self.elapsed() > 1.5:
+                self.shot("04c_esc_howto")
+                self.advance("esc_close2")
+            return
+
+        if s == "esc_close2":
+            if self.elapsed() > 0.6:
+                self.call_local("DebugRoboSystemMenuPage", (0,))
+                self.call_local("DebugRoboSystemMenu", (False,))
                 self.advance("enter_lean")
             return
 
         if s == "enter_lean":
-            host = unreal.GameplayStatics.get_player_pawn(w, 0)
+            host = self.host()
             vid = gs.get_editor_property("VictimPlayerId") if gs else -1
             victim = find_char(w, vid)
-            if host and victim:
+            if host and victim and self.elapsed() > 1.0:
                 bt = victim.get_editor_property("Body").get_world_transform()
                 p = bt.transform_location(unreal.Vector(0.0, 26.0, 95.0))
                 n = bt.transform_direction(unreal.Vector(0.0, 1.0, 0.0))
-                log("DebugRoboEnterLean -> %s" % host.call_method("DebugRoboEnterLean", (victim, p, n)))
+                self.call(host, "DebugRoboEnterLean", (victim, p, n))
                 self.advance("draw_locked")
             elif self.elapsed() > 20:
                 log("WARN no host/victim; skip lean")
@@ -226,26 +371,35 @@ class Shots:
                 self.advance("tray")
             return
 
-        # 墨杯盤＝唯一的模態面板（規範說「模態才有面板」）——直接翻旗標拍一張
+        # 墨杯盤：模擬按住 RMB（鉤子與真鍵 OR，由同一條輪詢消化）
         if s == "tray":
             if self.elapsed() > 0.5:
-                host = unreal.GameplayStatics.get_player_pawn(w, 0)
-                try:
-                    host.set_editor_property("bInkTrayOpen", True)
-                    log("tray opened")
-                except Exception as e:
-                    log("tray open failed: %s" % e)
+                self.call_local("DebugRoboInkTray", (True,))
                 self.advance("tray_shot")
             return
 
         if s == "tray_shot":
             if self.elapsed() > 1.5:
                 self.shot("06_ink_tray")
-                host = unreal.GameplayStatics.get_player_pawn(w, 0)
-                try:
-                    host.set_editor_property("bInkTrayOpen", False)
-                except Exception:
-                    pass
+                self.advance("tray_close")
+            return
+
+        if s == "tray_close":
+            if self.elapsed() > 0.6:
+                self.call_local("DebugRoboInkTray", (False,))
+                self.advance("art_shake")
+            return
+
+        # 搖夢回執（攻擊者本人 2s）
+        if s == "art_shake":
+            if self.elapsed() > 1.0:
+                self.call(self.gm(), "DebugRoboShake", ())
+                self.advance("art_shake_shot")
+            return
+
+        if s == "art_shake_shot":
+            if self.elapsed() > 0.7:
+                self.shot("06b_shake_receipt")
                 self.advance("mkwork")
             return
 
@@ -268,7 +422,7 @@ class Shots:
             return
 
         if s == "wait_tour":
-            if "TOUR" in ph.upper():
+            if "TOUR" in up:
                 self.advance("tour_shot")
             elif self.elapsed() > 40:
                 log("WARN never reached Tour (phase=%s)" % ph)
@@ -282,7 +436,7 @@ class Shots:
             return
 
         if s == "wait_accuse":
-            if "ACCUSATION" in ph.upper():
+            if "ACCUSATION" in up:
                 self.advance("accuse_shot")
             elif self.elapsed() > 60:
                 log("WARN never reached Accusation (phase=%s)" % ph)
@@ -292,6 +446,12 @@ class Shots:
         if s == "accuse_shot":
             if self.elapsed() > 2.5:
                 self.shot("08_accusation")
+                self.advance("carbonize")
+            return
+
+        if s == "carbonize":
+            if self.elapsed() > 0.6:
+                self.call(self.gm(), "DebugRoboCarbonize", ())
                 self.advance("accuse_do")
             return
 
@@ -302,7 +462,7 @@ class Shots:
             return
 
         if s == "wait_resolution":
-            if "RESOLUTION" in ph.upper():
+            if "RESOLUTION" in up:
                 self.advance("resolution_shot")
             elif self.elapsed() > 30:
                 log("WARN never reached Resolution (phase=%s)" % ph)
@@ -315,10 +475,8 @@ class Shots:
                 self.advance("wait_after")
             return
 
-        # 猜對＝受害者換人；猜錯三次才進 Finale/PostGame。這裡只要拍到下一個面就好
         if s == "wait_after":
-            up = ph.upper()
-            if "POSTGAME" in up:
+            if "POST" in up:
                 self.advance("postgame_shot")
             elif "FINALE" in up:
                 self.shot("10_finale")
@@ -331,7 +489,7 @@ class Shots:
                 self.advance("done")
             return
 
-        # 結局／場間（2026-09-06 補拍）：兩人房走不到三杯 ⇒ 鉤子直進 Finale
+        # 結局／場間：兩人房走不到三杯 ⇒ 鉤子直進 Finale
         if s == "force_finale":
             if self.elapsed() > 2.0:
                 self.gm().call_method("DebugRoboFinale", ())
@@ -339,8 +497,8 @@ class Shots:
             return
 
         if s == "wait_finale":
-            if "FINALE" in ph.upper():
-                if self.elapsed() > 2.5:
+            if "FINALE" in up:
+                if self.elapsed() > 3.5:
                     self.shot("10_finale")
                     self.advance("wait_postgame")
             elif self.elapsed() > 30:
@@ -349,22 +507,21 @@ class Shots:
             return
 
         if s == "wait_postgame":
-            if "POSTGAME" in ph.upper():
+            if "POST" in up:
                 self.advance("postgame_shot")
             elif self.elapsed() > 40:
+                log("WARN never reached PostGame (phase=%s)" % ph)
                 self.advance("done")
             return
 
         if s == "postgame_shot":
-            if self.elapsed() > 2.5:
+            if self.elapsed() > 4.0:
                 self.shot("11_postgame")
                 self.advance("done")
             return
 
-        # 右下角比分（2026-09-05）：規則塊與比分**分時共用同一個角**，判準是
-        # 受害者的罰酒杯 > 0。猜對不會生杯子、猜錯需要第三位玩家（PIE 只有兩位）
-        # ⇒ 直接把杯數寫進受害者的 PlayerState 來拍**顯示**。
-        # 這是拍畫面不是驗規則：規則（誰在什麼時候生杯子）由 fullloop 測試守。
+        # 右下角比分：規則塊與比分分時共用同一個角，判準是受害者的罰酒杯 > 0。
+        # 兩人房生不出杯子 ⇒ 直接把杯數寫進受害者的 PlayerState 來拍**顯示**。
         if s == "done":
             if self.elapsed() > 2.0:
                 gs = self.gs()

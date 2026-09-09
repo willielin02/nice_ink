@@ -1,5 +1,8 @@
 ﻿#include "NiceInkCharacter.h"
 
+#include "NiceInkHUD.h"
+#include "HAL/PlatformApplicationMisc.h"
+
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/AudioComponent.h"
@@ -735,6 +738,12 @@ void ANiceInkCharacter::PollLobby(APlayerController* PC)
 	{
 		ServerRequestStartMatch();
 	}
+	// 大廳 C＝把房碼放進剪貼簿（2026-09-07 二版：房碼卡上的一顆鍵）
+	if (GS->CurrentPhase == ENiceInkPhase::Lobby && !GS->RoomCode.IsEmpty() && PC->WasInputKeyJustPressed(EKeys::C))
+	{
+		FPlatformApplicationMisc::ClipboardCopy(*GS->RoomCode);
+		LobbyCopiedUntil = GetWorld()->GetTimeSeconds() + 1.5;
+	}
 
 	if (GS->CurrentPhase != ENiceInkPhase::PostGame)
 	{
@@ -779,10 +788,40 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	bool bWide = false;
 	bool bThirdPerson = false;
 
+	// 作畫開始那一幀：作畫者的視線落到受害者身上（2026-09-07）。此前站起來的第一眼是
+	// 天花板和遠牆，受害者只剩底邊一顆肚子，而祈使句叫你 LEAN IN TO HIS BODY。
+	if (GS->CurrentPhase != LastCamPhaseSeen)
+	{
+		const bool bEnteredDrawing = GS->CurrentPhase == ENiceInkPhase::Drawing;
+		LastCamPhaseSeen = GS->CurrentPhase;
+		if (bEnteredDrawing && !bIsVictim && !bAsleep && PC && FirstPersonCamera)
+		{
+			if (ANiceInkCharacter* Victim = FindByPlayerId(GetWorld(), GS->VictimPlayerId))
+			{
+				const FVector Target = Victim->Body
+					? Victim->Body->GetComponentTransform().TransformPosition(FVector(0, 0, 103.0f))
+					: Victim->GetActorLocation();
+				FRotator Look = (Target - FirstPersonCamera->GetComponentLocation()).Rotation();
+				Look.Roll = 0.0f;
+				Look.Pitch = FMath::ClampAngle(Look.Pitch, -89.0f, 89.0f);
+				PC->SetControlRotation(Look);
+				CameraPitch = Look.Pitch;
+				FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+			}
+		}
+	}
+
 	switch (GS->CurrentPhase)
 	{
 	case ENiceInkPhase::Tour:
 		FocusWork = GS->TourWorkId;
+		break;
+	case ENiceInkPhase::Finale:
+		if (bIsVictim)
+		{
+			ViewOrbitSelf(PC);
+			return;
+		}
 		break;
 	case ENiceInkPhase::Resolution:
 		FocusWork = GS->ResolutionWorkId;
@@ -813,6 +852,7 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 		break;
 	case ENiceInkPhase::PostGame:
 		bThirdPerson = true; // 場間大廳：第三人稱端詳自己的刺青（SPEC 視角規則）
+		bOrbitActive = false;
 		break;
 	default:
 		break;
@@ -833,6 +873,71 @@ void ANiceInkCharacter::UpdateCinematicCamera(APlayerController* PC)
 	else
 	{
 		RestoreView(PC);
+	}
+}
+
+void ANiceInkCharacter::ClientLobbyFace_Implementation(FRotator Face)
+{
+	if (AController* Ctl = GetController())
+	{
+		Ctl->SetControlRotation(Face);
+	}
+	SetActorRotation(Face);
+}
+
+void ANiceInkCharacter::ViewLobby(APlayerController* PC)
+{
+	// 固定機位：舞台中心 −Y 側、腰高、微俯，看著 +Y 側弧上的人（GameMode::PlaceLobbyArc 把人擺在那裡）
+	const ANiceInkGameState* GS = GetWorld() ? GetWorld()->GetGameState<ANiceInkGameState>() : nullptr;
+	if (!GS || GS->CeremonyCenter.IsNearlyZero())
+	{
+		return;
+	}
+	const FVector Center = GS->CeremonyCenter;
+	const FVector CamPos = ClampToRoom(Center + FVector(0.0f, -430.0f, 118.0f));
+	const FVector LookAt = Center + FVector(0.0f, 60.0f, 92.0f);
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
+	{
+		Cam->SetActorLocationAndRotation(CamPos, (LookAt - CamPos).Rotation());
+		// 每 tick 校驗（不是只設一次）：客戶端的 possess 晚一拍，引擎會把 view target 拉回 pawn
+		if (!bLobbyViewActive || PC->GetViewTarget() != Cam)
+		{
+			PC->SetViewTargetWithBlend(Cam, 0.0f);
+			bViewOverridden = true;
+			bWideViewActive = false;
+			bThirdPersonActive = false;
+			bOrbitActive = false;
+			bLobbyViewActive = true;
+			LastViewWorkId = INDEX_NONE;
+		}
+	}
+}
+
+void ANiceInkCharacter::ViewOrbitSelf(APlayerController* PC)
+{
+	// 結局的輸家：繞身體 9°/s 慢轉，半徑 250、高 120（躺著的人：中心＝Body (0,0,103)）
+	const FVector Center = Body
+		? Body->GetComponentTransform().TransformPosition(FVector(0, 0, 103.0f)) : GetActorLocation();
+	const double Now = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	if (!bOrbitActive)
+	{
+		OrbitStartTime = Now;
+	}
+	const float Yaw = static_cast<float>((Now - OrbitStartTime) * 9.0) + 200.0f;
+	const FVector Dir(FMath::Cos(FMath::DegreesToRadians(Yaw)), FMath::Sin(FMath::DegreesToRadians(Yaw)), 0.0f);
+	const FVector CamPos = ClampToRoom(Center + Dir * 250.0f + FVector(0.0f, 0.0f, 120.0f));
+	if (ACameraActor* Cam = GetOrSpawnCinematicCamera())
+	{
+		Cam->SetActorLocationAndRotation(CamPos, (Center - CamPos).Rotation());
+		if (!bOrbitActive)
+		{
+			PC->SetViewTargetWithBlend(Cam, 0.6f, VTBlend_Cubic);
+			bViewOverridden = true;
+			bWideViewActive = false;
+			bThirdPersonActive = false;
+			bOrbitActive = true;
+			LastViewWorkId = INDEX_NONE;
+		}
 	}
 }
 
@@ -957,6 +1062,7 @@ void ANiceInkCharacter::ViewWide(APlayerController* PC)
 		bViewOverridden = true;
 		bWideViewActive = true;
 		bThirdPersonActive = false;
+		bLobbyViewActive = false;
 		LastViewWorkId = INDEX_NONE;
 	}
 }
@@ -1051,6 +1157,8 @@ void ANiceInkCharacter::RestoreView(APlayerController* PC)
 	bViewOverridden = false;
 	bWideViewActive = false;
 	bThirdPersonActive = false;
+	bOrbitActive = false;
+	bLobbyViewActive = false;
 	LastViewWorkId = INDEX_NONE;
 }
 
@@ -1066,16 +1174,18 @@ void ANiceInkCharacter::PollAccusation(APlayerController* PC)
 		return;
 	}
 
-	static const FKey DigitKeys[9] = {
-		EKeys::One, EKeys::Two, EKeys::Three, EKeys::Four, EKeys::Five,
-		EKeys::Six, EKeys::Seven, EKeys::Eight, EKeys::Nine
-	};
-	for (int32 Index = 0; Index < 9; ++Index)
+	// E／Q 循環作品（2026-09-07；1-9 退役：作品在世界裡沒有編號可以對應，數字鍵是任意映射
+	// ——與 09-03 砍掉數字鍵選色同一個判準）。鏡頭跟著飛到那一幅（UpdateCinematicCamera）。
+	const int32 PieceCount = GS->TourWorkIdList.Num();
+	if (PieceCount > 0)
 	{
-		if (PC->WasInputKeyJustPressed(DigitKeys[Index]) && GS->TourWorkIdList.IsValidIndex(Index))
+		if (PC->WasInputKeyJustPressed(EKeys::E))
 		{
-			AccusePickNumber = Index + 1;
-			break;
+			AccusePickNumber = (AccusePickNumber % PieceCount) + 1;
+		}
+		if (PC->WasInputKeyJustPressed(EKeys::Q))
+		{
+			AccusePickNumber = ((AccusePickNumber - 2 + PieceCount) % PieceCount) + 1;
 		}
 	}
 
@@ -2952,7 +3062,7 @@ void ANiceInkCharacter::PollLockedDraw(APlayerController* PC, float DeltaSeconds
 	// 武裝閘：入鎖那一次 RMB **放開之後**才允許開盤。listen server 的 Server RPC
 	// 同幀執行 ⇒ 入鎖的那顆 RMB 在同一 tick 仍按著（陷阱年鑑：「只有主機視窗壞」
 	// 幾乎都是這類同幀問題；遠端客戶端因 RPC 延遲天然免疫＝更難發現）。
-	const bool bRmbDown = PC->IsInputKeyDown(EKeys::RightMouseButton);
+	const bool bRmbDown = PC->IsInputKeyDown(EKeys::RightMouseButton) || bDebugTrayHeld;
 	if (!bRmbDown)
 	{
 		bInkTrayArmed = true;
@@ -8990,4 +9100,16 @@ ANiceInkCharacter* ANiceInkCharacter::FindByPlayerId(UWorld* World, int32 Player
 		}
 	}
 	return nullptr;
+}
+
+
+void ANiceInkCharacter::DebugRoboSystemMenuPage(int32 Page)
+{
+	if (APlayerController* PC = Cast<APlayerController>(GetController()))
+	{
+		if (ANiceInkHUD* H = Cast<ANiceInkHUD>(PC->GetHUD()))
+		{
+			H->SetSysMenuPage(Page);
+		}
+	}
 }
