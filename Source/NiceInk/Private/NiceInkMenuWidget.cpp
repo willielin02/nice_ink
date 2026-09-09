@@ -1510,8 +1510,9 @@ TSharedRef<SWidget> SNiMenu::BuildCreditsPage()
 		TEXT(""),
 		TEXT("Noto Sans family (Latin/JP/TC/SC/KR/Arabic) — (c) The Noto Project Authors, SIL Open Font License 1.1"),
 		TEXT("Oswald — (c) The Oswald Project Authors (Vernon Adams), SIL Open Font License 1.1"),
-		TEXT("icons adapted from game-icons.net — CC BY 3.0"),
-		TEXT("Lucide icons — (c) Lucide Contributors, ISC License"),
+		// 2026-09-09：Lucide 與 game-icons 的圖示全數移除、資產不進包 ⇒ 兩行撤下；
+		// 現在只剩 Kenney 的滑鼠 glyph（CC0＝不要求署名，仍列出）。
+		TEXT("mouse input glyphs from Kenney's Input Prompts (kenney.nl) — CC0"),
 		TEXT("\"Sauna\" 3d scene by local.yany (sketchfab) — CC BY 4.0"),
 		TEXT("\"Radiola from Matrix\" 3d model by Sirenko (sketchfab) — CC BY 4.0"),
 		TEXT(""),

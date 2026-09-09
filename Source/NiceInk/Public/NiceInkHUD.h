@@ -88,32 +88,18 @@ public:
 protected:
 	// ---- UI 資產（runtime 字體＋圖示；BeginPlay 載入，UPROPERTY 保 GC）----
 	UPROPERTY() TObjectPtr<UFont> UiFont;
-	UPROPERTY() TObjectPtr<UTexture2D> IconCup;
-	UPROPERTY() TObjectPtr<UTexture2D> IconSpray;
-	UPROPERTY() TObjectPtr<UTexture2D> IconKick;
-	UPROPERTY() TObjectPtr<UTexture2D> IconMarker;
 	// FP 2D 筆（07-22 viewmodel 制）：入鎖時畫在畫面上緣的刺青機貼圖＋出針口→墨點針線
 	UPROPERTY() TObjectPtr<UTexture2D> PenSprite;
 	// FP 2D 麥克筆（07-25 打稿制）：SM_Marker 的染紫渲染（Blender headless）——
 	// 缺席時退向量筆
 	UPROPERTY() TObjectPtr<UTexture2D> MarkerSprite;
-	UPROPERTY() TObjectPtr<UTexture2D> IconCash;
-	// Lucide 線圖示（2026-09-06 二批；ISC）：一家圖示、按名惰性載入。/Game/UI/Icons/T_Ico_<name>
-	UPROPERTY() TMap<FName, TObjectPtr<UTexture2D>> LucideCache;
+	// **全站只剩四個圖示**（2026-09-09；user：「這些 icon 都非常詞不達意」）：
+	// 滑鼠三顆（Kenney 線稿 CC0）＋現金的銭＋猪口滿／空。按名惰性載入，
+	// /Game/UI/Icons/T_Ico_<name>。動詞圖示（Lucide 18 個）已全數移除——
+	// 動詞是抽象的，圖示只能用二階隱喻，而旁邊的動詞已經把答案寫在那裡（13 語齊全）。
+	UPROPERTY() TMap<FName, TObjectPtr<UTexture2D>> IconCache;
 	UTexture2D* Ico(const TCHAR* Name);
-	UTexture2D* ActionIcon(ENiLocKey Label);   // 操作提示動詞→圖示（沒有＝nullptr）
 	void DrawRevealBand(float Y0, float Y1);   // 揭曉／結局橫幅後方的全寬暗帶（三批）
-	UPROPERTY() TObjectPtr<UTexture2D> IconRotate;
-	UPROPERTY() TObjectPtr<UTexture2D> IconEye;
-	UPROPERTY() TObjectPtr<UTexture2D> IconTrap;
-	UPROPERTY() TObjectPtr<UTexture2D> IconSleep;
-	UPROPERTY() TObjectPtr<UTexture2D> IconNose;
-	// 輸入 glyph（Kenney Input Prompts 1.5, CC0；調色盤已烘進 PNG）
-	// **鍵盤有刻字所以寫字，滑鼠沒有刻字所以畫圖**——見 Docs/UI_SYSTEM.md §4.1
-	UPROPERTY() TObjectPtr<UTexture2D> InMouseLeft;
-	UPROPERTY() TObjectPtr<UTexture2D> InMouseRight;
-	UPROPERTY() TObjectPtr<UTexture2D> InMouseScroll;
-	UPROPERTY() TObjectPtr<UTexture2D> InMouseMove;
 	// runtime 生成的圓角方塊（SDF alpha＝抗鋸齒；canvas 三角形零 AA 的繞道）
 	UPROPERTY() TObjectPtr<UTexture2D> RoundedTex;
 	// runtime 生成的**暈衰減曲線**（64×1，alpha 走指數）。Canvas 的頂點顏色只能
@@ -144,7 +130,6 @@ protected:
 	bool ComputeWorkScreenBox(class ANiceInkCharacter* WorkOwner, int32 WorkId, FBox2D& Out);
 	void DrawWorkFrame(const FBox2D& Box, float Alpha);
 	void DrawWorkFocusFrame(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar);
-	void DrawBodyMap(const class ANiceInkCharacter* MyChar);                 // 鎖定中：你在身體的哪裡
 	void DrawLaserTags(class ANiceInkCharacter* MyChar);                     // 場間：碳黑刺青旁的雷射標籤
 
 	// ---- 現金跳字（無主色之後「剛剛什麼變了」全靠動態）----
@@ -205,7 +190,6 @@ protected:
 	void DrawIconTok(UTexture2D* Tex, float X, float Y, float Size, const FLinearColor& Tint);
 	// 非方形圖示（輸入 glyph 裁過透明邊之後寬高比不是 1）
 	void DrawIconRect(class UTexture2D* Tex, float X, float Y, float W, float H, const FLinearColor& Tint);
-	void DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align = EHAlign::Left);
 
 	// ---- 即時模式 UI 互動（主選單／ESC 選單共用；每幀 BeginUiFrame 後才可用）----
 	FVector2D MousePos = FVector2D::ZeroVector;
@@ -265,8 +249,6 @@ protected:
 	// 寫成句子裡的一個英文詞玩家不會把它讀成「一顆可以按的鍵」。回傳寬度。
 	float DrawKeycap(float X, float Y, const FString& Key,
 		ENiKeyState State = ENiKeyState::Available);
-	// 平面滑鼠（2026-09-06）：Button 0=左鍵 1=右鍵 2=滾輪；回傳寬度
-	float DrawMouseGlyph(float LeftX, float Y, float H, int32 Button, ENiKeyState State);
 
 	// 上緣漸層壓暗（2026-09-05）。**這是整份對齊工作裡唯一一條「不能照抄」的**：
 	// Meccha 的「常駐 chrome 無面板」成立，前提是他們的世界是暗的——實測他們的
@@ -325,21 +307,20 @@ protected:
 		class ANiceInkCharacter* MyChar, bool bIsVictim) const;
 	void DrawRulesBlock(const class ANiceInkGameState* GS,
 		class ANiceInkCharacter* MyChar, bool bIsVictim);
-	// glyph＝鍵帽（有刻字）或滑鼠圖（沒有刻字）；回傳寬度。
-	// **X＝右緣時自己往左扣寬度**；bLeftAnchor=true 改成 X＝左緣（底部橫排用）。
-	float DrawInputGlyph(float X, float Y, const TCHAR* Key, class UTexture2D* Tex,
-		ENiKeyState State, bool bLeftAnchor = false);
-	float MeasureInputGlyph(const TCHAR* Key, class UTexture2D* Tex) const;
 
 	// ---- 操作提示的單一正本（2026-09-05；UI_SYSTEM §4.3 的第一號工程）----
 	// 此前每個呼叫點手寫 `Rows.Add({ TEXT("Q"), ... })`，散在一個 120 行的 switch 裡。
 	// 沒有這一層，**手把支援或改鍵功能一到就要全站重寫**——這是建它的唯一理由，
 	// 不是為了好看。同時它讓「這個相位有哪些鍵」變成可以被閘門讀的資料。
 public:
+	/** 滑鼠的哪一顆（鍵盤有刻字所以寫字，滑鼠沒有刻字所以畫圖；UI_SYSTEM §4.1）。 */
+	enum class ENiInputGlyph : uint8 { None, MouseLeft, MouseRight, MouseWheel };
+
 	struct FNiControlHint
 	{
-		const TCHAR* Key;        // 鍵名（鍵盤有刻字＝寫字）；nullptr＝用 Tex
-		UTexture2D* Tex;         // 滑鼠圖（沒有刻字＝畫圖）
+		const TCHAR* Key;        // 鍵名（鍵盤有刻字＝寫字）；nullptr＝用 Glyph
+		ENiInputGlyph Glyph;     // 滑鼠圖（2026-09-09：此前是拿 UTexture2D* 當識別 token
+		                         // ——指標比對＝資產名是它的身分，刪一張圖就會靜靜壞掉）
 		ENiLocKey   Label;       // 動詞（必須進字串表）
 		ENiKeyState State;
 		bool        bPosture;    // true＝身體姿勢/移動 ⇒ 底部中央橫排；false＝右緣直排
@@ -353,10 +334,10 @@ public:
 	// 這些原本是 protected 的內部工具，改成 public 讓 widget 讀同一份來源：
 	// 「一件事只講一次」的保證來自共用來源，不是來自我記得要同步兩份。
 	bool CanHostStart(const class ANiceInkGameState* GS) const { return CanHostStartMatch(GS); }
-	UTexture2D* GetActionIcon(ENiLocKey Label) { return ActionIcon(Label); }
 	UTexture2D* GetIcon(const TCHAR* Name) { return Ico(Name); }
-	UTexture2D* GetCashIcon() const { return IconCash; }
-	UTexture2D* GetCupIcon() const { return IconCup; }
+	/** 現金＝穴あき銭、罰酒＝猪口（滿／空）。兩個都是自家記號，見 Tools/AssetPrep/nice_ink_marks.py */
+	UTexture2D* GetCoinIcon() { return Ico(TEXT("coin")); }
+	UTexture2D* GetChokoIcon(bool bFull) { return Ico(bFull ? TEXT("choko_full") : TEXT("choko_empty")); }
 	UTexture2D* GetInkBrushTex() const { return InkBrushTex; }
 	UTexture2D* GetInkDotTex() const { return InkDotTex; }
 	UTexture2D* GetInkSplatTex() const { return InkSplatTex; }
@@ -374,14 +355,6 @@ public:
 	FString GetImperative(const class ANiceInkGameState* GS, class ANiceInkCharacter* MyChar, bool bIsVictim) const
 	{
 		return GetPhaseImperative(GS, MyChar, bIsVictim);
-	}
-	/** 滑鼠圖是哪一顆：0 左／1 右／2 滾輪／-1 不是滑鼠 */
-	int32 MouseButtonOf(const UTexture2D* Tex) const
-	{
-		if (Tex == InMouseRight) { return 1; }
-		if (Tex == InMouseScroll) { return 2; }
-		if (Tex == InMouseLeft || Tex == InMouseMove) { return 0; }
-		return -1;
 	}
 	/** 落筆時整條 chrome 淡下去（canvas 端是 ChromeAlphaMul；Slate 端綁在 widget 的 opacity 上） */
 	float GetChromeAlpha() const;

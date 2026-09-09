@@ -1,10 +1,22 @@
-# Lucide 線圖示 PNG → /Game/UI/Icons/T_Ico_<name>（2026-09-06 UI 第二批）。
+# 圖示 PNG → /Game/UI/Icons/T_Ico_<name>，**並把不在來源資料夾裡的圖示資產刪掉**
+# （2026-09-09：資產＝來源資料夾的鏡像。此前只匯入不刪，於是 Content 裡累積了 44 個
+#  沒有任何程式碼引用的圖示——而 /Game/UI 整個目錄在 cook 白名單裡，全部進包）。
 # headless：UnrealEditor-Cmd.exe <uproject> -ExecutePythonScript=<本檔的無空白路徑副本>
 import os
 import unreal
 
 SRC = "C:/games/Unreal Engine/nice_ink/SourceAssets/UI/icons"
 DEST = "/Game/UI/Icons"
+
+# 2026-09-09 圖示大減後留下的孤兒（繪製點都已拆除；保留 TattooPen/MarkerPen＝FP viewmodel）
+DEAD = [
+    "/Game/UI/Icons/T_UI_Spray", "/Game/UI/Icons/T_UI_Kick", "/Game/UI/Icons/T_UI_Marker",
+    "/Game/UI/Icons/T_UI_Cash", "/Game/UI/Icons/T_UI_Cup", "/Game/UI/Icons/T_UI_Eye",
+    "/Game/UI/Icons/T_UI_Rotate", "/Game/UI/Icons/T_UI_Trap", "/Game/UI/Icons/T_UI_Sleep",
+    "/Game/UI/Icons/T_UI_Nose",
+    "/Game/UI/Input/T_InMouseLeft", "/Game/UI/Input/T_InMouseRight",
+    "/Game/UI/Input/T_InMouseScroll", "/Game/UI/Input/T_InMouseMove",
+]
 
 tasks, names = [], []
 for f in sorted(os.listdir(SRC)):
@@ -35,4 +47,22 @@ for name in names:
         ok += 1
     else:
         unreal.log_error("[IconImport] FAILED %s" % name)
-unreal.log_warning("[IconImport] DONE %d/%d" % (ok, len(names)))
+
+# --- 鏡像：來源沒有的 T_Ico_* ＋ 點名的孤兒，一律刪掉 ---
+keep = set(names)
+killed = 0
+for asset in unreal.EditorAssetLibrary.list_assets(DEST, recursive=False, include_folder=False):
+    short = asset.split("/")[-1].split(".")[0]
+    if short.startswith("T_Ico_") and short not in keep:
+        if unreal.EditorAssetLibrary.delete_asset(asset):
+            killed += 1
+        else:
+            unreal.log_error("[IconImport] DELETE FAILED %s" % asset)
+for p in DEAD:
+    if unreal.EditorAssetLibrary.does_asset_exist(p):
+        if unreal.EditorAssetLibrary.delete_asset(p):
+            killed += 1
+        else:
+            unreal.log_error("[IconImport] DELETE FAILED %s" % p)
+
+unreal.log_warning("[IconImport] DONE import %d/%d  deleted %d" % (ok, len(names), killed))

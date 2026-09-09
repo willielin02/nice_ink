@@ -39,16 +39,15 @@ linked or reproduced below. This file ships next to the game executable.
 
 ## Icons
 
-### Lucide
-- Copyright (c) 2022 Lucide Contributors; portions (c) 2013-2022 Cole Bemis (Feather)
-- License: ISC (https://lucide.dev/license)
-- Used for all UI line icons since 2026-09-06 (rendered from the Lucide icon font; SourceAssets/UI/icons/LICENSE_lucide.txt).
+### Kenney — Input Prompts 1.5
+- Created/distributed by Kenney (www.kenney.nl)
+- License: CC0 1.0 (https://creativecommons.org/publicdomain/zero/1.0/) — credit not required, given anyway.
+- Used for the three mouse input glyphs (left / right / wheel); SourceAssets/InputPrompts/LICENSE_kenney.txt.
 
-### game-icons.net
-- Icons adapted from game-icons.net
-- License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/)
-- Authors credited per icon set at https://game-icons.net (Lorc, Delapouite and contributors).
-- Used as HUD icons (cup, spray, marker, cash, rotate, eye, trap, sleep, nose, kick).
+<!-- 2026-09-09：Lucide（ISC，2026-09-06~09-09 全站線圖示）與 game-icons.net（CC BY 3.0，
+     v1 的 HUD 圖示）**已全數移除**，資產不再進包 ⇒ 兩則致謝一併撤下。
+     現在畫面上只有四種圖示：Kenney 的滑鼠三顆，加上我們自己畫的銭與猪口
+     （Tools/AssetPrep/nice_ink_marks.py，無第三方來源）。-->
 
 ## 3D Scenes
 

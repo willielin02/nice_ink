@@ -387,19 +387,21 @@ private:
 };
 
 /**
- * 滑鼠圖＝**Lucide 官方 `mouse` ＋我們補的分界與高亮**（2026-09-08，user：「現在的滑鼠圖案
- * 不好看，去找專業的圖案」）。烘焙在 `Tools/AssetPrep/lucide_mouse_icons.py`，
- * 產出 `T_Ico_mouse_{left,right,scroll}`。
+ * 滑鼠圖＝**Kenney Input Prompts 1.5 的線稿版**（2026-09-09，user：「滑鼠用專業圖示」）。
+ * 烘焙在 `Tools/AssetPrep/kenney_mouse_icons.py`，產出 `T_Ico_mouse_{left,right,scroll}`。
  *
- * 為什麼不換一套現成的 prompt 素材包：2026-09-06 已經因為「線條不同家＋亮鍵是紅色」把
- * Kenney 退役過一次，而右緣同一句話裡就有 Lucide 的動詞圖示——換家就是讓兩個圖示打架。
- * 為什麼不繼續自己畫：自繪的膠囊沒有 Lucide 的比例與圓角語言（就是被指「不好看」的那個）。
+ * 09-06 退掉 Kenney、09-08 改用 Lucide 本體＋自繪高亮，兩次的理由都是同一句——
+ * 「右緣同一句話裡就有 Lucide 的動詞圖示，換家會打架」。**動詞圖示已於 09-09 全數移除**
+ * ⇒ 那條理由不存在了，滑鼠是全 UI 唯一的圖示，只需要跟鍵帽相處。
+ * 選線稿版而不是實心版：實心版的「哪一顆鍵亮著」是紅色＝中性制不准的第二個強調色；
+ * 線稿版用「線 vs 實填」講同一件事，單色就講得完。
  */
-static TSharedRef<SWidget> MakeMouseGlyph(ANiceInkHUD* Hud, int32 Button, bool bDim)
+static TSharedRef<SWidget> MakeMouseGlyph(ANiceInkHUD* Hud, ANiceInkHUD::ENiInputGlyph Glyph, bool bDim)
 {
-	static const TCHAR* Names[3] = { TEXT("mouse_left"), TEXT("mouse_right"), TEXT("mouse_scroll") };
 	const float S = 7.0f * NiUi::U;   // 28：與 32 的鍵帽等重
-	UTexture2D* Tex = Hud ? Hud->GetIcon(Names[FMath::Clamp(Button, 0, 2)]) : nullptr;
+	const TCHAR* Name = (Glyph == ANiceInkHUD::ENiInputGlyph::MouseRight) ? TEXT("mouse_right")
+		: (Glyph == ANiceInkHUD::ENiInputGlyph::MouseWheel) ? TEXT("mouse_scroll") : TEXT("mouse_left");
+	UTexture2D* Tex = Hud ? Hud->GetIcon(Name) : nullptr;
 	return SNew(SBox).WidthOverride(S).HeightOverride(S)
 		[
 			SNew(SImage).Image(NiSlate::Brush(Tex, S))
@@ -412,12 +414,11 @@ static TSharedRef<SWidget> MakeHintRow(ANiceInkHUD* Hud, const ANiceInkHUD::FNiC
 	const FSlateFontInfo& VerbFont, const FSlateFontInfo& KeyFont, const FString& VerbText, bool bKeyFirst)
 {
 	const bool bDim = (H.State == ANiceInkHUD::ENiKeyState::Unavailable);
-	const int32 MouseBtn = Hud->MouseButtonOf(H.Tex);
 	FLinearColor VerbC = NiHudColor::Paper;
 	if (bDim) { VerbC.A = 0.45f; }
 
-	TSharedRef<SWidget> KeyW = (MouseBtn >= 0)
-		? MakeMouseGlyph(Hud, MouseBtn, bDim)
+	TSharedRef<SWidget> KeyW = (H.Glyph != ANiceInkHUD::ENiInputGlyph::None)
+		? MakeMouseGlyph(Hud, H.Glyph, bDim)
 		: StaticCastSharedRef<SWidget>(SNew(SNiKeycap).Font(KeyFont).Dim(bDim)
 			.Key(FText::FromString(H.Key ? FString(H.Key) : FString())));
 
@@ -426,17 +427,12 @@ static TSharedRef<SWidget> MakeHintRow(ANiceInkHUD* Hud, const ANiceInkHUD::FNiC
 	{
 		Row->AddSlot().AutoWidth().VAlign(VAlign_Center)[KeyW];
 	}
-	if (UTexture2D* IcoTex = Hud->GetActionIcon(H.Label))
-	{
-		Row->AddSlot().AutoWidth().VAlign(VAlign_Center)
-			.Padding(bKeyFirst ? FMargin(NiUi::GapM, 0, 0, 0) : FMargin(0))
-		[
-			SNew(SBox).WidthOverride(5.0f * NiUi::U).HeightOverride(5.0f * NiUi::U)
-			[
-				SNew(SImage).Image(NiSlate::Brush(IcoTex, 5.0f * NiUi::U)).ColorAndOpacity(VerbC)
-			]
-		];
-	}
+	// **動詞前不再放圖示**（2026-09-09；user：「我知道他在畫什麼，但是我不知道和遊戲內
+	// 要表達的東西之間有什麼關聯」）。量過才拆的：21 條提示每一條都有 glyph（按哪裡）
+	// ＋動詞 13 語全非空（做什麼），沒有兩條動詞字面相同；而 `footprints` 曾同時代表
+	// 「起身」與「起身・結束作畫」、`play` 同時代表「開局」與「下一場」
+	// ⇒ **圖示在那兩組裡不帶區別力，區別全來自文字**。UI_SYSTEM §4.1 本來就寫著
+	// 「動作圖示是選配，只在動詞說不清楚時加」。
 	Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
 	[
 		SNew(STextBlock).Font(VerbFont).ColorAndOpacity(VerbC)
@@ -508,7 +504,8 @@ private:
 			if (Hint.bPosture != bPosture) { continue; }
 			Rows.Add(&Hint);
 			Sig += FString::Printf(TEXT("%s|%d|%d|%d;"), Hint.Key ? Hint.Key : TEXT("m"),
-				static_cast<int32>(Hint.Label), static_cast<int32>(Hint.State), H->MouseButtonOf(Hint.Tex));
+				static_cast<int32>(Hint.Label), static_cast<int32>(Hint.State),
+				static_cast<int32>(Hint.Glyph));
 		}
 		if (Sig == LastSig)
 		{
@@ -865,8 +862,10 @@ public:
 				[
 					SNew(SBox).WidthOverride(5.0f * NiUi::U).HeightOverride(5.0f * NiUi::U)
 					[
-						SNew(SImage)
-						.Image(NiSlate::Brush(Hud.IsValid() ? Hud->GetCashIcon() : nullptr, 5.0f * NiUi::U))
+						// 現金＝**穴あき銭**（自家記號；Tools/AssetPrep/nice_ink_marks.py）。
+					// 此前是 Lucide 的西式紙鈔——這個遊戲的錢不長那樣。
+					SNew(SImage)
+						.Image(NiSlate::Brush(Hud.IsValid() ? Hud->GetCoinIcon() : nullptr, 5.0f * NiUi::U))
 						.ColorAndOpacity(NiHudColor::PaperDim)
 					]
 				]
@@ -955,17 +954,17 @@ public:
 		const FSlateFontInfo NameFont = NiSlate::BodyFont(F, NiType::Small, bHost);
 
 
-		UTexture2D* Crown = (H && bHost) ? H->GetIcon(TEXT("crown")) : nullptr;
-		const float CrownS = 4.0f * NiUi::U;
-
+		// 房主＝**字**，不是歐式王冠（2026-09-09）。`LobbyHostTag` 13 語齊全
+		// （房主／部屋主／host／방장…），而冠要先被認出來、再被翻譯一次。
 		TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
 		V->AddSlot().AutoHeight().HAlign(HAlign_Center)
 		[
-			SNew(SBox).HeightOverride(CrownS).WidthOverride(CrownS)
-			.Visibility(Crown ? EVisibility::HitTestInvisible : EVisibility::Collapsed)
-			[
-				SNew(SImage).Image(NiSlate::Brush(Crown, CrownS)).ColorAndOpacity(NiHudColor::Paper)
-			]
+			SNew(STextBlock)
+			.Visibility(bHost ? EVisibility::HitTestInvisible : EVisibility::Collapsed)
+			.Font(NiSlate::BodyFont(F, NiType::Small, false))
+			.ColorAndOpacity(NiHudColor::PaperDim)
+			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+			.Text(FText::FromString(NiLoc::T(H, ENiLocKey::LobbyHostTag)))
 		];
 		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapS * 0.5f, 0, 0)
 		[
@@ -1075,11 +1074,20 @@ public:
 		TSharedRef<SHorizontalBox> Cups = SNew(SHorizontalBox);
 		for (int32 i = 0; i < 3; ++i)
 		{
+			// 猪口（自家記號）：**飲んだ杯＝満（口を塗る）／これからの杯＝空（線だけ）**。
+			// 此前是同一顆西式高腳杯只換 tint ⇒ 滿與空只差亮度；現在差的是「量」
+			// （口の面積），在 40px 上一眼可讀。tint 仍保留＝第二杯起空杯轉紅的懸崖警示。
 			Cups->AddSlot().AutoWidth().Padding(i ? CupS * 0.18f : 0.0f, 0, 0, 0)
 			[
 				SNew(SBox).WidthOverride(CupS).HeightOverride(CupS)
 				[
-					SNew(SImage).Image(NiSlate::Brush(H ? H->GetCupIcon() : nullptr, CupS))
+					SNew(SImage)
+					.Image(TAttribute<const FSlateBrush*>::CreateLambda([this, i, CupS]()
+						{
+							ANiceInkHUD* Hd = Hud.Get();
+							// `this->` 不可省：這個函式裡有一個同名的區域變數 `Cups`（SHorizontalBox）
+							return NiSlate::Brush(Hd ? Hd->GetChokoIcon(i < this->Cups()) : nullptr, CupS);
+						}))
 					.ColorAndOpacity(TAttribute<FSlateColor>::CreateLambda(
 						[this, i]() { return CupTint(i); }))
 				]
@@ -1187,7 +1195,11 @@ private:
 		if (Index < Filled) { return NiHudColor::Paper; }
 		// 第二杯起，空杯轉紅：懸崖警示全場一眼可讀
 		FLinearColor T = (Filled >= 2) ? NiHudColor::Red : NiHudColor::Paper;
-		T.A = 0.28f;
+		// 0.28→0.45（2026-09-09）：空杯此前與滿杯是**同一張實心圖**，只靠亮度分辨，
+		// 壓到 0.28 才不會跟滿杯搶。現在空杯是**線稿**（面積本身就少很多）
+		// ⇒ 沿用 0.28 會讓「還剩幾杯」直接消失。**換了畫法就要重算它的權重**，
+		// 與 09-03 暈的血價同型（線性換指數之後照抄峰值，暈就不見了）。
+		T.A = 0.45f;
 		return T;
 	}
 
@@ -1734,11 +1746,11 @@ private:
 			{
 				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
 				[
-					SNew(SBox).WidthOverride(4.0f * NiUi::U).HeightOverride(4.0f * NiUi::U)
-					[
-						SNew(SImage).Image(NiSlate::Brush(H->GetIcon(TEXT("crown")), 4.0f * NiUi::U))
-						.ColorAndOpacity(NiHudColor::PaperDim)
-					]
+					SNew(STextBlock)
+					.Font(NiSlate::BodyFont(H ? H->GetUiFont() : nullptr, NiType::Small, false))
+					.ColorAndOpacity(NiHudColor::PaperDim)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(FText::FromString(NiLoc::T(H, ENiLocKey::LobbyHostTag)))
 				];
 			}
 			Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
@@ -2175,16 +2187,9 @@ public:
 		ChildSlot
 		[
 			SNew(SHorizontalBox)
-			// 筆的剪影：裸的色方塊讀成漏畫的方塊；「一支筆沾了這杯」才是一句話
+			// **筆的剪影已拆**（2026-09-09）：那顆 `pen` 是常數，三支筆畫的是同一支筆
+			// ⇒ 零狀態資訊。「現在是哪支筆」本來就由針尖環的半徑與顏色講（09-03 定案）。
 			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SBox).WidthOverride(IcoS).HeightOverride(IcoS)
-				[
-					SNew(SImage).Image(NiSlate::Brush(H ? H->GetIcon(TEXT("pen")) : nullptr, IcoS))
-					.ColorAndOpacity(NiHudColor::PaperDim)
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
 			[
 				SNew(SNiInkCup).Size(Cell).Ink(this, &SNiInkChip::InkColor)
 			]

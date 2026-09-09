@@ -303,6 +303,9 @@ for vw, vh in [(1280, 720), (1920, 1080), (2559, 1398)]:
 # 這裡改成**從原始碼把那幾行抽出來**，所以「改了 C++ 沒改閘門」或反過來都會失敗。
 CH = _src("Source/NiceInk/Private/NiceInkCharacter.cpp")
 HD = _src("Source/NiceInk/Private/NiceInkHUD.cpp")
+# 2026-09-08 起 chip／操作列／比分都住 Slate ⇒ 要驗它們就要讀這一份。
+# （c0g/c0h 曾經在搬家那天起就靜靜地失敗——**閘門讀不到受測物時，它不是變寬鬆，是變成沒有意義**。）
+SH = _src("Source/NiceInk/Private/SNiHud.cpp")
 
 m = _re.search(r"L\.bColorAxis\s*=\s*\(Needle\s*!=\s*EInkNeedle::(\w+)\)", CH)
 ck("c0a colour axis: only Stencil lacks it (from C++)", bool(m) and m.group(1) == "Stencil",
@@ -448,10 +451,11 @@ ck("c0f stencil forces crystal violet at BeginStroke (from C++)",
 
 # c0g chip 與盤看的是同一個條件（HUD 端）：此前 chip 無條件畫「顏色＋百分比」
 # ＝拿稿筆時顯示藍色 60% 而落墨是紫色 100%（HUD 說謊）。
-ck("c0g chip hides the percentage off-Shader (from HUD)",
-   bool(_re.search(r"bShowPct\s*=\s*\(MyChar->SelectedNeedle\s*==\s*EInkNeedle::Shader\)", HD)))
-ck("c0h chip shows crystal violet for the stencil (from HUD)",
-   bool(_re.search(r"bStencil\s*=\s*\(MyChar->SelectedNeedle\s*==\s*EInkNeedle::Stencil\)", HD)))
+ck("c0g chip hides the percentage off-Shader (from Slate)",
+   bool(_re.search(r"EVisibility\s+PctVis\(\)\s*const\s*\{\s*return\s+IsShader\(\)\s*\?", SH))
+   and bool(_re.search(r"bool\s+IsShader\(\)\s*const\s*\{[\s\S]{0,120}?SelectedNeedle\s*==\s*EInkNeedle::Shader", SH)))
+ck("c0h chip shows crystal violet for the stencil (from Slate)",
+   bool(_re.search(r"bStencil\s*=\s*\(C->SelectedNeedle\s*==\s*EInkNeedle::Stencil\)[\s\S]{0,160}?bStencil\s*\?\s*NiceInkStencil::Color\(\)", SH)))
 
 # c0i 滾輪的作用域＝濃度軸的作用域（PollLockedDraw）；順帶驗轉盤讓路（A1）
 ck("c0i scroll wheel is scoped to Shader and yields to the trap dial (from C++)",
@@ -461,6 +465,54 @@ ck("c0i scroll wheel is scoped to Shader and yields to the trap dial (from C++)"
 ck("c0j the 1-0 colour shortcut is gone (from C++)",
    "PollPalette(PC);" not in CH and "void ANiceInkCharacter::PollPalette" not in CH)
 
+
+# ---- 2026-09-09 圖示大減（user：「這些 icon 都非常詞不達意」）----
+# 這批的風險不是「畫錯」，是**悄悄長回來**：下一個人覺得某一行「有點空」就補一顆圖示，
+# 於是二階隱喻一顆一顆回到畫面上。所以把「不存在」寫成閘門。
+_SRC_ALL = "".join(_src(p) for p in (
+    "Source/NiceInk/Private/SNiHud.cpp",
+    "Source/NiceInk/Private/NiceInkHUD.cpp",
+    "Source/NiceInk/Public/NiceInkHUD.h",
+))
+ck("c1a the verb-icon table stays gone (no ActionIcon anywhere)",
+   ("ActionIcon" not in _SRC_ALL),
+   "動詞圖示回來了 ⇒ 21 條提示每一條的動詞本來就把答案寫在那裡（13 語齊全）")
+
+# 畫面上允許存在的圖示＝這五個名字，全部有出處：滑鼠三顆 Kenney CC0、銭與猪口自家畫。
+_names = set(_re.findall(r'Ico\(TEXT\("(\w+)"\)\)', _SRC_ALL)) | set(
+    _re.findall(r'GetIcon\(TEXT\("(\w+)"\)\)', _SRC_ALL))
+ck("c1b only the five allowed icons are referenced",
+   _names <= {"mouse_left", "mouse_right", "mouse_scroll", "coin", "choko_full", "choko_empty"},
+   "多出來的：%s" % sorted(_names - {"mouse_left", "mouse_right", "mouse_scroll",
+                                    "coin", "choko_full", "choko_empty"}))
+
+# 資產＝來源資料夾的鏡像（ue_import_icons.py 會刪多的）。/Game/UI 整個目錄在 cook 白名單裡，
+# 留在硬碟上的孤兒圖示會直接進包。
+import os as _os
+_icodir = _os.path.join(ROOT, "Content", "UI", "Icons")
+_assets = sorted(f[:-7] for f in _os.listdir(_icodir) if f.endswith(".uasset"))
+ck("c1c icon assets mirror the source folder",
+   _assets == ["T_Ico_choko_empty", "T_Ico_choko_full", "T_Ico_coin", "T_Ico_mouse_left",
+               "T_Ico_mouse_right", "T_Ico_mouse_scroll", "T_UI_MarkerPen", "T_UI_TattooPen"],
+   "實際=%s" % _assets)
+
+# 猪口的滿／空是**兩張圖**（面積差），不是同一張換 tint（亮度差）——
+# 亮度差在 40px 的三顆並排上讀不出「喝了幾杯」。
+ck("c1d the cup row picks full/empty art per cup",
+   bool(_re.search(r"GetChokoIcon\(i\s*<\s*this->Cups\(\)\)", SH)))
+
+# 房主＝字（LobbyHostTag，13 語）；冠不得回來
+# **兩個**房主記號（大廳玩家卡＋ESC 玩家列）。只驗「字串出現過」擋不住「其中一處被拿掉」
+# ——負向測試證明過：改掉兩處之一，那版閘門照樣 PASS。
+ck("c1e both host markers are text, not a crown",
+   SH.count("ENiLocKey::LobbyHostTag") >= 2 and ('"crown"' not in _SRC_ALL),
+   "LobbyHostTag 出現 %d 次（要 2：大廳玩家卡＋ESC 玩家列）" % SH.count("ENiLocKey::LobbyHostTag"))
+
+# 身體小地圖（09-07 加、09-09 拆）：user 看到它的第一句話是「這是什麼？」
+# ——畫面上唯一沒有標籤也沒有邊界的東西。連同它的繪製點一起寫成閘門，免得又長回來。
+ck("c1f the body minimap stays gone",
+   ("DrawBodyMap" not in _SRC_ALL),
+   "身體小地圖回來了 ⇒ 它要嘛有標籤與邊界，要嘛不存在")
 
 print(chr(10).join(fails) if fails else "ALL PASS")
 print("checks=%d  fail=%d" % (checks, len(fails)))

@@ -179,20 +179,8 @@ void ANiceInkHUD::EnsureUiAssets()
 	// 13 語矩陣與選單同一座（08-07 抽共用）：名字＝任何語言、局內照樣顯示
 	UiFont = BuildCompositeUiFont(this, TEXT("NiUiFont"));
 
-	IconCup    = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_Ico_wine.T_Ico_wine"));   // 二批：Lucide 一家
-	IconSpray  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Spray.T_UI_Spray"));
-	IconKick   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Kick.T_UI_Kick"));
-	IconMarker = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Marker.T_UI_Marker"));
-	IconCash   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_Ico_banknote.T_Ico_banknote"));   // 2026-09-07：coins 在 20px 讀不出是什麼
-	IconRotate = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Rotate.T_UI_Rotate"));
-	IconEye    = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Eye.T_UI_Eye"));
-	IconTrap   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Trap.T_UI_Trap"));
-	IconSleep  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Sleep.T_UI_Sleep"));
-	IconNose   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_Nose.T_UI_Nose"));
-	InMouseLeft   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseLeft.T_InMouseLeft"));
-	InMouseRight  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseRight.T_InMouseRight"));
-	InMouseScroll = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseScroll.T_InMouseScroll"));
-	InMouseMove   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Input/T_InMouseMove.T_InMouseMove"));
+	// 圖示一律走 `Ico()` 惰性載入（2026-09-09 只剩四個：mouse_left/right/scroll、coin、
+	// choko_full/empty）——此前這裡預載十四張，其中十張的繪製點早就不存在了。
 	PenSprite  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_TattooPen.T_UI_TattooPen"));
 	MarkerSprite = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Icons/T_UI_MarkerPen.T_UI_MarkerPen"));
 	InkSplatTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkSplat.T_UI_InkSplat"));
@@ -715,35 +703,6 @@ float ANiceInkHUD::BigCapTopOffset(float SizePx, float& OutCapH)
 	return LineH - BaselineUp - Cap;
 }
 
-void ANiceInkHUD::DrawCupsRow(float X, float Y, float CupSize, int32 Filled, EHAlign Align)
-{
-	const float Step = CupSize * 1.18f;
-	float StartX = X;
-	if (Align == EHAlign::Center)
-	{
-		StartX -= (Step * 2.0f + CupSize) * 0.5f;
-	}
-	else if (Align == EHAlign::Right)
-	{
-		StartX -= Step * 2.0f + CupSize;
-	}
-	for (int32 i = 0; i < 3; ++i)
-	{
-		FLinearColor Tint;
-		if (i < Filled)
-		{
-			Tint = NiHudColor::Paper;
-		}
-		else
-		{
-			// 第二杯起，空杯轉紅：懸崖警示全場一眼可讀
-			Tint = (Filled >= 2) ? NiHudColor::Red : NiHudColor::Paper;
-			Tint.A = 0.28f;
-		}
-		DrawIconTok(IconCup, StartX + i * Step, Y, CupSize, Tint);
-	}
-}
-
 void ANiceInkHUD::DrawHUD()
 {
 	Super::DrawHUD();
@@ -903,7 +862,8 @@ void ANiceInkHUD::DrawHUD()
 				DrawBottomHint(NiLoc::T(this, ENiLocKey::HudOutOfReach), NiHudColor::Paper);
 			}
 			DrawInkChip(MyChar); // 手上裝的是哪一杯＝畫面上唯一一份
-			DrawBodyMap(MyChar); // 你鎖在身體的哪裡（2026-09-07）
+			// 身體小地圖（09-07 加）已於 09-09 拆除（user：「移除這個，我們不需要」）：
+			// 它是畫面上唯一沒有標籤、也沒有邊界的東西，擠在現金正下方 ⇒ 讀成「那是什麼」。
 		}
 	}
 	// 睜眼未現身的兩顆鍵（SHIFT 裝睡／WASD 起身）已進操作列（BuildControlHints）——
@@ -1368,49 +1328,6 @@ float ANiceInkHUD::DrawKeycap(float X, float Y, const FString& Key, ENiKeyState 
 	return W;
 }
 
-float ANiceInkHUD::DrawMouseGlyph(float LeftX, float Y, float H, int32 Button, ENiKeyState State)
-{
-	// 平面滑鼠（2026-09-06）：與鍵帽同一個形狀語言——同樣的底、同樣的 1px 框、同樣的圓角
-	// 邏輯（膠囊）。上半兩顆鍵用一條中線分開，按下的那顆填強調色；滾輪＝中線上一枚小膠囊。
-	// 取代 Kenney 的卡通剪影：那張圖的按鍵是紅色（紅在本系統＝危險），且線條語言與鍵帽不同家。
-	const float W = FMath::RoundToFloat(H * 0.68f);
-	const float B = FMath::Max(1.0f, UiScale);
-	const float Rad = W * 0.5f;
-	const float Split = FMath::RoundToFloat(H * 0.45f);
-
-	FLinearColor Frame = NiHudColor::White;
-	Frame.A = (State == ENiKeyState::Unavailable) ? 0.25f : 0.70f;
-	FLinearColor Fill = NiHudColor::Black;
-	Fill.A = (State == ENiKeyState::Unavailable) ? 0.30f : 0.55f;
-	DrawRoundedBox(LeftX, Y, W, H, Rad, Frame);
-	DrawRoundedBox(LeftX + B, Y + B, W - B * 2.0f, H - B * 2.0f, FMath::Max(0.0f, Rad - B), Fill);
-	// 分界：水平線＋（左右鍵時）上半的垂直中線
-	DrawRoundedBox(LeftX + B, Y + Split, W - B * 2.0f, B, 0.0f, Frame);
-	if (Button != 2)
-	{
-		DrawRoundedBox(LeftX + W * 0.5f - B * 0.5f, Y + B, B, Split - B, 0.0f, Frame);
-	}
-	FLinearColor Hot = NiHudColor::White;   // 無主色：按下的那顆＝白（2026-09-07）
-	Hot.A = (State == ENiKeyState::Unavailable) ? 0.35f : 0.95f;
-	const float BtnW = W * 0.5f - B * 1.5f;
-	const float BtnH = Split - B * 2.0f;
-	const float BtnR = 2.0f * UiScale;
-	if (Button == 0)
-	{
-		DrawRoundedBox(LeftX + B, Y + B, BtnW, BtnH, BtnR, Hot);
-	}
-	else if (Button == 1)
-	{
-		DrawRoundedBox(LeftX + W * 0.5f + B * 0.5f, Y + B, BtnW, BtnH, BtnR, Hot);
-	}
-	else
-	{
-		const float WheelW = B * 3.0f;
-		DrawRoundedBox(LeftX + W * 0.5f - WheelW * 0.5f, Y + H * 0.14f, WheelW, H * 0.22f, WheelW * 0.5f, Hot);
-	}
-	return W;
-}
-
 void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar,
 	TArray<FNiControlHint>& Out) const
 {
@@ -1448,36 +1365,36 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 		{
 			return;   // 昏睡不醒：沒有活著的鍵（此前結局畫面右緣還掛著 TRACE）
 		}
-		Out.Add({ nullptr, InMouseLeft, ENiLocKey::ActTrace, ENiKeyState::Available, false });
+		Out.Add({ nullptr, ENiInputGlyph::MouseLeft, ENiLocKey::ActTrace, ENiKeyState::Available, false });
 		return;
 	}
 	if (MyChar->IsFeigningSleep())
 	{
-		Out.Add({ TEXT("SHIFT"), nullptr, ENiLocKey::ActWake, ENiKeyState::Available, false });
+		Out.Add({ TEXT("SHIFT"), ENiInputGlyph::None, ENiLocKey::ActWake, ENiKeyState::Available, false });
 		return;
 	}
 	if (MyChar->bAsleep && MyChar->bEyesOpen)
 	{
 		// 睜眼未現身（2026-09-07）：全遊戲後果最重的兩顆鍵——縮回去、或起身結束整個作畫階段。
 		// 此前它們是一行小句子壓在底部。
-		Out.Add({ TEXT("SHIFT"), nullptr, ENiLocKey::ActFeign, ENiKeyState::Available, false });
-		Out.Add({ TEXT("WASD"), nullptr, ENiLocKey::ActGetUp, ENiKeyState::OneShot, true });
+		Out.Add({ TEXT("SHIFT"), ENiInputGlyph::None, ENiLocKey::ActFeign, ENiKeyState::Available, false });
+		Out.Add({ TEXT("WASD"), ENiInputGlyph::None, ENiLocKey::ActGetUp, ENiKeyState::OneShot, true });
 		return;
 	}
 	if (MyChar->bLeanLocked)
 	{
-		Out.Add({ nullptr, InMouseLeft,  ENiLocKey::ActInk,  ENiKeyState::Available, false });
-		Out.Add({ nullptr, InMouseRight, ENiLocKey::ActCups, ENiKeyState::Available, false });
+		Out.Add({ nullptr, ENiInputGlyph::MouseLeft,  ENiLocKey::ActInk,  ENiKeyState::Available, false });
+		Out.Add({ nullptr, ENiInputGlyph::MouseRight, ENiLocKey::ActCups, ENiKeyState::Available, false });
 		// **SCROLL 只在打霧筆列出**：濃度只有打霧吃得到，操作表要跟著作用域收
 		if (MyChar->SelectedNeedle == EInkNeedle::Shader)
 		{
-			Out.Add({ nullptr, InMouseScroll, ENiLocKey::ActWash, ENiKeyState::Available, false });
+			Out.Add({ nullptr, ENiInputGlyph::MouseWheel, ENiLocKey::ActWash, ENiKeyState::Available, false });
 		}
-		Out.Add({ TEXT("Q"), nullptr, ENiLocKey::ActNeedle, ENiKeyState::Available, false });
-		Out.Add({ TEXT("G"), nullptr, ENiLocKey::ActShake,  ShakeState(), false });
+		Out.Add({ TEXT("Q"), ENiInputGlyph::None, ENiLocKey::ActNeedle, ENiKeyState::Available, false });
+		Out.Add({ TEXT("G"), ENiInputGlyph::None, ENiLocKey::ActShake,  ShakeState(), false });
 		// **起身＝身體姿勢** ⇒ 底部中央橫排（Meccha 把 しゃがむ／立ち上がる 放那裡）。
 		// 此前它排在右緣直列的最後一行＝把身體狀態混進工具列。
-		Out.Add({ TEXT("WASD"), nullptr, ENiLocKey::ActStand, ENiKeyState::Available, true });
+		Out.Add({ TEXT("WASD"), ENiInputGlyph::None, ENiLocKey::ActStand, ENiKeyState::Available, true });
 		return;
 	}
 
@@ -1488,18 +1405,18 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 		{
 			// 人數不足＝**不可按**。此前這顆 ENTER 長得跟可以按的一樣，而「還差幾個人」
 			// 只寫在底部一行小字裡——玩家按下去沒事發生，然後去讀那行字。
-			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActStartMatch,
+			Out.Add({ TEXT("ENTER"), ENiInputGlyph::None, ENiLocKey::ActStartMatch,
 				CanHostStartMatch(GS) ? ENiKeyState::OneShot : ENiKeyState::Unavailable, false });
 		}
 		// 踢人住在 ESC 選單裡（玩家列的 KICK 鈕）；右緣只講「打開選單」
-		Out.Add({ TEXT("ESC"), nullptr, ENiLocKey::ActMenu, ENiKeyState::Available, false });
+		Out.Add({ TEXT("ESC"), ENiInputGlyph::None, ENiLocKey::ActMenu, ENiKeyState::Available, false });
 		break;
 	case ENiceInkPhase::Drawing:
 		if (!bIsVictim)
 		{
-			Out.Add({ nullptr, InMouseRight, ENiLocKey::ActLeanIn, ENiKeyState::Available, false });
-			Out.Add({ TEXT("F"), nullptr, ENiLocKey::ActFlip,  ENiKeyState::Available, false });
-			Out.Add({ TEXT("G"), nullptr, ENiLocKey::ActShake, ShakeState(), false });
+			Out.Add({ nullptr, ENiInputGlyph::MouseRight, ENiLocKey::ActLeanIn, ENiKeyState::Available, false });
+			Out.Add({ TEXT("F"), ENiInputGlyph::None, ENiLocKey::ActFlip,  ENiKeyState::Available, false });
+			Out.Add({ TEXT("G"), ENiInputGlyph::None, ENiLocKey::ActShake, ShakeState(), false });
 		}
 		break;
 	case ENiceInkPhase::Accusation:
@@ -1507,17 +1424,17 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 		{
 			// 1-9 退役（2026-09-07）：作品在世界裡沒有編號可以對應，數字鍵是任意映射
 			// ——與 09-03 砍掉數字鍵選色同一個判準。E／Q 循環，鏡頭跟著飛到那一幅。
-			Out.Add({ TEXT("E"),     nullptr, ENiLocKey::ActNextPiece, ENiKeyState::Available, false });
-			Out.Add({ TEXT("Q"),     nullptr, ENiLocKey::ActPrevPiece, ENiKeyState::Available, false });
-			Out.Add({ TEXT("TAB"),   nullptr, ENiLocKey::ActSuspect,   ENiKeyState::Available, false });
-			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActAccuse,    ENiKeyState::OneShot, false });
+			Out.Add({ TEXT("E"),     ENiInputGlyph::None, ENiLocKey::ActNextPiece, ENiKeyState::Available, false });
+			Out.Add({ TEXT("Q"),     ENiInputGlyph::None, ENiLocKey::ActPrevPiece, ENiKeyState::Available, false });
+			Out.Add({ TEXT("TAB"),   ENiInputGlyph::None, ENiLocKey::ActSuspect,   ENiKeyState::Available, false });
+			Out.Add({ TEXT("ENTER"), ENiInputGlyph::None, ENiLocKey::ActAccuse,    ENiKeyState::OneShot, false });
 		}
 		break;
 	case ENiceInkPhase::PostGame:
-		Out.Add({ TEXT("L"), nullptr, ENiLocKey::ActLaser, ENiKeyState::OneShot, false });
+		Out.Add({ TEXT("L"), ENiInputGlyph::None, ENiLocKey::ActLaser, ENiKeyState::OneShot, false });
 		if (bIsHost)
 		{
-			Out.Add({ TEXT("ENTER"), nullptr, ENiLocKey::ActNextMatch, ENiKeyState::Available, false });
+			Out.Add({ TEXT("ENTER"), ENiInputGlyph::None, ENiLocKey::ActNextMatch, ENiKeyState::Available, false });
 		}
 		break;
 	default:
@@ -1528,46 +1445,14 @@ void ANiceInkHUD::BuildControlHints(const ANiceInkGameState* GS, ANiceInkCharact
 UTexture2D* ANiceInkHUD::Ico(const TCHAR* Name)
 {
 	const FName Key(Name);
-	if (TObjectPtr<UTexture2D>* Found = LucideCache.Find(Key))
+	if (TObjectPtr<UTexture2D>* Found = IconCache.Find(Key))
 	{
 		return Found->Get();
 	}
 	UTexture2D* Tex = LoadObject<UTexture2D>(nullptr,
 		*FString::Printf(TEXT("/Game/UI/Icons/T_Ico_%s.T_Ico_%s"), Name, Name));
-	LucideCache.Add(Key, Tex);
+	IconCache.Add(Key, Tex);
 	return Tex;
-}
-
-UTexture2D* ANiceInkHUD::ActionIcon(ENiLocKey Label)
-{
-	// 動詞→圖示（二批）：圖示說「這是哪一類動作」，動詞說「做什麼」，鍵帽說「按哪裡」。
-	// 沒有對應的動詞就不畫（不硬湊）。
-	switch (Label)
-	{
-	case ENiLocKey::ActInk:        return Ico(TEXT("droplet"));
-	case ENiLocKey::ActCups:       return Ico(TEXT("palette"));
-	case ENiLocKey::ActNeedle:     return Ico(TEXT("pen_tool"));
-	case ENiLocKey::ActShake:      return Ico(TEXT("hand"));
-	case ENiLocKey::ActStand:      return Ico(TEXT("footprints"));
-	case ENiLocKey::ActLeanIn:     return Ico(TEXT("scan_eye"));
-	case ENiLocKey::ActFlip:       return Ico(TEXT("rotate_ccw"));
-	case ENiLocKey::ActWash:       return Ico(TEXT("eraser"));
-	case ENiLocKey::ActWake:       return Ico(TEXT("sun"));
-	case ENiLocKey::ActTrace:      return Ico(TEXT("route"));
-	case ENiLocKey::ActStartMatch: return Ico(TEXT("play"));
-	case ENiLocKey::ActNextMatch:  return Ico(TEXT("play"));
-	case ENiLocKey::ActKick:       return Ico(TEXT("user_x"));
-	case ENiLocKey::ActLaser:      return Ico(TEXT("zap"));
-	case ENiLocKey::ActAccuse:     return Ico(TEXT("gavel"));
-	case ENiLocKey::ActSuspect:    return Ico(TEXT("arrow_right"));
-	case ENiLocKey::ActPickWork:   return Ico(TEXT("layers"));
-	case ENiLocKey::ActFeign:      return Ico(TEXT("moon"));
-	case ENiLocKey::ActMenu:       return Ico(TEXT("pause"));
-	case ENiLocKey::ActGetUp:      return Ico(TEXT("footprints"));
-	case ENiLocKey::ActPrevPiece:  return Ico(TEXT("chevron_left"));
-	case ENiLocKey::ActNextPiece:  return Ico(TEXT("chevron_right"));
-	default:                       return nullptr;
-	}
 }
 
 void ANiceInkHUD::DrawControlStrip(const ANiceInkGameState* GS, ANiceInkCharacter* MyChar)
@@ -1580,46 +1465,6 @@ void ANiceInkHUD::DrawPostureCluster(const ANiceInkGameState* GS, ANiceInkCharac
 {
 	// **已搬到 Slate**（SNiHintList，2026-09-08）：底部姿勢列＝[鍵][圖示][動詞] 的純排版。
 	// 兩個方向共用同一份 BuildControlHints，位置由排版引擎算。
-}
-
-float ANiceInkHUD::MeasureInputGlyph(const TCHAR* Key, UTexture2D* Tex) const
-{
-	const float H = NiUi::KeycapH * UiScale;
-	if (Tex)
-	{
-		return FMath::RoundToFloat(H * 0.68f);   // 平面滑鼠的寬（DrawMouseGlyph 同式）
-	}
-	if (!Key)
-	{
-		return 0.0f;
-	}
-	const FVector2D Size = const_cast<ANiceInkHUD*>(this)->MeasureTok(Key, ETextTier::Body, true);
-	return FMath::Max(H, Size.X + 3.0f * NiUi::U * 2.0f * UiScale);
-}
-
-float ANiceInkHUD::DrawInputGlyph(float X, float Y, const TCHAR* Key, UTexture2D* Tex,
-	ENiKeyState State, bool bLeftAnchor)
-{
-	// **鍵盤有刻字所以寫字，滑鼠沒有刻字所以畫圖**（Docs/UI_SYSTEM.md §4.1）。
-	// X＝右緣（右緣縱列）或左緣（底部橫排），由 bLeftAnchor 決定。
-	// Tex 現在只當「哪一顆滑鼠鍵」的識別（left／right／scroll），圖本身由 DrawMouseGlyph 畫。
-	const float H = NiUi::KeycapH * UiScale;
-	if (Tex)
-	{
-		const int32 Button = (Tex == InMouseRight) ? 1 : ((Tex == InMouseScroll) ? 2 : 0);
-		const float GW = FMath::RoundToFloat(H * 0.68f);
-		const float LeftX = bLeftAnchor ? X : (X - GW);
-		DrawMouseGlyph(LeftX, Y, H, Button, State);
-		return GW;
-	}
-	if (!Key)
-	{
-		return 0.0f;
-	}
-	const FVector2D Size = MeasureTok(Key, ETextTier::Body, true);
-	const float W = FMath::Max(H, Size.X + 3.0f * NiUi::U * 2.0f * UiScale);
-	DrawKeycap(bLeftAnchor ? X : (X - W), Y, Key, State);
-	return W;
 }
 
 void ANiceInkHUD::DrawInkTray(const ANiceInkCharacter* MyChar)
@@ -1821,8 +1666,6 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 			DrawRect(FLinearColor(0.4f, 0.02f, 0.02f, 0.35f), 0.0f, 0.0f, W, H);
 			// 整組抬離中央光圈（截圖自查：壓在圓盤上讀感髒）
 			const float TextY = PanelCenter.Y - PanelRadius * 0.52f;
-			const float IconS = 64.0f * UiScale;
-			DrawIconTok(IconTrap, PanelCenter.X - IconS * 0.5f, TextY - IconS - 12.0f * UiScale, IconS, NiHudColor::Red);
 			DrawTok(FString::Printf(TEXT("TRAPPED BY %s !"),
 				KillerPS ? *FitTok(KillerPS->GetPlayerName().ToUpper(), ETextTier::Display, 380.0f * UiScale, true) : TEXT("???")),
 				PanelCenter.X, TextY, ETextTier::Display, NiHudColor::Red, EHAlign::Center, true);
@@ -1895,15 +1738,11 @@ void ANiceInkHUD::DrawVictimSleepUI(ANiceInkCharacter* MyChar, const ANiceInkGam
 		float X = PanelX + Pad;
 		const float RowY = PanelY + 14.0f * UiScale;
 		const FLinearColor SprayTint = MyChar->SprayCharges > 0 ? NiHudColor::Paper : NiHudColor::PaperDim;
-		DrawIconTok(IconSpray, X, RowY, IconS, SprayTint);
-		X += IconS + 6.0f * UiScale;
 		X += DrawTok(FString::Printf(TEXT("x%d"), MyChar->SprayCharges), X, RowY + 3.0f * UiScale, ETextTier::Body, SprayTint, EHAlign::Left, true).X;
 		if (GNiceInkKickEnabled)
 		{
 			X += 26.0f * UiScale;
 			const FLinearColor KickTint = MyChar->KickCharges > 0 ? NiHudColor::Paper : NiHudColor::PaperDim;
-			DrawIconTok(IconKick, X, RowY, IconS, KickTint);
-			X += IconS + 6.0f * UiScale;
 			DrawTok(FString::Printf(TEXT("x%d"), MyChar->KickCharges), X, RowY + 3.0f * UiScale, ETextTier::Body, KickTint, EHAlign::Left, true);
 		}
 
@@ -1938,11 +1777,6 @@ void ANiceInkHUD::DrawTrapDial(const ANiceInkCharacter* MyChar)
 		const FVector2D Dir(FMath::Sin(Phi), -FMath::Cos(Phi));
 		Canvas->K2_DrawLine(Center + Dir * (Radius - 8.0f * UiScale), Center + Dir * Radius, 2.0f * UiScale, FLinearColor(0.4f, 0.35f, 0.5f, 1.0f));
 	}
-	const float RotIcon = 30.0f * UiScale;
-	FLinearColor RotTint = NiHudColor::Lavender;
-	RotTint.A = 0.45f;
-	DrawIconTok(IconRotate, Center.X - RotIcon * 0.5f, Center.Y - RotIcon * 0.5f, RotIcon, RotTint);
-
 	// 指針（正度數＝順時針）；CW 橘／CCW 青
 	const float NeedlePhi = FMath::DegreesToRadians(MyChar->TrapDialAngleDeg);
 	const FVector2D NeedleDir(FMath::Sin(NeedlePhi), -FMath::Cos(NeedlePhi));
@@ -2738,49 +2572,6 @@ void ANiceInkHUD::DrawWorkFocusFrame(const ANiceInkGameState* GS, ANiceInkCharac
 	}
 	const double Since = (GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0) - FrameShownAt - 0.45;
 	DrawWorkFrame(Box, InkIn01(Since, NiUi::InkInS));
-}
-
-void ANiceInkHUD::DrawBodyMap(const ANiceInkCharacter* MyChar)
-{
-	// 鎖定後你看到的是一整面皮膚，看不出自己在肚子還是大腿（截圖實錘）。
-	// 右上一枚 96px 的身體剪影（白 60% 線稿）＋一顆點＝鎖點；背面＝空心點。
-	if (!Canvas || !MyChar || !MyChar->bLeanLocked || !MyChar->LeanTarget || !MyChar->LeanTarget->Body)
-	{
-		return;
-	}
-	TGuardValue<float> ChromeDim(ChromeAlphaMul, MyChar->IsPenTriggerHeldLocal() ? 0.35f : 1.0f);
-	const FTransform BT = MyChar->LeanTarget->Body->GetComponentTransform();
-	const FVector L = BT.InverseTransformPosition(MyChar->LeanPoint);
-	// 身體局部：Z 沿身長（腳 0 → 頭 ~206）、Y 左右（±55）、X 前後（−X＝正面）
-	const float MapH = 24.0f * NiUi::U * UiScale;   // 96
-	const float MapW = MapH * 0.5f;
-	const float M = NiUi::Margin * UiScale;
-	const float X0 = Canvas->ClipX - M - MapW;
-	const float Y0 = M + 9.0f * NiUi::U * UiScale;   // 現金列之下
-	FLinearColor Line = NiHudColor::White; Line.A = 0.55f;
-	const float U = MapH / 206.0f;
-	auto Rect = [&](float CY, float HalfW, float H, float R) { DrawRoundedBox(X0 + MapW * 0.5f - HalfW, Y0 + MapH - (CY + H * 0.5f) * U, HalfW * 2.0f, H * U, R, Line); };
-	Rect(192.0f, 10.0f, 24.0f, 10.0f * UiScale);   // 頭
-	Rect(148.0f, 28.0f, 50.0f, 12.0f * UiScale);   // 胸（肩寬）
-	Rect(104.0f, 36.0f, 46.0f, 16.0f * UiScale);   // 肚（最寬）
-	Rect(42.0f, 22.0f, 74.0f, 8.0f * UiScale);     // 腿（合併成一根粗柱）
-	// 鎖點＝黑心白環（白點在白剪影上看不見——截圖實錘）；背面＝只剩白環
-	const float PX = X0 + MapW * 0.5f + FMath::Clamp(L.Y / 55.0f, -1.0f, 1.0f) * (MapW * 0.5f - 4.0f * UiScale);
-	const float PY = Y0 + MapH - FMath::Clamp(L.Z / 206.0f, 0.0f, 1.0f) * MapH;
-	const float R = 2.5f * NiUi::U * UiScale;   // 10
-	const bool bBack = L.X > 0.0f;
-	DrawRoundedBox(PX - R, PY - R, R * 2.0f, R * 2.0f, R, NiHudColor::White);
-	FLinearColor Core = NiHudColor::Black; Core.A = bBack ? 0.0f : 0.95f;
-	const float Ri = R - FMath::Max(2.0f, 2.0f * UiScale);
-	if (!bBack)
-	{
-		DrawRoundedBox(PX - Ri, PY - Ri, Ri * 2.0f, Ri * 2.0f, Ri, Core);
-	}
-	else
-	{
-		FLinearColor Hole = NiHudColor::Black; Hole.A = 0.35f;
-		DrawRoundedBox(PX - Ri, PY - Ri, Ri * 2.0f, Ri * 2.0f, Ri, Hole);
-	}
 }
 
 void ANiceInkHUD::DrawLaserTags(ANiceInkCharacter* MyChar)
