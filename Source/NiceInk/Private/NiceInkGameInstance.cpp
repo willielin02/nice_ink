@@ -258,6 +258,27 @@ void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)
 	}), FMath::Max(0.1f, DelaySeconds));
 }
 
+void UNiceInkGameInstance::NiDelayExec(float DelaySeconds, const FString& Command)
+{
+	TWeakObjectPtr<UGameInstance> WeakGI = this;
+	FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+		[WeakGI, Command](float) -> bool
+	{
+		UGameInstance* GI = WeakGI.Get();
+		UWorld* World = GI ? GI->GetWorld() : nullptr;
+		if (APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr)
+		{
+			PC->ConsoleCommand(Command);
+		}
+		return false; // 一次性
+	}), FMath::Max(0.1f, DelaySeconds));
+}
+
+void UNiceInkGameInstance::NiLeaveRoom()
+{
+	ReturnToMainMenu(FString());
+}
+
 void UNiceInkGameInstance::NiNotaryTest()
 {
 	// P1 公證接線自查（用法見標頭註解）。共享計數器活過整條 HTTP 鏈。

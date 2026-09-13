@@ -56,8 +56,13 @@ class Shots:
         return unreal.GameplayStatics.get_game_state(w) if w else None
 
     def shot(self, name):
+        # **HighResShot 不含 Slate UI**（2026-09-08 血價；09-09 才發現這一支沒跟上——
+        # robo_ui_shots_all.py 當天改好了，兄弟檔沒改 ⇒ 本檔從那天起拍的每一張都沒有 HUD，
+        # 而畫面本身是好的＝**工具對受測物是瞎的，卻照樣交出綠燈**）。
+        # 'Shot showui' 必須走 PlayerController 的 exec 鏈 ⇒ 第三個參數 specific_player。
+        pc = unreal.GameplayStatics.get_player_controller(self.server(), 0)
         unreal.SystemLibrary.execute_console_command(
-            self.server(), "HighResShot 1920x1080 filename=uishot_%s" % name)
+            self.server(), "Shot showui filename=uishot_%s" % name, pc)
         log("SHOT uishot_%s" % name)
 
     def tick(self, dt):

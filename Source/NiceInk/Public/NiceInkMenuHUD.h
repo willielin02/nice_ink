@@ -63,6 +63,13 @@ private:
 	UPROPERTY() TObjectPtr<UFont> MenuFont;
 	// 標誌字貼圖（Slate brush 不保 GC；UPROPERTY 錨住）
 	UPROPERTY() TObjectPtr<UTexture2D> LogoTex;
+	// 鍵帽（2026-09-10：局內與選單同一顆；Slate brush 不保 GC ⇒ 錨在這裡）
+	UPROPERTY() TObjectPtr<UTexture2D> KeycapTex;
+	// 一顆鍵一張（2026-09-11 十修；與局內 ANiceInkHUD::KeyTexCache 同一套）
+	UPROPERTY() TMap<FName, TObjectPtr<UTexture2D>> KeyTexCache;
+public:
+	UTexture2D* GetKeyTex(const FString& Key);
+private:
 	UFont* BuildMenuFont();
 
 	// 64×1 水平漸層（alpha：前 45% 維持峰值，其後 smoothstep 收到 0）；runtime 生成

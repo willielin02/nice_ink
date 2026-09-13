@@ -4,6 +4,7 @@
 #include "Widgets/SCompoundWidget.h"
 #include "Widgets/DeclarativeSyntaxSupport.h"
 #include "Fonts/SlateFontInfo.h"
+#include "NiceInkKeycapData.h"
 
 class ANiceInkHUD;
 class UFont;
@@ -45,6 +46,65 @@ namespace NiSlate
 
 	/** 展示體的大寫字高（設計單位）——版面的比例一律對這個量取，不對名目字級取。 */
 	float DisplayCapHeight(const FSlateFontInfo& Info);
+
+	/**
+	 * 鍵帽的寬度規則（2026-09-10 實測九款，見 UI_SYSTEM §15.13）。**三個載體共用這一支**。
+	 *
+	 * - **單一字母＝正方形**。參照無一例外：PEAK 21×21（1/2/3/4 四顆逐位相同）、
+	 *   Meccha 23×23、RV There Yet ~25×25。此前我們讓字寬決定帽寬 ⇒ F 27／G 31＝
+	 *   同樣是一個字母卻兩種寬度、右緣看起來沒對齊（user 指出）。
+	 * - **多字母＝寬度上限 1.75×高**（Meccha SPACE 實測 42×24＝1.75、SHIFT ~1.5、
+	 *   Liar's Bar TAB 48×27＝1.78；他們的 ESC 甚至是 39×38＝方的，字縮小塞進去）。
+	 *   我們此前 ENTER 是 77×24＝**3.2**，那不是鍵帽，是一條。
+	 * - 長鍵改用**展示體**（Oswald 壓縮大寫）並自動縮字級到塞得下為止——這正是
+	 *   Meccha 的 SPACE／SHIFT 在做的事（同一個盒子裡放更多字母，只能靠壓縮體）。
+	 *
+	 * @param Font    複合 UI 字體（局內與選單同一座）
+	 * @param Key     鍵名（"F"／"ENTER"／"WASD"）
+	 * @param InOutFont 進去是預設字體，出來是實際該用的（長鍵會被換成縮小的展示體）
+	 * @return 鍵帽寬度（設計單位）
+	 */
+	// DpiScale＝這個 widget 真正被畫出來的縮放（GameViewport->GetDPIScale()）。**必須帶**：
+	// 全站普查抓到 ENTER 留白 4/3 而 ESC 6/4、單字母 5/6——排版用的是小數前進寬，渲染時每個
+	// 字形貼到整數像素，非整數縮放下每個字母漂 ~1px，五個字母就是 5px。用真實縮放去問字型快取，
+	// 拿到的才是渲染器實際用的前進寬。
+	// OutTextLeftPad：把字放進帽裡時，文字方塊的左內距（設計單位），讓**墨跡**（不是前進框）
+	// 左右各留 KeycapPad。普查量到 Slate 渲染出來的多字母比 FSlateFontMeasure 量到的寬 ~1.3px/字
+	//（ENTER +5.6、SHIFT +7.3、TAB +5.3、ESC +3.9，單字母 ±0），所以寬度與位置都改成直接讀
+	// 字型快取在真實縮放下的字形度量（XAdvance／HorizontalOffset／USize）＝渲染器實際用的那一套。
+	float KeycapWidth(class UFont* Font, const FString& Key, FSlateFontInfo& InOutFont, float DpiScale = 1.0f);
+
+	/** 遊戲視口目前的 Slate DPI 縮放（UserInterfaceSettings 的曲線；沒有視口＝1）。
+	 *  ⚠ 不要拿它去算在建立時就固定的版面值：視窗之後被拉大，值就過期（2026-09-11 鍵帽血價）。 */
+	float ViewportDpiScale(const class UWorld* World);
+
+	// Noto Sans（Bold）的大寫字高／em（OS/2 sCapHeight ÷ unitsPerEm，fontTools 讀出）。
+	constexpr float BodyCapPerEm = 0.714f;
+
+	/**
+	 * 鍵名要往上抬多少（設計單位），大寫墨跡才會在鍵帽裡垂直置中。
+	 * STextBlock 置中的是**行框**（上伸部＋下伸部，複合字體裡還被 CJK 面撐高），大寫墨跡只占基線以上
+	 * 的 0.714em ⇒ 落在中線之下。1080p 湊巧量到 5/5，user 的 2560×1380 實測 **9/5**（七修被打回）。
+	 * 用 Slate 自己在該縮放下的行高與基線去算，不用字型檔常數猜。
+	 */
+	float KeycapTextLift(const FSlateFontInfo& Font, float DpiScale);
+
+	/**
+	 * **十修（2026-09-11）：一顆鍵一張貼圖，字烘在圖裡。**
+	 * user 視窗（2560×1380、縮放 1.234）實測 ESC 上／下 6／5、C 7／6，而且 C 帽 25px、ESC 帽 26px。
+	 * 病不在任何常數：Slate 把盒子貼齊整數像素、又把每個字形各自貼齊整數像素，兩次取整互相獨立
+	 * ⇒ 帽高 26 配字高 15 剩 11＝奇數，怎麼擺都 6／5。KeycapTextLift 調的是連續值，病是離散的。
+	 * 正解＝字畫進帽裡、整顆帽當一張圖重取樣（PEAK／Kenney Input Prompts 的做法）：上下邊緣的
+	 * 半像素灰一樣深 ⇒ 對稱是構造保證。貼圖與尺寸表由 Tools/AssetPrep/keycap_texture.py 生成
+	 *（NiKeycapData）；表裡沒有的鍵名退回 9-slice＋Slate 排字。
+	 *
+	 * 回傳的貼圖**沒有人保 GC**——呼叫端要存進 UPROPERTY（HUD 的 KeyTexCache）。
+	 * 只有一態：不可按＝同一張圖 × NiUi::KeycapDimAlpha（十一修）。
+	 */
+	class UTexture2D* LoadKeycapTex(const FString& Key);
+
+	/** 該貼圖的 brush（UV 只取帽那一段、ImageSize＝盒的設計尺寸）；依貼圖快取。 */
+	const FSlateBrush* KeycapImageBrush(class UTexture* Tex, const NiKeycapData::FEntry& E);
 
 	/**
 	 * 把「墨跡到墨跡」的距離換算成 Slate 的 slot padding。

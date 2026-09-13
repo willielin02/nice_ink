@@ -38,13 +38,26 @@ public:
 	// 名冊臉肖像（快取鍵＝roster<idx>；貼圖自名冊路徑載入）
 	UTexture* GetPortraitRoster(int32 AvatarIdx);
 
+	// 校準儀器：把快取肖像寫成 PNG（Saved/Portraits/<Sub>/<key>.png；主控台 NiPortraitDump）
+	int32 DumpCache(const FString& SubDir) const;
+	void ClearCache() { Cache.Empty(); CachePixels.Empty(); }
+
 	// --- 取景旋鈕（2026-08-12 user 定案：正交＋頭部精準裁切＋透明背景
 	// ＝icon 就是頭的形狀，不是方形照片）---
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float AimZCm = 64.0f;         // 瞄準點＝actor 中心上方（頭的高度）
+	float AimZCm = 56.0f;         // 瞄準點＝actor 中心上方；2026-09-11 64→56：框要蓋到頭島（含脖子）的最底，不然頭島被框底切平
+
+	// 投影（2026-09-11 user 從五檔並排選定「上排中間」＝90mm 等效人像鏡頭）：透視、相機離瞄準點 130cm、
+	// 水平視角 29.2°（臉面離相機 ≈115 ⇒ 框寬 ≈60cm）。FovDeg<=0 ＝退回正交（OrthoWidthCm）。
+	// 五檔對照圖 Saved/UiMock/portrait_projection_sheet.png；診斷 cvar ni.PortraitFov／ni.PortraitCamDist 可暫時蓋過。
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
+	float FovDeg = 29.2f;
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
-	float OrthoWidthCm = 46.0f;   // 正交取景寬≈頭寬＋餘裕（肩膀擠出框＝裁切恰好頭部）
+	float CamDistanceCm = 130.0f;
+
+	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
+	float OrthoWidthCm = 64.0f;   // 正交取景寬；2026-09-11 46→64：身體已收掉，框只要裝得下整顆頭島，裁切由 bbox 做
 
 	UPROPERTY(EditAnywhere, Category = "Nice Ink|Portrait")
 	float AmbientIntensity = 5.0f; // 均勻環境光＝天光強度（灰 cubemap 全方向恆定；
@@ -92,6 +105,12 @@ private:
 	UPROPERTY() TMap<int32, TObjectPtr<UTexture2D>> RosterOpen;
 
 	int32 TicksAlive = 0; // 姿勢系統跑穩前不出片（前幾拍＝參考姿勢）
+	int32 DummyTick0 = 0; // 替身生成時的 TicksAlive（替身要 tick 過才出片）
+
+	// 校準用：成品像素（sRGB；邊長）＝DumpCache 寫 PNG 的來源（成品貼圖上傳後 bulk data 不可讀）
+	TMap<FString, TPair<int32, TArray<FColor>>> CachePixels;
+	TArray<FColor> LastPixels;
+	int32 LastSide = 0;
 
 	void EnsureDummy();
 	// 正交捕捉→CPU alpha 裁切→膚色錨定自動曝光→透明背景頭形貼圖

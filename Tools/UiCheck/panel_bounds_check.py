@@ -43,6 +43,10 @@ def check(path):
 
 
 if __name__ == "__main__":
+    # 沒給圖＝什麼都沒量，而它此前照樣 exit 0（空洞契約：閘門不能在沒有受測物時報成功）
+    if len(sys.argv) < 2:
+        print(__doc__.strip().splitlines()[-1])
+        sys.exit(2)
     bad = 0
     for p in sys.argv[1:]:
         r = check(p)

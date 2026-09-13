@@ -111,6 +111,15 @@
 - **PoseableMesh 讀到上一幀**：`SetBoneTransform` 後立刻 `GetBoneTransform` 拿到的是舊快取
   → 每個「寫姿勢→讀骨骼」之間插 `RefreshBoneTransforms()`；元件的 `AddWorldOffset` 會跨次累積
   → 重擺前先 `SetRelativeLocationAndRotation` 還原。
+- **`AGameMode` 的重連機制會把你的 PlayerState 欄位全部歸零**（2026-09-13 血價，user：「退出再重進有 BUG」）：
+  Logout 時引擎把 PlayerState `Duplicate()` 成 inactive 副本，同一人重進時 `FindInactivePlayer` 把副本換回去——
+  `Duplicate()` 只跑 `APlayerState::CopyProperties`（分數／名字／UniqueId），**自訂 UPROPERTY 一個都不抄**；而交換發生在
+  `Super::PostLogin` 裡＝你在 PostLogin 派好的席位被整個丟掉。症狀＝重進的人 SeatIndex −1 ⇒ 臉分發不起跑 ⇒ 現身閘永不放行
+  ⇒ 全房看不見他、席位格有名無臉，**沒有任何 Warning**。修＝覆寫 `CopyProperties` 抄身分欄位＋PostLogin 開頭先自己叫
+  `FindInactivePlayer`。**凡「無聲失敗」先加三支狀態 log（誰派席、誰起跑、HUD 看到什麼）再猜**——這隻猜了三輪，log 一次定罪。
+  **同日 user 定案把整個重連保留關掉**（`AddInactivePlayer` 覆寫成空）：大廳外不准中途加入、大廳裡沒有值得保留的狀態，
+  這機制對我們零收益；規則＝房主第一、其餘進房先後、離開後面補、回來的人拿新席位排最後。**沿用引擎送的機制前先問
+  「我們有什麼需要保留的」——預設值不是決定。**
 - **Listen server 的 Server RPC 同幀執行**：主機按鍵觸發的 RPC 當場生效，同一次
   `WasInputKeyJustPressed` 會被同 Tick 後面的輪詢再讀一次（進鎖鍵被當成起身鍵）
   → 狀態切換後設 0.25s 寬限期再受理反向輸入。遠端客戶端因 RPC 延遲天然免疫——
@@ -648,7 +657,7 @@
   albedo、亮度與光強解耦）＋ACES+Saturation 1.15＋unsharp 五官增顯；ONNX
   模型開機背景預熱（無臉玩家才預熱、GIsEditor 閘、與 RunIntake 同鎖；實測
   14.4s）；大廳=名字 FitTok 寬度截斷（七繪製點、.Left 碼元截斷退役）/房主
-  host 金綴（PlayerState.bIsRoomHost）/房間人數 4~6（房主直接決定、坐滿關門；
+  host 金綴（PlayerState.bIsRoomHost；**09-11 起大廳不標房主＝最左即房主，09-13 起離開遞補、回來重新排隊＝SPEC #61**）/房間人數 4~6（房主直接決定、坐滿關門；
   開局門檻 4=規則藏開始鈕、PIE 維持 2 服務 robo）/ESC 房主踢人＋KickedNetIds
   本場拒再入；**LAN 搜房真兇修**（見陷阱年鑑「引擎的 match≠遊戲的局」）=
   NiceInkGameSession no-op＋GameMode::SetSessionInProgress 鏡射真開局/回大廳；

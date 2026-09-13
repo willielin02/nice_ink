@@ -19,6 +19,7 @@
 #include "NiceInkSaveGame.h"
 #include "NiceInkSessionSubsystem.h"
 #include "NiceInkUiTokens.h"
+#include "SNiHud.h"   // NiSlate::KeycapWidth／KeycapImageBrush（此前靠 unity build 從別的 TU 撿到）
 #if PLATFORM_WINDOWS
 // 現代檔案對話框（IFileOpenDialog，Vista+）：引擎 DesktopPlatform 走
 // GetOpenFileNameW 古典模板＝高 DPI 下被點陣放大（2026-08-07 user 抓「畫質低」）
@@ -248,6 +249,7 @@ void SNiMenu::OpenJoinPage(const FString& PrefillCode)
 void SNiMenu::Construct(const FArguments& InArgs)
 {
 	OwnerPC = InArgs._OwnerPC;
+	MenuHud = InArgs._MenuHud;
 	MenuFont = InArgs._Font;
 	if (UTexture2D* Logo = InArgs._LogoTex.Get())
 	{
@@ -298,7 +300,20 @@ void SNiMenu::Construct(const FArguments& InArgs)
 	const float R = NiSpace::Radius;
 	CardBrush = MakeRounded(WithA(NiHudColor::White, 0.0f), R);
 	PageGroundBrush = MakeRounded(WithA(NiHudColor::White, 0.0f), R);
-	KeycapBrush = MakeOutlinedBrush(WithA(NiHudColor::Black, 0.70f), WithA(NiHudColor::White, 0.85f), 1.0f, R);   // 與局內 DrawKeycap 同形
+	// 鍵帽＝局內那張 9-slice 實心白（2026-09-10；user：「整個遊戲的按鍵指引都改成
+	// Meccha／PEAK 同款」）。此前選單自己是「深底＋白框」＝第三種鍵，註解還寫著
+	// 「與局內 DrawKeycap 同形」——那句從 09-08 局內 Slate 化那天起就不成立了。
+	if (UTexture2D* Cap = InArgs._KeycapTex.Get())
+	{
+		KeycapBrush.SetResourceObject(Cap);
+		KeycapBrush.DrawAs = ESlateBrushDrawType::Box;
+		KeycapBrush.Margin = FMargin(NiUi::KeycapSlice);
+		KeycapBrush.ImageSize = FVector2D(NiUi::KeycapH, NiUi::KeycapH);
+	}
+	else
+	{
+		KeycapBrush = MakeRounded(NiHudColor::Paper, R);
+	}
 	SlotBrush = MakeOutlinedBrush(WithA(NiHudColor::White, 0.05f), WithA(NiHudColor::White, 0.30f), 1.0f, R);   // 房碼格：1px 外框（10% 白底在深地上看不見）
 	RuleBrush = MakeRounded(NiHudColor::AccentText, 1.0f);
 	DividerBrush = MakeRounded(WithA(NiHudColor::White, 0.14f), 1.0f);
@@ -468,17 +483,64 @@ void SNiMenu::GoBack()
 
 TSharedRef<SWidget> SNiMenu::MakeKeycapHint(const FString& Key, const FString& Label)
 {
-	// 鍵帽＋動詞（Slate 版）。形式與局內 canvas 的 DrawKeycap 一致：
-	// **淺底圓角＋深色鍵名**，右邊接動詞。鍵名不翻譯（鍵盤上刻的就是那幾個字母），
-	// 動詞必須進字串表——這條規則兩個載體共用。
+	// 鍵帽＋動詞（Slate 版）：**實心白＋深色鍵名**，右邊接動詞。鍵名不翻譯（鍵盤上刻的
+	// 就是那幾個字母），動詞必須進字串表——這條規則兩個載體共用。
+	// 尺寸也走共用的 `NiSlate::KeycapWidth`（單鍵恆方／長鍵上限 1.75×高、字級自動縮）：
+	// 此前選單的 ESC 是 47×21＝2.24，而 Meccha 的 ESC 是 39×38＝方的。
+	// **十修：一顆鍵一張圖、字烘在裡面**（與局內 SNiKeycap 同一張貼圖、同一張表；見 NiSlate::LoadKeycapTex）
+	TSharedPtr<SWidget> CapW_Baked;
+	if (const NiKeycapData::FEntry* E = NiKeycapData::Find(Key))
+	{
+		if (UTexture2D* Tex = MenuHud.IsValid() ? MenuHud->GetKeyTex(Key) : nullptr)
+		{
+			CapW_Baked = SNew(SBox).WidthOverride(E->BoxW).HeightOverride(E->BoxH)
+				[
+					SNew(SImage).Image(NiSlate::KeycapImageBrush(Tex, *E))
+				];
+		}
+	}
+	if (CapW_Baked.IsValid())
+	{
+		return SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+			[
+				CapW_Baked.ToSharedRef()
+			]
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::S, 0, 0, 0)
+			[
+				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
+					.Text(FText::FromString(Label))
+			];
+	}
+
+	// 保底（表裡沒有的鍵名）：9-slice＋Slate 排字
+	FSlateFontInfo KeyFont = Ty(NiType::Label);
+	// 設計單位（縮放 1.0）算，不讀視窗 DPI——視窗建立後被拉大時，照 DPI 算死的值會全錯（見 SNiKeycap）
+	const float Dpi = 1.0f;
+	const float CapW = NiSlate::KeycapWidth(MenuFont.Get(), Key, KeyFont, Dpi);
+	// 與局內同一條規則：字置中、帽寬＝墨跡＋左右各 KeycapPad（＋渲染補償）、單字母方格；
+	// 垂直用 KeycapTextLift 把大寫墨跡抬到真正的中線
+	const EHorizontalAlignment TextAlign = HAlign_Center;
+	const float Lift = NiSlate::KeycapTextLift(KeyFont, Dpi);
+	const FMargin TextPad(0.0f, FMath::Max(0.0f, -2.0f * Lift), 0.0f, FMath::Max(0.0f, 2.0f * Lift));
+	TSharedRef<SBox> CapBox = SNew(SBox).HeightOverride(NiUi::KeycapH)
+		[
+			SNew(SBorder).BorderImage(&KeycapBrush)
+			.HAlign(TextAlign).VAlign(VAlign_Center)
+			.Padding(TextPad)
+			[
+				// 白帽深字、**不加陰影**（帽本身就是對比；白塊＋黑字＋硬陰影＝09-06 被
+				// 打回的「貼紙」）
+				SNew(STextBlock).Font(KeyFont).ColorAndOpacity(NiHudColor::Ink)
+					.Text(FText::FromString(Key))
+			]
+		];
+	if (CapW > 0.0f) { CapBox->SetWidthOverride(CapW); }
+
 	return SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 		[
-			SNew(SBorder).BorderImage(&KeycapBrush).Padding(FMargin(12, 4))
-			[
-				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::White)
-					.Text(FText::FromString(Key))
-			]
+			CapBox
 		]
 		+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::S, 0, 0, 0)
 		[

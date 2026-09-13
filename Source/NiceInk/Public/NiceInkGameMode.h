@@ -30,6 +30,10 @@ public:
 	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId,
 		FString& ErrorMessage) override;
 	virtual void Logout(AController* Exiting) override;
+	// 2026-09-13 user 定案：「位置完全等於排序，有人離開其他人遞補，他要重新排隊」⇒ 關掉引擎的重連保留
+	//（AGameMode 預設把離場者的 PlayerState 留五分鐘、同帳號回來換回去）。大廳外不准中途加入，大廳裡沒有任何
+	// 值得保留的狀態（現金在雲端、罰酒每局歸零、臉會重傳）⇒ 回來的人一律是新玩家、拿新席位、排最後。
+	virtual void AddInactivePlayer(APlayerState* PlayerState, APlayerController* PC) override {}
 	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
 		const FString& Options, const FString& Portal = TEXT("")) override;
 

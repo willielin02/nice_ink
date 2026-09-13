@@ -89,6 +89,10 @@ namespace NiType
 	constexpr int32 Heading = 32;
 	constexpr int32 Text    = 18;
 	constexpr int32 Small   = 13;
+	// 13 以下唯一的例外（2026-09-11 user：「玩家名稱的字體可以小一點」）：大廳席位格底下的玩家名。
+	// 名字是臉的註腳、不是被讀的內文（臉才是身分載體，08-06 定案雙載體），寬度又被 80 的格鎖住；
+	// 13 級的名字比格寬（Hanamichi 84 > 80）⇒ 左右各突出 2px，user 讀成「左側被切到」。
+	constexpr int32 Caption = 11;
 
 	constexpr FRole Display     {Hero,     60, true,  true,  true };  // 遊戲標題（主選單；有標誌貼圖時退居備援）
 	constexpr FRole Title       {48,       60, true,  true,  true };  // 頁標題：展示體大寫
@@ -100,6 +104,14 @@ namespace NiType
 	constexpr FRole Note        {Small,     0, false, false, false}; // 說明／狀態（White70）
 	constexpr FRole Label       {Small,   150, false, false, false}; // 區段標籤：小＋字距、不粗（粗會跟內文搶）
 	constexpr FRole Micro       {Small,     0, false, false, false}; // 版本戳（White25）
+	constexpr FRole NameTag     {Caption,   0, false, false, false}; // 席位格下的玩家名（白；與 Note 差字級＋透明度兩軸）
+
+	// **所有鍵名一個字體、一個字級**（2026-09-10；user：「按鍵的字體大小有均一致嗎？」→
+	// 「我要讓所有字高對齊改之前的 F、G」）＝ **Noto Sans Bold 13pt**，大寫字高 13px（0.54H）。
+	// 三修一度全改 Oswald 10pt（字高 11）——比原本的 F／G 矮 2px，user 指名要回到原本的高度。
+	// 長鍵不縮字：ENTER 在這個字級要 ~2.25×H，所以寬度檔位開到 2.25（見 NiUi::KeycapMaxRatio）。
+	// canvas 端（墨杯盤的 Q）走 ETextTier::Key，同一個數字換算成 px（Slate 是 pt）。
+	constexpr int32 KeyLabel = Small;
 
 	// 局內 canvas HUD 四級（同一張表；乘 UiScale 使用）
 	constexpr float HudDisplay = static_cast<float>(Hero);
@@ -115,8 +127,42 @@ namespace NiUi
 {
 	constexpr float U = 4.0f;
 
-	constexpr float KeycapH   = 8.0f * U;   // 32 鍵帽高
+	// **鍵帽高 32 → 24**（2026-09-10）：32 是量 Meccha 實物來的，但我只抄了鍵沒抄字——
+	// §15.12 實測「鍵高÷動詞字高」我們 2.0，而 RV 1.4／PEAK ~1.4／Meccha ~1.3
+	// ⇒ 同樣的畫法在我們這裡會比參照吵一倍。24 ＝ 6U（在網格上）、比 16px 的動詞字高 1.5 倍。
+	constexpr float KeycapH   = 6.0f * U;   // 24 鍵帽高
 	constexpr float KeycapR   = 1.0f * U;   //  4 鍵帽圓角＝全站唯一的圓角
+	// 鍵帽現制＝**實心白＋深色字**的 9-slice 貼圖 T_UI_Keycap／T_UI_KeycapDim
+	//（2026-09-10 三版，user：「把整個遊戲的按鍵指引都改成 Meccha／PEAK 同款」；
+	// 烘焙＝Tools/AssetPrep/keycap_texture.py，三版史與 09-06 的否決都寫在那支的檔頭）。
+	// **三個載體共用同一顆**：局內 Slate（SNiKeycap）／墨杯盤的 canvas（DrawKeycap）／主選單。
+	// **十修（2026-09-11）：字也烘進圖裡，一顆鍵一張**（/Game/UI/Keys/T_Key_<KEY>；尺寸表＝NiceInkKeycapData.h，
+	// 由烘焙腳本生成）。Slate 排字在非整數縮放下對盒子與字形各自取整 ⇒ 上下留白必有一顆差 1px（user 視窗實測
+	// ESC 6/5）；字進貼圖後整顆帽只取一次整＝對稱是構造保證。下面的 9-slice 與留白常數只剩表外鍵名的保底在用。
+	// **不可按＝可按的那張圖整顆乘透明度**（2026-09-11 十一修，user 定案：「在可按的樣子的基礎上調整透明度即可」）。
+	// 值與同一列的動詞文字、滑鼠圖示的不可按態同一個（0.45）＝整列一起退後，不是鍵自己換一種畫法。
+	// 09-10 的空心灰框版退役（當時理由＝乘 alpha 在障子牆上只剩 19 階對比；user 知情選擇）。
+	constexpr float KeycapDimAlpha = 0.45f;
+	constexpr float KeycapSlice = 0.375f;   // 9-slice 邊界（貼圖比例）＝角 12px、中間帶才拉伸
+	// **鍵帽寬度只准落在四檔**（2026-09-10）：1.0／1.25／1.5／1.75 × 高——這是真鍵盤的比例，
+	// Kenney 的同一套圖就是 1.00（字母／ENTER／ESC）、1.33（TAB）、1.50（SHIFT）、1.71（SPACE）；
+	// Meccha SPACE 實測 1.75、SHIFT ~1.5。「字寬＋留白」連續取值會讓每一顆鍵都是自己的寬度，
+	// 一欄看起來像量出來的不像設計的；四檔讓 ESC 與 TAB 同寬、ENTER 與 WASD 同寬。
+	// 我們此前 ENTER 77×24＝**3.2**＝把一個單字撐成一條。單鍵一律 1.0（正方形）。
+	// 規則住 NiSlate::KeycapWidth（三個載體共用）。
+	// **字與帽邊的留白＝所有鍵同一個值**（2026-09-10 五修；user：「多字母的鍵的字與邊框之間的距離
+	// 有與單字母的鍵統一嗎？」——沒有：單字母 7~8、多字母 4~5，因為多字母是跳到「剛好塞得下」的檔位）。
+	// 現制：多字母寬度＝字寬＋2×KeycapPad，**不再跳檔**；單字母維持方格（Noto Bold 13 的大寫
+	// 平均 ~12px 寬 ⇒ 方格裡的留白 ≈ (24−12)/2 = 6，與 KeycapPad 同值 ⇒ 兩種鍵留白視覺一致；
+	// F 這種窄字母會多 1~2px，那是方格的天性，每一把鍵盤都如此）。
+	// 離散檔位（1.0/1.25/…）退役：它與「留白一致」互斥——檔位保證的是寬度的整齊，不是留白的整齊。
+	constexpr float KeycapPad      = 1.5f * U;    // 6：字與帽邊的左右留白（單字母／多字母同值）
+	// 全站普查（§15.13 六修）：Slate 畫出來的字串比它任何量測 API 寬 ~0.5px/字（ENTER +2.5、SHIFT +2）。
+	// 字**置中**放（誤差左右對分），帽寬再補這個差 ⇒ 左右留白回到 6±0.5。
+	constexpr float KeycapRenderSlackPerChar = 0.5f;
+	// 上限只防呆（超長鍵名）。2.75 那版把 ENTER（需 67）鉗到 66 ⇒ 全站普查量到它的留白 3/3
+	// 而別顆 5/6——**鉗位一咬到，留白就不一致**；留白一致是 user 的要求，寬度不是。
+	constexpr float KeycapMaxRatio = 4.0f;
 	constexpr float Margin    = 6.0f * U;   // 24 四邊共用邊距
 	constexpr float RowPitch  = 16.0f * U;  // 64 操作提示的列距
 	constexpr float GapS      = 1.0f * U;   //  4 glyph↔動詞、鍵帽之間
@@ -124,6 +170,17 @@ namespace NiUi
 	constexpr float GapL      = 4.0f * U;   // 16 段落之間
 	constexpr float FaceS     = 6.0f * U;   // 24 上緣受害者臉
 	constexpr float FaceM     = 16.0f * U;  // 64 列表的臉（大廳席位）
+	// 大廳席位格（2026-09-11 user 定案：「放上該房間對應人數的框框，依進入順序填入大頭」；同日二修：
+	// 「不要標，所有人的框框一模一樣，固定順序，最左邊就是房主」）。
+	// 格＝臉 64 ＋ 四邊 8 ＝ 80；黑 25% 圓角底、**無外框**（三修 user：「格子不需要框框，無論有沒有人」）。房主不另標
+	//（九款調查：PEAK／Lethal／Content Warning／Liar's Bar 這一派合作派對遊戲都不標，房主＝能按 START 的人）。
+	// §11 原文：「底部一排臉（空位＝黑 25% 淡框）」。
+	// 五修（09-11 user：「需要更大一點的頭貼」→ 選 80）：大廳臉 64→80。80 是 64（列表）與 96（揭曉）之間唯一
+	// 落在 4px 網格上又保住「大廳 < 揭曉」階梯的值；用 96 等於宣告大廳跟認人的時刻一樣重要。
+	constexpr float FaceSeat  = 20.0f * U;  // 80 大廳席位的臉
+	constexpr float SeatPad   = 2.0f * U;   //  8 臉到格邊
+	constexpr float SeatFrame = FaceSeat + 2.0f * SeatPad;   // 96
+	constexpr float SeatPitch = 32.0f * U;  // 128 席距（格 96 ＋ 間隙 32；12.9 二修的 112 是格 80 時的值）
 	constexpr float FaceL     = 24.0f * U;  // 96 揭曉的臉
 	constexpr float Radius    = 1.0f * U;   //  4 全站唯一的圓角（面板、chip、鍵帽同值）
 	constexpr float ModalDim  = 0.62f;      // 模態底（黑 62%）

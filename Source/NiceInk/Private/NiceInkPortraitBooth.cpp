@@ -19,6 +19,27 @@
 #include "InkCanvasComponent.h"
 #include "NiceInkCharacter.h"
 #include "NiceInkTypes.h"
+#include "NeckStretchComponent.h"
+#include "NiceInkFaceShare.h"
+#include "Engine/Texture2D.h"
+#include "HAL/IConsoleManager.h"
+#include "ImageCore.h"
+#include "Misc/Paths.h"
+#include "HAL/FileManager.h"
+
+// A/B 診斷：0＝不收身體（舊 v4 畫面）
+static TAutoConsoleVariable<int32> CVarNiPortraitCollapseBody(
+	TEXT("ni.PortraitCollapseBody"), 1, TEXT("Portrait booth: collapse non-head bones before capture (1) or not (0)."));
+
+// A/B 診斷：0＝不做深度遮罩（身體已收掉時，遮罩只會在頭島的脖子上再切一刀）
+static TAutoConsoleVariable<int32> CVarNiPortraitDepthMask(
+	TEXT("ni.PortraitDepthMask"), 1, TEXT("Portrait booth: apply the SceneDepth shoulder mask (1) or not (0)."));
+
+// A/B 診斷：投影方式。Fov<=0＝正交（出貨值）；>0＝透視，配 CamDist（相機到瞄準點的距離，cm）
+static TAutoConsoleVariable<float> CVarNiPortraitFov(
+	TEXT("ni.PortraitFov"), -1.0f, TEXT("Portrait booth override: <0 = use FovDeg property; 0 = orthographic; >0 = perspective horizontal FOV (deg)."));
+static TAutoConsoleVariable<float> CVarNiPortraitCamDist(
+	TEXT("ni.PortraitCamDist"), -1.0f, TEXT("Portrait booth override: <=0 = use CamDistanceCm property; else camera distance to aim point (cm)."));
 
 ANiceInkPortraitBooth::ANiceInkPortraitBooth()
 {
@@ -114,6 +135,12 @@ void ANiceInkPortraitBooth::EnsureDummy()
 	}
 	Dummy->FinishSpawning(SpawnT);
 	Dummy->SetupAsMenuDummy(0);
+	DummyTick0 = TicksAlive; // 替身要先 tick 幾拍：站立替身（BowBody 骨骼身體）在它的第一個 UpdateWalkAnim 才接管顯示
+	// 頭像＝頭本人：程序化脖（頭身切縫之間的銜接曲面）不入鏡（2026-09-11，見 CaptureNow 的收身段）
+	if (UNeckStretchComponent* Neck = Dummy->GetNeckStretch())
+	{
+		Neck->SetVisibility(false);
+	}
 
 	// 光照全隔離：替身所有面件只吃通道 2（世界的平行光/天光照不到＝
 	// 肖像亮度跨關卡恆定；亭燈也只打通道 2＝不漏進世界）
@@ -132,8 +159,14 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 	}
 	// 取景：明確旋鈕瞄準（actor 中心+AimZ＝頭高；骨骼查詢在診斷輪證實不穩）
 	const FVector Aim = Dummy->GetActorLocation() + FVector(0, 0, AimZCm);
-	const FVector CamPos = Aim + FVector(-200.0f, 0, 0); // 正交＝距離不影響構圖
+	const float FovCVar = CVarNiPortraitFov.GetValueOnGameThread();
+	const float Fov = (FovCVar >= 0.0f) ? FovCVar : FovDeg;                 // 出貨值＝FovDeg（90mm 等效）；cvar 只做 A/B
+	const float DistCVar = CVarNiPortraitCamDist.GetValueOnGameThread();
+	const float Dist = (Fov > 0.0f) ? ((DistCVar > 0.0f) ? DistCVar : CamDistanceCm) : 200.0f; // 正交＝距離不影響構圖
+	const FVector CamPos = Aim + FVector(-Dist, 0, 0);
 	Capture->SetWorldLocationAndRotation(CamPos, (Aim - CamPos).Rotation());
+	Capture->ProjectionType = (Fov > 0.0f) ? ECameraProjectionMode::Perspective : ECameraProjectionMode::Orthographic;
+	Capture->FOVAngle = (Fov > 0.0f) ? Fov : 90.0f;
 	Capture->OrthoWidth = OrthoWidthCm;
 
 	// 時間隔離開燈（本函式全同步、主視口在幀尾才渲染＝世界看不到）：
@@ -161,8 +194,50 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 	// 指定 cubemap 的濾波處理是排隊制——捕捉前強制出隊（首烘不吃黑片）
 	USkyLightComponent::UpdateSkyCaptureContents(GetWorld());
 
+	// **頭以外的身體部位隱形**（2026-09-11 user：「在原來的基礎上只動一件事：把頭以外的身體部位標記上去並讓他們
+	// 隱形，讓下巴輪廓自然地呈現，不要硬用直線截出頭部區域」）。做法＝可擺骨網格上把 Hips 以下整條鏈縮到 0.001
+	//（軀幹、四肢、褌、彈跳骨全部塌成骨盆位置的一點＝在頭下方一公尺、框外），再把 Head 的元件空間變換原樣寫回
+	//（Poseable 的 SetBoneTransformByName(ComponentSpace) 會把 local 反推成相對於縮小後父骨的巨大值 ⇒ 頭留在原位）。
+	// 頭島的邊界就是手標切縫（NeckSeamData 的 84 環）＝下巴到頸的弧線由網格自己給，沒有任何一條人畫的線。
+	// 拍完立刻還原（替身的姿勢系統下一 tick 還要在這具骨架上算）。
+	UPoseableMeshComponent* PM = Dummy->GetBowBody();
+	const bool bCollapse = PM && CVarNiPortraitCollapseBody.GetValueOnGameThread() != 0;
+	FTransform HipsCS0, HeadCS0;
+	if (bCollapse)
+	{
+		HipsCS0 = PM->GetBoneTransformByName(TEXT("Hips"), EBoneSpaces::ComponentSpace);
+		HeadCS0 = PM->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::ComponentSpace);
+		FTransform HipsTiny = HipsCS0;
+		HipsTiny.SetScale3D(FVector(0.001f));
+		PM->SetBoneTransformByName(TEXT("Hips"), HipsTiny, EBoneSpaces::ComponentSpace);
+		PM->RefreshBoneTransforms();   // 寫→讀之間必須 refresh（PoseableMesh 讀到上一幀＝陷阱年鑑）
+		PM->SetBoneTransformByName(TEXT("Head"), HeadCS0, EBoneSpaces::ComponentSpace);
+		PM->RefreshBoneTransforms();
+	}
+	ON_SCOPE_EXIT
+	{
+		if (bCollapse)
+		{
+			// 兩根都寫回（Head 的 local 在收身時被反推成巨大值，不還原會在下一次烘焙時把頭炸飛）
+			PM->SetBoneTransformByName(TEXT("Hips"), HipsCS0, EBoneSpaces::ComponentSpace);
+			PM->RefreshBoneTransforms();
+			PM->SetBoneTransformByName(TEXT("Head"), HeadCS0, EBoneSpaces::ComponentSpace);
+			PM->RefreshBoneTransforms();
+		}
+	};
+
+	// **只拍 BowBody 這一個元件**（2026-09-11 定罪：ShowOnlyActors 會把替身身上所有面件都拍進去——靜態 Body
+	// 網格在某些 tick 仍可見、與骨骼身體同姿重疊 ⇒ 骨骼上做的任何收身都被靜態網格原樣蓋回去，看起來像沒生效）。
 	Capture->ShowOnlyActors.Reset();
-	Capture->ShowOnlyActors.Add(Dummy);
+	Capture->ShowOnlyComponents.Reset();
+	if (PM)
+	{
+		Capture->ShowOnlyComponents.Add(PM);
+	}
+	else
+	{
+		Capture->ShowOnlyActors.Add(Dummy);
+	}
 	Capture->PrimitiveRenderMode = ESceneCapturePrimitiveRenderMode::PRM_UseShowOnlyList;
 
 	if (!ScratchRT)
@@ -195,7 +270,9 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 	Capture->CaptureSource = ESceneCaptureSource::SCS_SceneDepth;
 	Capture->CaptureScene();
 	TArray<FLinearColor> DepthPx;
-	const bool bDepthOk = Res->ReadLinearColorPixels(DepthPx) && DepthPx.Num() == Pixels.Num();
+	// 身體已在骨骼上收掉時不做深度遮罩：它只會在頭島自己的脖子上再切一刀（2026-09-11）
+	const bool bDepthOk = !bCollapse && CVarNiPortraitDepthMask.GetValueOnGameThread() != 0
+		&& Res->ReadLinearColorPixels(DepthPx) && DepthPx.Num() == Pixels.Num();
 	Capture->CaptureSource = ESceneCaptureSource::SCS_SceneColorHDR; // 還原
 	if (bDepthOk)
 	{
@@ -249,102 +326,8 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 		return nullptr; // 空片（替身還沒就位？）——不記快取、下次再烘
 	}
 
-	// 肩膀切除三代（血價註記：v1「寬過頭寬」被腮幫誤觸、v2「碰框」被臉旁
-	// 的肩丘誤觸——相撲的肩與頭同高、列判準原理上分不開）。正解＝兩步：
-	// ①中央帶遮罩：頭寬取自「未碰框的上段列」，帶外一律清透明＝臉旁肩丘消失；
-	// ②帶內找頸窄點：寬度剖面=腮寬→頸縮→胸寬，谷底=頸＝解剖切點，其下裁掉。
-	int32 EdgeY = MaxY + 1; // 第一個碰框列（無碰框＝框內無肩＝不切）
-	for (int32 Y = MinY; Y <= MaxY; ++Y)
-	{
-		if ((1.0f - Pixels[Y * PortraitSize + 0].A > 0.1f) ||
-			(1.0f - Pixels[Y * PortraitSize + 1].A > 0.1f) ||
-			(1.0f - Pixels[Y * PortraitSize + (PortraitSize - 1)].A > 0.1f) ||
-			(1.0f - Pixels[Y * PortraitSize + (PortraitSize - 2)].A > 0.1f))
-		{
-			EdgeY = Y;
-			break;
-		}
-	}
-	if (EdgeY > MinY && EdgeY <= MaxY)
-	{
-		// ①頭的中央帶（碰框列之前的水平界）＋帶外清透明（A=1＝空，inverse opacity）
-		int32 HeadX0 = PortraitSize, HeadX1 = -1;
-		for (int32 Y = MinY; Y < EdgeY; ++Y)
-		{
-			for (int32 X = 0; X < PortraitSize; ++X)
-			{
-				if (1.0f - Pixels[Y * PortraitSize + X].A > 0.1f)
-				{
-					HeadX0 = FMath::Min(HeadX0, X);
-					HeadX1 = FMath::Max(HeadX1, X);
-				}
-			}
-		}
-		if (HeadX1 >= HeadX0)
-		{
-			HeadX0 = FMath::Max(0, HeadX0 - 2);
-			HeadX1 = FMath::Min(PortraitSize - 1, HeadX1 + 2);
-			for (int32 Y = 0; Y < PortraitSize; ++Y)
-			{
-				for (int32 X = 0; X < PortraitSize; ++X)
-				{
-					if (X < HeadX0 || X > HeadX1)
-					{
-						Pixels[Y * PortraitSize + X].A = 1.0f;
-					}
-				}
-			}
-			// ②帶內寬度剖面：腮峰（上段最寬列）→往下找頸谷（最窄列）→其下裁
-			auto BandWidth = [&](int32 Y)
-			{
-				int32 W = 0;
-				for (int32 X = HeadX0; X <= HeadX1; ++X)
-				{
-					if (1.0f - Pixels[Y * PortraitSize + X].A > 0.1f) { ++W; }
-				}
-				return W;
-			};
-			int32 CheekRow = MinY, CheekW = 0;
-			const int32 CheekSearchEnd = FMath::Min(EdgeY + 10, MaxY);
-			for (int32 Y = MinY; Y <= CheekSearchEnd; ++Y)
-			{
-				const int32 W = BandWidth(Y);
-				if (W > CheekW) { CheekW = W; CheekRow = Y; }
-			}
-			int32 NeckRow = CheekRow, NeckW = CheekW;
-			const int32 NeckSearchEnd = FMath::Min(CheekRow + 60, MaxY);
-			for (int32 Y = CheekRow; Y <= NeckSearchEnd; ++Y)
-			{
-				const int32 W = BandWidth(Y);
-				if (W < NeckW) { NeckW = W; NeckRow = Y; }
-			}
-			if (NeckRow > CheekRow)
-			{
-				MaxY = NeckRow;
-			}
-
-			// ③每列只留「含中線的連續段」：下顎兩側殘存的肩楔與頭輪廓之間
-			// 有背景縫＝離散段，清掉（頭每列必是跨中線的單一連續段）
-			const int32 MidX = (HeadX0 + HeadX1) / 2;
-			for (int32 Y = MinY; Y <= MaxY; ++Y)
-			{
-				int32 RunL = MidX, RunR = MidX;
-				const bool bMidSolid = 1.0f - Pixels[Y * PortraitSize + MidX].A > 0.1f;
-				if (bMidSolid)
-				{
-					while (RunL > HeadX0 && 1.0f - Pixels[Y * PortraitSize + RunL - 1].A > 0.1f) { --RunL; }
-					while (RunR < HeadX1 && 1.0f - Pixels[Y * PortraitSize + RunR + 1].A > 0.1f) { ++RunR; }
-				}
-				for (int32 X = HeadX0; X <= HeadX1; ++X)
-				{
-					if (!bMidSolid || X < RunL || X > RunR)
-					{
-						Pixels[Y * PortraitSize + X].A = 1.0f;
-					}
-				}
-			}
-		}
-	}
+	// 肩膀切除三代（中央帶／頸窄點／中線連續段）**整套退役**（2026-09-11 user：「不要硬用直線截出頭部區域」）。
+	// 現制＝拍之前就把頭以外的身體收掉（CaptureNow 的收身段），畫面裡只剩頭，下巴輪廓是網格自己的。
 
 	// 第二趟：只在保留列段內取水平界（肩膀列可能撐寬過 X 界）
 	int32 MinX = PortraitSize, MaxX = -1;
@@ -494,10 +477,26 @@ UTexture2D* ANiceInkPortraitBooth::CaptureNow(const FLinearColor& Tone)
 		Out[i] = Lin[i].ToFColor(/*bSRGB=*/true);
 	}
 
-	FCreateTexture2DParameters Params;
-	Params.bUseAlpha = true;
-	Params.bSRGB = true;
-	return FImageUtils::CreateTexture2D(Side, Side, Out, this, FString(), RF_NoFlags, Params);
+	LastPixels = Out;
+	LastSide = Side;
+	// 成品用 CreateTransient 直填 mip0（2026-09-11）：此前走 FImageUtils::CreateTexture2D＝帶 Source 的貼圖，
+	// 在編輯器二進位（-game）下要**非同步編譯**平台資料，編好之前資源是佔位＝畫面上一格灰棋盤
+	//（進房時間軸 t=32s 實拍抓到）。Transient 貼圖沒有 Source、UpdateResource 當幀就有 RHI 資源。
+	UTexture2D* Tex = UTexture2D::CreateTransient(Side, Side, PF_B8G8R8A8);
+	if (!Tex)
+	{
+		return nullptr;
+	}
+	Tex->SRGB = true;
+	Tex->NeverStream = true;
+	Tex->Filter = TF_Trilinear;
+	if (void* Mip0 = Tex->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE))
+	{
+		FMemory::Memcpy(Mip0, Out.GetData(), Out.Num() * sizeof(FColor));
+	}
+	Tex->GetPlatformData()->Mips[0].BulkData.Unlock();
+	Tex->UpdateResource();
+	return Tex;
 }
 
 UTexture* ANiceInkPortraitBooth::GetPortraitKeyed(const FString& Key, UTexture2D* Open,
@@ -505,7 +504,9 @@ UTexture* ANiceInkPortraitBooth::GetPortraitKeyed(const FString& Key, UTexture2D
 {
 	if (const TObjectPtr<UTexture2D>* Found = Cache.Find(Key))
 	{
-		return *Found;
+		// 資源還是引擎的佔位（編譯中／初始化中）＝對呼叫端而言「還沒有」——寧可空一幀，不畫棋盤
+		UTexture2D* T = *Found;
+		return (T && !T->IsDefaultTexture() && T->GetResource()) ? T : nullptr;
 	}
 	if (!Open || TicksAlive < 3)
 	{
@@ -516,6 +517,12 @@ UTexture* ANiceInkPortraitBooth::GetPortraitKeyed(const FString& Key, UTexture2D
 	{
 		return nullptr;
 	}
+	// **替身生成當幀不出片**（2026-09-11 定罪）：舊制第一張永遠在替身還沒 tick 過就拍＝拍到的是靜態 Body
+	// 網格（無骨骼），之後的才是 BowBody——同一房的肖像來源不一致。等它 tick 過、BowBody 接管顯示再拍。
+	if (TicksAlive - DummyTick0 < 3 || !Dummy->GetBowBody() || !Dummy->GetBowBody()->IsVisible())
+	{
+		return nullptr; // 呼叫端下次再來
+	}
 	if (UInkBodyComponent* Body = Dummy->FindComponentByClass<UInkBodyComponent>())
 	{
 		// 肖像睜眼、無墨＝Closed/Mask 純補位（缺席以 Open 頂）
@@ -525,8 +532,10 @@ UTexture* ANiceInkPortraitBooth::GetPortraitKeyed(const FString& Key, UTexture2D
 	if (Portrait)
 	{
 		Cache.Add(Key, Portrait);
+		CachePixels.Add(Key, TPair<int32, TArray<FColor>>(LastSide, LastPixels));
 	}
-	return Portrait;
+	// 生成當幀同樣過「資源就緒」閘（與快取命中同一條）：呼叫端下一幀再拿到的就是成品
+	return (Portrait && !Portrait->IsDefaultTexture() && Portrait->GetResource()) ? Portrait : nullptr;
 }
 
 UTexture* ANiceInkPortraitBooth::GetPortraitRoster(int32 AvatarIdx)
@@ -551,5 +560,88 @@ UTexture* ANiceInkPortraitBooth::GetPortraitRoster(int32 AvatarIdx)
 		Open = LoadObject<UTexture2D>(nullptr, *Def.FaceOpenPath);
 		RosterOpen.Add(AvatarIdx, Open);
 	}
+	// 名冊臉是串流資產：載入當幀只有最小 mip 在顯存，拍下去＝糊的肖像進快取、永遠不會變清楚
+	//（09-11 之前「名冊肖像糊」的真因）。烘之前把整套 mip 拉進來；還沒到＝這幀不出片、呼叫端空著等。
+	if (Open)
+	{
+		Open->SetForceMipLevelsToBeResident(30.0f);
+		if (Open->IsStreamable() && !Open->IsFullyStreamedIn())
+		{
+			return nullptr;
+		}
+	}
 	return GetPortraitKeyed(Key, Open, nullptr, nullptr, Def.SkinTone);
 }
+
+// ============================================================================
+// 校準儀器（不進出貨路徑）：主控台 `NiPortraitDump [子資料夾]` 把快取裡的肖像寫成 PNG
+//（Saved/Portraits/<sub>/<key>.png），配 `NiDelayExec 35 NiPortraitDump x` 在 -ExecCmds 裡延遲執行。
+// ============================================================================
+int32 ANiceInkPortraitBooth::DumpCache(const FString& SubDir) const
+{
+	const FString Dir = FPaths::ProjectSavedDir() / TEXT("Portraits") / SubDir;
+	IFileManager::Get().MakeDirectory(*Dir, true);
+	int32 Written = 0;
+	for (const TPair<FString, TPair<int32, TArray<FColor>>>& It : CachePixels)
+	{
+		const int32 Side = It.Value.Key;
+		const TArray<FColor>& Px = It.Value.Value;
+		if (Side <= 0 || Px.Num() != Side * Side) { continue; }
+		FImageView View(Px.GetData(), Side, Side, EGammaSpace::sRGB);
+		if (FImageUtils::SaveImageByExtension(*(Dir / (It.Key + TEXT(".png"))), View)) { ++Written; }
+	}
+	UE_LOG(LogTemp, Warning, TEXT("NiPortrait: dumped %d portraits to %s"), Written, *Dir);
+	return Written;
+}
+
+static FAutoConsoleCommandWithWorldAndArgs GNiPortraitDumpCmd(
+	TEXT("NiPortraitDump"),
+	TEXT("Dump cached portraits to Saved/Portraits/<sub>/"),
+	FConsoleCommandWithWorldAndArgsDelegate::CreateLambda([](const TArray<FString>& Args, UWorld* World)
+	{
+		if (ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(World))
+		{
+			Booth->DumpCache(Args.Num() > 0 ? Args[0] : TEXT("dump"));
+		}
+	}));
+
+// 診斷：同一顆頭、只換投影（其餘＝出貨流程原樣），逐檔烘本機臉並寫 PNG（Saved/Portraits/proj_<名>/）。
+// 焦距等效：ortho／135mm（距 220）／90mm（距 130）／50mm（距 75）／35mm（距 55）；FOV 依「臉面離相機 ≈ 距 −15」
+// 把框寬固定在 ~60cm，讓 bbox 裁切後每一檔的頭大小可比。
+static FAutoConsoleCommandWithWorld GNiPortraitProjSweepCmd(
+	TEXT("NiPortraitProjSweep"),
+	TEXT("Bake the local face under ortho + 4 perspective focal lengths and dump PNGs."),
+	FConsoleCommandWithWorldDelegate::CreateLambda([](UWorld* World)
+	{
+		ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(World);
+		UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(World);
+		if (!Booth || !Share) { UE_LOG(LogTemp, Warning, TEXT("NiPortraitProjSweep: no booth/share")); return; }
+		struct FPreset { const TCHAR* Name; float Fov; float Dist; };
+		const FPreset Presets[] = {
+			{ TEXT("proj_ortho"),  0.0f,  200.0f },
+			{ TEXT("proj_135mm"), 16.7f,  220.0f },
+			{ TEXT("proj_90mm"),  29.2f,  130.0f },
+			{ TEXT("proj_50mm"),  53.0f,   75.0f },
+			{ TEXT("proj_35mm"),  73.7f,   55.0f },
+		};
+		int32 Done = 0;
+		for (const FPreset& P : Presets)
+		{
+			CVarNiPortraitFov->Set(P.Fov, ECVF_SetByConsole);
+			CVarNiPortraitCamDist->Set(P.Dist, ECVF_SetByConsole);
+			Booth->ClearCache();
+			for (int32 Seat = 0; Seat < 6; ++Seat)
+			{
+				if (UTexture2D* Open = Share->GetOpen(Seat))
+				{
+					Booth->GetPortraitKeyed(FString::Printf(TEXT("seat%d"), Seat), Open,
+						Share->GetClosed(Seat), Share->GetMask(Seat), Share->GetTone(Seat));
+				}
+			}
+			Done += Booth->DumpCache(P.Name);
+		}
+		CVarNiPortraitFov->Set(-1.0f, ECVF_SetByConsole);      // 還給 UPROPERTY 出貨值
+		CVarNiPortraitCamDist->Set(-1.0f, ECVF_SetByConsole);
+		Booth->ClearCache();
+		UE_LOG(LogTemp, Warning, TEXT("NiPortraitProjSweep: DONE %d portraits"), Done);
+	}));

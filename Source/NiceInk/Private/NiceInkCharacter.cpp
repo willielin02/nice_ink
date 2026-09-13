@@ -39,6 +39,8 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkBottle.h"
 #include "NiceInkGameMode.h"
+#include "Engine/ActorChannel.h"
+#include "Engine/NetConnection.h"
 #include "NiceInkGameState.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkNotary.h"
@@ -4442,6 +4444,14 @@ void ANiceInkCharacter::MaybeStartFaceShare()
 {
 	if (bFaceShareStarted || --FaceShareTicksLeft <= 0)
 	{
+		if (!bFaceShareStarted && IsLocallyControlled() && Cast<APlayerController>(GetController()))
+		{
+			// 無聲失敗先開口（2026-09-13 重進房查案）：本人角色 15 秒內沒起跑＝整條臉分發都不會發生
+			const ANiceInkPlayerState* DiagPS = GetPlayerState<ANiceInkPlayerState>();
+			UE_LOG(LogTemp, Warning, TEXT("NiFaceShare: start budget exhausted on %s (PS=%s seat=%d persona=%d)"), *GetName(),
+				DiagPS ? *DiagPS->GetName() : TEXT("null"), DiagPS ? DiagPS->SeatIndex : -99,
+				UNiceInkPersonaSubsystem::Get(this) ? 1 : 0);
+		}
 		GetWorldTimerManager().ClearTimer(FaceShareTimer);
 		return;
 	}
@@ -4455,6 +4465,7 @@ void ANiceInkCharacter::MaybeStartFaceShare()
 	{
 		return; // 席位/子系統未就緒：下一 tick 再看
 	}
+	UE_LOG(LogTemp, Log, TEXT("NiFaceShare: start on %s seat=%d authority=%d"), *GetName(), PS->SeatIndex, HasAuthority() ? 1 : 0);
 
 	bFaceShareStarted = true;
 	GetWorldTimerManager().ClearTimer(FaceShareTimer);
@@ -4525,6 +4536,17 @@ void ANiceInkCharacter::TickFaceUpload()
 		return;
 	}
 	const TArray<uint8>& B = *FaceUpSendBuf;
+	// 上行同樣看 reliable 緩衝餘裕（與 GameMode::TickFaceSend 同一條理由；進房當下這條連線很忙）
+	if (UNetConnection* Conn = GetNetConnection())
+	{
+		if (const UActorChannel* Ch = Conn->FindActorChannelRef(this))
+		{
+			if (Ch->NumOutRec >= RELIABLE_BUFFER / 2)
+			{
+				return; // 這 tick 不送，等 ack 追上
+			}
+		}
+	}
 	// 08-14 卡頓根治①＋二修：節奏=1×16KB/0.025s≈640KB/s「抹平」——頻寬帳逐幀記，
 	// 單 tick 爆發（舊 4×16KB）會把該連線打進飽和數幀、bFaceReady 等小屬性被餓
 	//（現身旗標晚 2.3s 實錘）。單塊 16KB＜每幀預算（帽 2MB/s÷60fps=33KB）＝
@@ -4566,6 +4588,12 @@ void ANiceInkCharacter::ServerSetFaceReady(bool bNoBlobFallback)
 	if (bNoBlobFallback && !bFaceReady)
 	{
 		bFaceNone = true; // 沒有 blob 可等（無臉端/上傳失敗）：名冊臉＝誠實降級
+		// 同一個事實複製給所有觀看端（PlayerState），HUD 才能把名冊臉當終態直接畫；
+		// 沒標的席位＝blob 在路上，HUD 空著等（09-11「要嘛完整、要嘛不顯示」）
+		if (ANiceInkPlayerState* PS = GetPlayerState<ANiceInkPlayerState>())
+		{
+			PS->bFaceNone = true;
+		}
 		FaceGateShowNow();
 	}
 	bFaceReady = true;

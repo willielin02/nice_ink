@@ -115,6 +115,16 @@ public:
 	UFUNCTION(Exec)
 	void NiShot(float DelaySeconds, const FString& Name);
 
+	// robo 鉤子：延遲執行任一主控台指令（單一 token，無參數；例：`NiDelayExec 30 NiPortraitSweep`）。
+	// 用途＝-ExecCmds 在開機當下就跑完，而受測物（頭像亭、大廳）要幾十秒後才存在。
+	UFUNCTION(Exec)
+	void NiDelayExec(float DelaySeconds, const FString& Command);
+
+	// robo 鉤子：主動離開房間（＝ESC 選單「回主選單」那顆鈕走的同一條 ReturnToMainMenu 路）。
+	// 2026-09-13 user：「玩家退出房間會有 BUG，再重新進去一樣有 BUG」→ 自駕流要能讓一個客戶端離開再回來。
+	UFUNCTION(Exec)
+	void NiLeaveRoom();
+
 	// 斑普查疊圖（2026-08-24）：把 sumo_spot_census 烘出來的 UV0 圖當成麥克筆墨層
 	// 貼到每個人身上——**讓 user 的眼睛和儀器共用同一個座標系**。
 	// 用法：主控台 `NiSpotMap 1` 開、`NiSpotMap 0` 還原真墨層。

@@ -187,6 +187,7 @@ void ANiceInkHUD::EnsureUiAssets()
 	InkBrushTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkBrush.T_UI_InkBrush"));
 	InkEdgeTex  = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkEdge.T_UI_InkEdge"));
 	InkDotTex   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/Ink/T_UI_InkDot.T_UI_InkDot"));
+	KeycapTex   = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/T_UI_Keycap.T_UI_Keycap"));
 
 	// 圓角方塊紋理：96²、角半徑 32、SDF alpha 1px 羽化——9-slice 任意尺寸取用，
 	// 縮小取樣只會更平滑（canvas 三角形零 AA，圓角一律走紋理 alpha）
@@ -334,6 +335,9 @@ float ANiceInkHUD::TierSize(ETextTier Tier) const
 	case ETextTier::Display: return NiType::HudDisplay;
 	case ETextTier::Title:   return NiType::HudTitle;
 	case ETextTier::Body:    return NiType::HudBody;
+	// 鍵名：Slate 那邊是 pt（×96/72 才是 px），canvas 這邊直接是 px ⇒ 同一個數字要換算，
+	// 否則 Slate 的 Q 與 canvas 的 Q 差 33%（pt→px 血價，UI_SYSTEM §15）
+	case ETextTier::Key:     return FMath::RoundToFloat(NiType::KeyLabel * 96.0f / 72.0f);
 	default:                 return NiType::HudSmall;
 	}
 }
@@ -504,25 +508,15 @@ float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float S
 		return 0.0f;
 	}
 
-	UTexture* Portrait = nullptr;
-	if (ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(this))
+	// 來源解析與 Slate 端同一條鏈（GetFaceSource）：亭在場＝肖像或空、亭缺席＝整張臉裁切。
+	// 空（還在等這個人的臉）＝**佔位不畫**，版面不跳。
+	bool bCrop = false;
+	UTexture* Source = GetFaceSource(PS, bCrop);
+	if (!Source)
 	{
-		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
-		{
-			if (UTexture2D* Open = Share->GetOpen(NIPS->SeatIndex))
-			{
-				// 快取鍵含分發版本＝換臉自動重烘
-				Portrait = Booth->GetPortraitKeyed(
-					FString::Printf(TEXT("seat%d_v%d"), NIPS->SeatIndex, Share->GetRevision(NIPS->SeatIndex)),
-					Open, Share->GetClosed(NIPS->SeatIndex), Share->GetMask(NIPS->SeatIndex),
-					Share->GetTone(NIPS->SeatIndex));
-			}
-		}
-		if (!Portrait)
-		{
-			Portrait = Booth->GetPortraitRoster(NIPS->AvatarIndex);
-		}
+		return Size;
 	}
+	UTexture* Portrait = bCrop ? nullptr : Source;
 	if (Portrait)
 	{
 		// icon＝頭的形狀（透明背景裁切成品；user 定案「不是方形照片」）——
@@ -548,20 +542,8 @@ float ANiceInkHUD::DrawFaceTok(const APlayerState* PS, float X, float Y, float S
 		return Size;
 	}
 
-	// --- 舊路墊檔：膚色底＋臉區 UV 裁切 ---
-	UTexture2D* Face = nullptr;
-	if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
-	{
-		Face = Share->GetOpen(NIPS->SeatIndex);
-	}
-	if (!Face)
-	{
-		Face = GetFaceIcon(NIPS->AvatarIndex);
-	}
-	if (!Face)
-	{
-		return 0.0f;
-	}
+	// --- 舊路墊檔（亭缺席＝PIE／robo）：膚色底＋臉區 UV 裁切 ---
+	UTexture* Face = Source;
 	X = FlipXW(X, Size);
 	TGuardValue<bool> MirrorGuard(bMirrorSuspended, true);
 	FLinearColor Frame = NiHudColor::Paper;
@@ -1298,33 +1280,67 @@ void ANiceInkHUD::DrawInkChip(const ANiceInkCharacter* MyChar)
 }
 
 
+UTexture2D* ANiceInkHUD::GetKeyTex(const FString& Key)
+{
+	const FName CacheKey(*Key);
+	if (TObjectPtr<UTexture2D>* Found = KeyTexCache.Find(CacheKey))
+	{
+		return *Found;
+	}
+	UTexture2D* Tex = NiSlate::LoadKeycapTex(Key);
+	KeyTexCache.Add(CacheKey, Tex);
+	return Tex;
+}
+
 float ANiceInkHUD::DrawKeycap(float X, float Y, const FString& Key, ENiKeyState State)
 {
-	// 鍵帽（2026-09-06 二版）：**深色半透明底＋1px 亮邊框**＝所有遊戲通用的「鍵盤上的一顆鍵」
-	// 符號。一版是白色實心塊＋黑字＋硬陰影，讀成標籤或貼紙（user：「看不太出來是在講按鍵」）。
-	// 尺寸：高 KeycapH、寬＝max(高, 字寬＋左右各 3U)。鍵名白、粗體、無陰影（底自帶對比）。
-	// 狀態：可用＝黑 55% 底／白 70% 框；一次性＝紫 45% 底／紫框（訊息一樣、音量小一半）；
-	// 不可用＝整顆淡（底 30%／框 25%／字 45%）。
+	// **十修：一顆鍵一張圖**（與 Slate 的 SNiKeycap、選單同一張；見 NiSlate::LoadKeycapTex）。
+	// 盒＝BoxW×BoxH 設計單位 ×UiScale；UV 只取帽那一段（貼圖右邊補到 2 的冪）。
+	// 不可按＝同一張圖整顆 × KeycapDimAlpha（十一修，user 定案）
+	const bool bDim = (State == ENiKeyState::Unavailable);
+	if (const NiKeycapData::FEntry* E = NiKeycapData::Find(Key))
+	{
+		if (UTexture2D* Tex = GetKeyTex(Key))
+		{
+			const float BW = E->BoxW * UiScale, BH = E->BoxH * UiScale;
+			if (Canvas)
+			{
+				FLinearColor T = FLinearColor::White;
+				T.A *= ChromeAlphaMul * ChromeAlphaBase * (bDim ? NiUi::KeycapDimAlpha : 1.0f);
+				Canvas->K2_DrawTexture(Tex, FVector2D(FlipXW(X, BW), Y), FVector2D(BW, BH),
+					FVector2D::ZeroVector, FVector2D(E->U1, 1.0f), T, BLEND_Translucent);
+			}
+			return BW;
+		}
+	}
+	// 保底：9-slice 同形的圓角＋排字（表裡沒有的鍵名）
+	// 鍵帽（2026-09-10 三版）＝**實心白＋深色字**，與 Slate 的 `SNiKeycap`、與主選單同一顆
+	//（user：「把整個遊戲的按鍵指引都改成 Meccha／PEAK 同款」）。這支只剩墨杯盤在用，
+	// 但它與右緣提示同框出現 ⇒ 兩邊不一樣就是同一個畫面上兩種鍵。
+	// 二版是「深底＋1px 亮框＋白字」；一版是白塊＋黑字＋**硬陰影**（user 09-06：
+	// 「看不太出來是在講按鍵」）——三版避開硬陰影、並把鍵高降到 24（§15.12 的比例）。
+	// 狀態：可按＝白帽深字；不可按＝深帽淡白字（**明暗反過來**，不是只降 alpha）。
+	// OneShot 目前與可按同形（Slate 端本來就已經收斂成兩態；要不要復活是待裁決的 backlog）。
+	// 尺寸與 Slate 端同一條規則（2026-09-10）：**單鍵恆為正方形**（此前由字寬決定 ⇒
+	// F 與 G 兩顆單鍵不一樣寬），多字母上限 1.75×高（見 NiSlate::KeycapWidth 的註解）。
 	const float H = NiUi::KeycapH * UiScale;
-	const FVector2D Size = MeasureTok(Key, ETextTier::Body, true);
-	const float PadX = 3.0f * NiUi::U * UiScale;
-	const float W = FMath::Max(H, Size.X + PadX * 2.0f);
+	// 鍵名＝內文體粗檔、ETextTier::Key（與 Slate 的 KeycapWidth 同一個字體同一個字級＝Noto Sans Bold 13）
+	TGuardValue<bool> KeyFace(bSerifFace, false);
+	const FVector2D Size = MeasureTok(Key, ETextTier::Key, true);
+	// 留白固定、寬度跟著字走（與 Slate 的 KeycapWidth 同一條規則）
+	const float Pad = NiUi::KeycapPad * UiScale;
+	const float W = (Key.Len() <= 1) ? H : FMath::Clamp(Size.X + Pad * 2.0f, H, H * NiUi::KeycapMaxRatio);
 	const float Rad = NiUi::Radius * UiScale;
-	const float B = FMath::Max(1.0f, UiScale);
 
-	// 無主色（2026-09-07）：三態靠形狀與明度——可按＝黑 70% 底白字；**現在該按的那一顆**
-	// （一次性動作）＝實心白底黑字；不可按＝白 35% 空心。
-	FLinearColor Frame = NiHudColor::White;
-	Frame.A = (State == ENiKeyState::Unavailable) ? 0.35f : ((State == ENiKeyState::OneShot) ? 1.0f : 0.85f);
-	FLinearColor Fill = (State == ENiKeyState::OneShot) ? NiHudColor::White : NiHudColor::Black;
-	Fill.A = (State == ENiKeyState::Unavailable) ? 0.20f : ((State == ENiKeyState::OneShot) ? 1.0f : 0.70f);
-	DrawRoundedBox(X, Y, W, H, Rad, Frame);
-	DrawRoundedBox(X + B, Y + B, W - B * 2.0f, H - B * 2.0f, FMath::Max(0.0f, Rad - B), Fill);
+	// 不可按＝帽與字同一個倍率一起退後（與 Slate 端同值）
+	FLinearColor Fill = NiHudColor::Paper;
+	Fill.A = bDim ? NiUi::KeycapDimAlpha : 1.0f;
+	DrawRoundedBox(X, Y, W, H, Rad, Fill);
 
-	FLinearColor KeyInk = (State == ENiKeyState::OneShot) ? NiHudColor::Black : NiHudColor::White;
-	KeyInk.A = (State == ENiKeyState::Unavailable) ? 0.45f : 1.0f;
-	TGuardValue<bool> NoShadow(bTokShadows, false);
-	DrawTok(Key, X + W * 0.5f, Y + (H - Size.Y) * 0.5f, ETextTier::Body, KeyInk, EHAlign::Center, true);
+	FLinearColor KeyInk = NiHudColor::Ink;
+	KeyInk.A = bDim ? NiUi::KeycapDimAlpha : 1.0f;
+	TGuardValue<bool> NoShadow(bTokShadows, false);   // 帽本身就是對比；陰影＝貼紙感
+	DrawTok(Key, X + W * 0.5f, Y + (H - Size.Y) * 0.5f, ETextTier::Key, KeyInk, EHAlign::Center, true);
 	return W;
 }
 
@@ -2683,27 +2699,45 @@ UTexture* ANiceInkHUD::GetFaceSource(const APlayerState* PS, bool& bOutNeedsCrop
 	}
 	if (ANiceInkPortraitBooth* Booth = ANiceInkPortraitBooth::Get(this))
 	{
+		// 亭在場（真局）：**要嘛是這個人烘好的肖像，要嘛什麼都不畫**（2026-09-11 user：進房那幾秒破圖）。
+		// 舊制在 blob 還沒到／亭還沒就緒時退到名冊臉、再退到紙框裁切 ⇒ 每個進房的人都先閃一張別人的臉
+		//（名冊貼圖 mip 還沒串流＝糊），再換成紙框方塊，最後才是本人。三種樣子輪流出現就是「破圖」。
+		// 現制三態：①肖像烘好 → 畫；②server 標了 bFaceNone（這席永遠不會有 blob）→ 名冊臉是終態、畫；
+		// ③其餘（SeatIndex 未複製／blob 在路上／亭未 tick 夠）→ null＝空著，下一幀再問。
+		auto Diag = [this, NIPS](int32 State, int32 Rev)
+		{
+			int32& Last = FaceSrcDiag.FindOrAdd(NIPS->SeatIndex, -1);
+			if (Last != State)
+			{
+				Last = State;
+				UE_LOG(LogTemp, Log, TEXT("NiFace: seat %d (%s) -> state %d (0 portrait / 1 no face yet / 2 bake pending / 3 roster / 4 roster pending) rev=%d"),
+					NIPS->SeatIndex, *NIPS->GetPlayerName(), State, Rev);
+			}
+		};
 		if (UNiceInkFaceShare* Share = UNiceInkFaceShare::Get(this))
 		{
 			if (UTexture2D* Open = Share->GetOpen(NIPS->SeatIndex))
 			{
-				// 快取鍵含分發版本＝換臉自動重烘；**烘焙未完成時這裡會是 null**，
-				// 於是往下退——而旗標也跟著往下走，兩者不可能不同意。
-				if (UTexture* P = Booth->GetPortraitKeyed(
-					FString::Printf(TEXT("seat%d_v%d"), NIPS->SeatIndex, Share->GetRevision(NIPS->SeatIndex)),
+				// 快取鍵含分發版本＝換臉自動重烘；烘焙未完成＝null＝空著等（不再退回別的東西）
+				const int32 Rev = Share->GetRevision(NIPS->SeatIndex);
+				UTexture* P = Booth->GetPortraitKeyed(
+					FString::Printf(TEXT("seat%d_v%d"), NIPS->SeatIndex, Rev),
 					Open, Share->GetClosed(NIPS->SeatIndex), Share->GetMask(NIPS->SeatIndex),
-					Share->GetTone(NIPS->SeatIndex)))
-				{
-					return P;   // 已經是裁好的頭形
-				}
+					Share->GetTone(NIPS->SeatIndex));
+				Diag(P ? 0 : 2, Rev);
+				return P;
 			}
 		}
-		if (UTexture* P = Booth->GetPortraitRoster(NIPS->AvatarIndex))
+		if (NIPS->bFaceNone)
 		{
-			return P;           // 同上
+			UTexture* P = Booth->GetPortraitRoster(NIPS->AvatarIndex);   // 誠實終態；未就緒同樣 null＝空著
+			Diag(P ? 3 : 4, 0);
+			return P;
 		}
+		Diag(1, 0);
+		return nullptr;
 	}
-	// 亭缺席／未就緒：退回**整張臉貼圖** ⇒ 一定要裁。
+	// 亭缺席（PIE／robo；WorldType 閘）：退回**整張臉貼圖** ⇒ 一定要裁。
 	// 順序與 canvas 端的墊檔路一致：**自訂臉優先**（Share），沒有才用名冊的預設臉。
 	// （搬遷時我只讀了 DrawFaceTok 的前半就開始寫，漏了這一段——見 UI_SYSTEM §15.5）
 	bOutNeedsCrop = true;

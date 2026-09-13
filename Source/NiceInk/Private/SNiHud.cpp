@@ -7,6 +7,9 @@
 #include "NiceInkUiTokens.h"
 
 #include "Engine/Font.h"
+#include "Fonts/FontCache.h"
+#include "Engine/GameViewportClient.h"
+#include "Engine/UserInterfaceSettings.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "Framework/Application/SlateApplication.h"
@@ -72,6 +75,75 @@ namespace NiSlate
 		return (LineH / DisplayLinePerEm) * DisplayCapPerEm;
 	}
 
+	float ViewportDpiScale(const UWorld* World)
+	{
+		const UGameViewportClient* GVC = World ? World->GetGameViewport() : nullptr;
+		if (!GVC)
+		{
+			return 1.0f;
+		}
+		FVector2D Size(0, 0);
+		GVC->GetViewportSize(Size);
+		return GetDefault<UUserInterfaceSettings>()->GetDPIScaleBasedOnSize(FIntPoint(FMath::RoundToInt(Size.X), FMath::RoundToInt(Size.Y)));
+	}
+
+	float KeycapTextLift(const FSlateFontInfo& Font, float DpiScale)
+	{
+		if (!FSlateApplication::IsInitialized())
+		{
+			return 0.0f;
+		}
+		const float S = FMath::Max(DpiScale, 0.01f);
+		const float LineH   = Measure()->GetMaxCharacterHeight(Font, S);   // 行框高（Slate 實際排的）
+		const float Descent = -Measure()->GetBaseline(Font, S);            // 行框底→基線
+		const float CapH    = BodyCapPerEm * Font.Size * (96.0f / 72.0f) * S;
+		// 墨跡中心（從行框頂）＝ LineH − Descent − CapH/2；行框中心＝ LineH/2 ⇒ 正值＝墨跡偏下了這麼多
+		return (LineH * 0.5f - Descent - CapH * 0.5f) / S;
+	}
+
+	float KeycapWidth(UFont* Font, const FString& Key, FSlateFontInfo& InOutFont, float DpiScale)
+	{
+		const float H = NiUi::KeycapH;
+		// **每一顆鍵同一個字體、同一個字級**（NiType::KeyLabel；三修，user：「字體大小有均一致嗎」）
+		// ——單字母與 ENTER 都是。二修讓單鍵留在 Noto Sans Bold 13、長鍵換 Oswald 9，
+		// 同一欄裡 F／G 又大又粗、ESC／WASD 又小又細＝兩套字，一眼就看得出來。
+		// user 定案（2026-09-10）：**所有鍵名對齊改之前 F／G 的字高**＝Noto Sans Bold 13pt（大寫 13px）。
+		// 長鍵不縮字，寬度跟著字走（所以四檔之外再開 2.0／2.25）。
+		InOutFont = BodyFont(Font, NiType::KeyLabel, /*bBold=*/true);
+		if (!FSlateApplication::IsInitialized())
+		{
+			return H;
+		}
+		// **直接讀渲染器的字形度量**（真實 DPI 縮放下的字型快取）：XAdvance＝渲染器實際的前進寬
+		// （已含 hinting 的整數捨入，這正是 FSlateFontMeasure 量不到、害多字母每字漂 ~1.3px 的那一段）；
+		// HorizontalOffset／USize＝墨跡的左緣與寬。留白要對**墨跡**算，user 量的就是墨跡到帽邊。
+		const float Scale = FMath::Max(DpiScale, 0.01f);
+		FCharacterList& Chars = FSlateApplication::Get().GetRenderer()->GetFontCache()->GetCharacterList(InOutFont, Scale);
+		float Pen = 0.0f, InkL = TNumericLimits<float>::Max(), InkR = -TNumericLimits<float>::Max();
+		for (const TCHAR C : Key)
+		{
+			const FCharacterEntry& E = Chars.GetCharacter(C, EFontFallback::FF_Max);
+			if (!E.Valid) { continue; }
+			InkL = FMath::Min(InkL, Pen + E.HorizontalOffset);
+			InkR = FMath::Max(InkR, Pen + E.HorizontalOffset + E.USize);
+			Pen += E.XAdvance;                       // 鍵名全大寫拉丁，忽略 kerning
+		}
+		if (InkR <= InkL)
+		{
+			return H;
+		}
+		const float InkW = (InkR - InkL) / Scale;    // 設計單位
+		// **字一律置中**（七修）：六修把字靠左、用量到的墨跡左緣算左內距——量測比渲染窄，
+		// 誤差全堆到右邊（ENTER 5/4）。置中讓誤差左右對分；帽寬再補渲染多出來的那一點。
+		// **單鍵恆為正方形**：帽寬不准由字寬決定（否則 F 27／G 31＝同一種東西兩個尺寸）
+		if (Key.Len() <= 1)
+		{
+			return H;
+		}
+		const float Slack = NiUi::KeycapRenderSlackPerChar * Key.Len();
+		return FMath::Clamp(InkW + Slack + NiUi::KeycapPad * 2.0f, H, H * NiUi::KeycapMaxRatio);
+	}
+
 	/** 行框底 → 基線（正值）。全大寫的字，墨跡底就是基線 ⇒ 這段就是「行框底下的空氣」。 */
 	static float DescentOf(const FSlateFontInfo& Info)
 	{
@@ -106,6 +178,35 @@ namespace NiSlate
 	float InkGapPaddingToBox(const FSlateFontInfo& Above, float InkGap)
 	{
 		return InkGap - DescentOf(Above);
+	}
+
+	UTexture2D* LoadKeycapTex(const FString& Key)
+	{
+		if (!NiKeycapData::Find(Key))
+		{
+			return nullptr;
+		}
+		const FString Name = FString::Printf(TEXT("T_Key_%s"), *Key);
+		return LoadObject<UTexture2D>(nullptr, *FString::Printf(TEXT("/Game/UI/Keys/%s.%s"), *Name, *Name));
+	}
+
+	const FSlateBrush* KeycapImageBrush(UTexture* Tex, const NiKeycapData::FEntry& E)
+	{
+		static TMap<UTexture*, TSharedPtr<FSlateImageBrush>> Cache;
+		static FSlateNoResource Empty;
+		if (!Tex)
+		{
+			return &Empty;
+		}
+		if (TSharedPtr<FSlateImageBrush>* Found = Cache.Find(Tex))
+		{
+			return Found->Get();
+		}
+		TSharedPtr<FSlateImageBrush> B = MakeShared<FSlateImageBrush>(Tex, FVector2D(E.BoxW, E.BoxH));
+		// 貼圖右邊補到 2 的冪（引擎 NPOT 不生 mip）⇒ 只取帽那一段
+		B->SetUVRegion(FBox2f(FVector2f(0.0f, 0.0f), FVector2f(E.U1, 1.0f)));
+		Cache.Add(Tex, B);
+		return B.Get();
 	}
 
 	const FSlateBrush* Brush(UTexture* Tex, float Size)
@@ -173,6 +274,143 @@ namespace NiSlate
 }
 
 // ============================================================================
+// 共用零件
+// ============================================================================
+
+/**
+ * 鍵帽（鍵盤有刻字 ⇒ 寫字）。
+ *
+ * **為什麼不用現成的按鍵圖示**（2026-09-08 調查）：能蓋的只有單一字母
+ * （Tabler 有 `square-rounded-letter-a`～`z` 共 26 個），而我們的鍵包含
+ * `ENTER`／`ESC`／`TAB`／`WASD` 這些字，還要跟著 13 語走 ⇒ 圖片式的按鍵提示在構造上蓋不完。
+ * 所以鍵帽必須是「字排進一個形狀裡」，能改的是**那個形狀**。
+ *
+ * **形狀＝實心白的 9-slice 貼圖 `T_UI_Keycap`／`T_UI_KeycapDim`**（2026-09-10 三版；
+ * user：「有辦法把整個遊戲的按鍵指引都改成 Meccha／PEAK 同款嗎？」）。
+ *
+ * 三版都是被畫面推翻的：一版白面＋黑框（user：「黑底框很突兀」＝兩個顏色）→
+ * 二版白線稿（與滑鼠同家，但 §15.12 實測九款出貨遊戲裡**沒有一款拿空心框當鍵**——
+ * 空心框在那些遊戲裡是**道具格**的語彙）→ 三版實心白＋深色字＝Meccha 23px／PEAK 21px 的做法。
+ *
+ * **09-06 曾否決過白色實心塊**（原話：「看不太出來是在講按鍵」），這一版避開那次的三個成因：
+ * 硬陰影改軟投影（貼紙感）／鍵高 32→24（§15.12：我們的鍵是動詞字高的 2.0 倍，參照 1.3~1.4）／
+ * 旁邊的滑鼠現在是線稿，而「實心鍵＋線稿滑鼠」有出貨先例（RV There Yet 同一行就是這樣）。
+ *
+ * **十修（2026-09-11）：一顆鍵一張圖，字烘在裡面**（NiKeycapData；見 NiSlate::LoadKeycapTex）；
+ * 9-slice＋Slate 排字只剩表外鍵名的保底。
+ * **十一修：不可按＝同一張圖整顆 × NiUi::KeycapDimAlpha**（user 定案「在可按的樣子的基礎上調整透明度」）。
+ * 09-10 的兩態各一張（空心灰框）退役；當時「乘 alpha 在障子牆只剩 19 階」的顧慮已向 user 報告，知情選擇。
+ */
+class SNiKeycap : public SCompoundWidget
+{
+public:
+	SLATE_BEGIN_ARGS(SNiKeycap) {}
+		SLATE_ARGUMENT(TWeakObjectPtr<ANiceInkHUD>, Hud)
+		SLATE_ARGUMENT(FSlateFontInfo, Font)
+		SLATE_ATTRIBUTE(FText, Key)
+		SLATE_ATTRIBUTE(bool, Dim)
+	SLATE_END_ARGS()
+
+	void Construct(const FArguments& InArgs)
+	{
+		Dim = InArgs._Dim;
+		ANiceInkHUD* H = InArgs._Hud.Get();
+		const FString KeyStr = InArgs._Key.Get().ToString();
+
+		// **十修：表裡有的鍵名＝一顆鍵一張圖，字烘在裡面**（見 NiSlate::LoadKeycapTex 的註解）。
+		// 整顆帽是一張圖 ⇒ Slate 只對這一個盒子取一次整 ⇒ 字到四邊的留白對稱由構造保證。
+		// **不可按＝同一張圖整顆乘透明度**（十一修，user 定案）——與同列動詞、滑鼠圖示的 0.45 同值。
+		if (const NiKeycapData::FEntry* E = NiKeycapData::Find(KeyStr))
+		{
+			if (UTexture2D* Tex = H ? H->GetKeyTex(KeyStr) : nullptr)
+			{
+				KeyImg = NiSlate::KeycapImageBrush(Tex, *E);
+				ChildSlot
+				[
+					SNew(SBox).WidthOverride(E->BoxW).HeightOverride(E->BoxH)
+					[
+						SNew(SImage).Image(KeyImg).ColorAndOpacity(this, &SNiKeycap::CapTint)
+					]
+				];
+				return;
+			}
+		}
+
+		// 保底：9-slice＋Slate 排字（表裡沒有的鍵名；留白在非整數縮放下 ±1px）；不可按同樣整顆乘透明度
+		Cap = MakeCapBrush(H ? H->GetKeycapTex() : nullptr);
+
+		// 尺寸規則走共用的那一支（單鍵恆方／長鍵上限 1.75×高、字級自動縮）——
+		// 三個載體同一條規則，才不會又長出第二種鍵。
+		FSlateFontInfo KeyFont = InArgs._Font;
+		// **一律用設計單位（縮放 1.0）算，不讀視窗 DPI**（2026-09-11 九修）：user 的 bat 開 960×540
+		// 再手動拉到 2560×1380——widget 在 0.5 倍時建立、把抬升量與帽寬照 0.5 倍算死，視窗放大後
+		// 全錯；我自己測永遠一開始就是 2560×1380，所以永遠「量到是對的」。設計單位算好、
+		// 由 Slate 等比縮放，才跟視窗什麼時候被拉大無關。
+		const float Dpi = 1.0f;
+		const float CapW = NiSlate::KeycapWidth(H ? H->GetUiFont() : nullptr,
+			InArgs._Key.Get().ToString(), KeyFont, Dpi);
+		// 字一律置中：帽寬已含留白，左右內距歸零（量測誤差由置中左右對分，見 KeycapWidth）。
+		// 垂直：行框置中會讓大寫墨跡偏下 ⇒ 用底內距把它抬回墨跡置中（KeycapTextLift）
+		const EHorizontalAlignment TextAlign = HAlign_Center;
+		const float Lift = NiSlate::KeycapTextLift(KeyFont, Dpi);
+		const FMargin TextPad(0.0f, FMath::Max(0.0f, -2.0f * Lift), 0.0f, FMath::Max(0.0f, 2.0f * Lift));
+
+		// 單字母：WidthOverride(H)＝方格；多字母：不鎖寬，帽＝字的 desired size＋左右各 KeycapPad
+		//（留白由排版引擎自己畫字的那把尺決定，見 KeycapWidth 的註解）
+		TSharedRef<SBox> Box = SNew(SBox).HeightOverride(NiUi::KeycapH)
+			[
+				SNew(SBorder)
+				.BorderImage(Cap.Get())
+				.BorderBackgroundColor(this, &SNiKeycap::CapTint)
+				.HAlign(TextAlign).VAlign(VAlign_Center)
+				.Padding(TextPad)
+				[
+					SNew(STextBlock)
+					.Font(KeyFont)
+					.ColorAndOpacity(this, &SNiKeycap::KeyInk)
+					// **鍵名不加陰影**：帽本身就是對比（白帽黑字／深帽白字）。09-06 那版
+					// 白塊＋黑字＋**硬陰影**被打回成「貼紙」，陰影正是成因之一。
+					.Text(InArgs._Key)
+				]
+			];
+		if (CapW > 0.0f) { Box->SetWidthOverride(CapW); }
+		ChildSlot[Box];
+	}
+
+private:
+	/** 9-slice brush；貼圖缺席時退實心白圓角，整顆鍵不會消失 */
+	static TSharedRef<FSlateBrush> MakeCapBrush(UTexture2D* Tex)
+	{
+		if (!Tex)
+		{
+			// 資產缺席的保底：實心白圓角（少了軟投影，但讀法一致）
+			return MakeShared<FSlateRoundedBoxBrush>(NiHudColor::Paper, NiUi::KeycapR);
+		}
+		TSharedRef<FSlateBrush> B = MakeShared<FSlateBrush>();
+		B->SetResourceObject(Tex);
+		B->DrawAs = ESlateBrushDrawType::Box;
+		B->Margin = FMargin(NiUi::KeycapSlice);
+		B->ImageSize = FVector2f(NiUi::KeycapH, NiUi::KeycapH);
+		return B;
+	}
+	/** 不可按＝整顆（帽＋字＋投影）× KeycapDimAlpha；可按＝原樣（十一修，user 定案） */
+	FSlateColor CapTint() const
+	{
+		return FSlateColor(FLinearColor(1.0f, 1.0f, 1.0f, Dim.Get(false) ? NiUi::KeycapDimAlpha : 1.0f));
+	}
+	const FSlateBrush* KeyImg = nullptr;      // 一顆鍵一張（十修）；brush 由 NiSlate 的快取持有
+	/** 保底路的字：可按＝Ink；不可按＝Ink × KeycapDimAlpha（與帽同一個倍率） */
+	FSlateColor KeyInk() const
+	{
+		FLinearColor C = NiHudColor::Ink;
+		C.A = Dim.Get(false) ? NiUi::KeycapDimAlpha : 1.0f;
+		return FSlateColor(C);
+	}
+	TAttribute<bool> Dim;
+	TSharedPtr<FSlateBrush> Cap;
+};
+
+// ============================================================================
 // 大廳：左下的房碼塊
 //
 // 2026-09-08 user 逐項指出的問題，這一版全部處理：
@@ -203,8 +441,6 @@ public:
 		const float Cap = NiSlate::DisplayCapHeight(CodeFont);
 		const float KickerInk = 0.20f * Cap;   // 組內：標籤黏著它的值
 		const float ActionInk = 0.45f * Cap;   // 組外：複製是另一件事
-
-		KeycapBrush = MakeShared<FSlateRoundedBoxBrush>(NiHudColor::Paper, NiUi::Radius);
 
 		ChildSlot
 		[
@@ -247,19 +483,10 @@ public:
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 				.Padding(NiUi::GapM, 0.0f, 0.0f, 0.0f)
 				[
-					SNew(SBox).HeightOverride(NiUi::KeycapH).MinDesiredWidth(NiUi::KeycapH)
-					[
-						SNew(SBorder)
-						.BorderImage(KeycapBrush.Get())
-						.HAlign(HAlign_Center).VAlign(VAlign_Center)
-						.Padding(FMargin(NiUi::GapM, 0.0f))
-						[
-							SNew(STextBlock)
-							.Font(KeyFont)
-							.ColorAndOpacity(NiHudColor::Ink)
-							.Text(FText::FromString(TEXT("C")))
-						]
-					]
+					// 2026-09-09：這裡本來自己拼一顆平的鍵帽（實色 Paper 圓角方塊、無側身），
+					// 於是大廳的 [C] 與右緣提示的鍵**長得不一樣**。改用同一個 widget ⇒
+					// 立體鍵帽自動跟上，往後改形狀也只有一個地方要改。
+					SNew(SNiKeycap).Hud(Hud).Font(KeyFont).Key(FText::FromString(TEXT("C")))
 				]
 			]
 		];
@@ -305,86 +532,9 @@ private:
 	TWeakObjectPtr<ANiceInkHUD> Hud;
 	FSlateFontInfo LabelFont, CodeFont, VerbFont, KeyFont;
 	static FVector2D Shadow(float Px) { return FVector2D(Px, Px); }
-	TSharedPtr<FSlateRoundedBoxBrush> KeycapBrush;
 };
 
 
-// ============================================================================
-// 共用零件
-// ============================================================================
-
-/**
- * 鍵帽（鍵盤有刻字 ⇒ 寫字）。
- *
- * **為什麼不用現成的按鍵圖示**（2026-09-08 調查）：能蓋的只有單一字母
- * （Tabler 有 `square-rounded-letter-a`～`z` 共 26 個），而我們的鍵包含
- * `ENTER`／`ESC`／`TAB`／`WASD` 這些字，還要跟著 13 語走 ⇒ 圖片式的按鍵提示在構造上蓋不完。
- * 所以鍵帽必須是「字排進一個形狀裡」，能改的是**那個形狀**。
- *
- * **形狀＝實體鍵**（user：「按鍵的圖樣也可以用更專業、明顯是鍵盤按鍵的圖案」）：
- * 外層是鍵的**側身**（暗），內層是鍵的**頂面**（亮），底邊留得比其他三邊厚
- * ⇒ 讀成「從斜上方看一顆鍵」。這是實體鍵最省的畫法，而且與尺寸無關、任何字都適用。
- * 可按＝白頂面＋黑字；不可按＝淡灰頂面＋淡白字（半透明，user 定案）。
- */
-class SNiKeycap : public SCompoundWidget
-{
-public:
-	SLATE_BEGIN_ARGS(SNiKeycap) {}
-		SLATE_ARGUMENT(FSlateFontInfo, Font)
-		SLATE_ATTRIBUTE(FText, Key)
-		SLATE_ATTRIBUTE(bool, Dim)
-	SLATE_END_ARGS()
-
-	void Construct(const FArguments& InArgs)
-	{
-		Dim = InArgs._Dim;
-		const float R = NiUi::Radius;
-		const float Skirt = 3.0f;      // 底邊的厚度＝鍵的側身
-		const float Wall = 1.0f;
-
-		// 側身（暗）／頂面（亮）——兩態各一組
-		Side    = MakeShared<FSlateRoundedBoxBrush>(FLinearColor(0.06f, 0.06f, 0.07f, 0.55f), R + 1.0f);
-		Face    = MakeShared<FSlateRoundedBoxBrush>(NiHudColor::Paper, R);
-		SideDim = MakeShared<FSlateRoundedBoxBrush>(FLinearColor(0.06f, 0.06f, 0.07f, 0.28f), R + 1.0f);
-		FaceDim = MakeShared<FSlateRoundedBoxBrush>(
-			FLinearColor(FLinearColor::FromSRGBColor(FColor(150, 150, 152)).R,
-				FLinearColor::FromSRGBColor(FColor(150, 150, 152)).G,
-				FLinearColor::FromSRGBColor(FColor(150, 150, 152)).B, 0.42f), R);
-
-		ChildSlot
-		[
-			SNew(SBox).HeightOverride(NiUi::KeycapH).MinDesiredWidth(NiUi::KeycapH)
-			[
-				SNew(SBorder)                                   // 側身
-				.BorderImage(this, &SNiKeycap::SideBrush)
-				.Padding(FMargin(Wall, Wall, Wall, Skirt))      // 底邊厚 ⇒ 看得出是一顆鍵
-				[
-					SNew(SBorder)                               // 頂面
-					.BorderImage(this, &SNiKeycap::FaceBrush)
-					.HAlign(HAlign_Center).VAlign(VAlign_Center)
-					.Padding(FMargin(NiUi::GapM, 0.0f))
-					[
-						SNew(STextBlock)
-						.Font(InArgs._Font)
-						.ColorAndOpacity(this, &SNiKeycap::KeyInk)
-						.Text(InArgs._Key)
-					]
-				]
-			]
-		];
-	}
-
-private:
-	const FSlateBrush* SideBrush() const { return Dim.Get(false) ? SideDim.Get() : Side.Get(); }
-	const FSlateBrush* FaceBrush() const { return Dim.Get(false) ? FaceDim.Get() : Face.Get(); }
-	/** 可按＝黑字（頂面是白的）；不可按＝淡白字（頂面是淡灰的） */
-	FSlateColor KeyInk() const
-	{
-		return Dim.Get(false) ? FSlateColor(FLinearColor(1, 1, 1, 0.55f)) : FSlateColor(NiHudColor::Ink);
-	}
-	TAttribute<bool> Dim;
-	TSharedPtr<FSlateRoundedBoxBrush> Side, Face, SideDim, FaceDim;
-};
 
 /**
  * 滑鼠圖＝**Kenney Input Prompts 1.5 的線稿版**（2026-09-09，user：「滑鼠用專業圖示」）。
@@ -398,7 +548,8 @@ private:
  */
 static TSharedRef<SWidget> MakeMouseGlyph(ANiceInkHUD* Hud, ANiceInkHUD::ENiInputGlyph Glyph, bool bDim)
 {
-	const float S = 7.0f * NiUi::U;   // 28：與 32 的鍵帽等重
+	// 與鍵帽**同高**（2026-09-10：鍵帽 32→24 時這裡沒跟著改，同一欄裡滑鼠 28、鍵 24＝縮了鍵沒縮鄰居）
+	const float S = NiUi::KeycapH;
 	const TCHAR* Name = (Glyph == ANiceInkHUD::ENiInputGlyph::MouseRight) ? TEXT("mouse_right")
 		: (Glyph == ANiceInkHUD::ENiInputGlyph::MouseWheel) ? TEXT("mouse_scroll") : TEXT("mouse_left");
 	UTexture2D* Tex = Hud ? Hud->GetIcon(Name) : nullptr;
@@ -419,7 +570,7 @@ static TSharedRef<SWidget> MakeHintRow(ANiceInkHUD* Hud, const ANiceInkHUD::FNiC
 
 	TSharedRef<SWidget> KeyW = (H.Glyph != ANiceInkHUD::ENiInputGlyph::None)
 		? MakeMouseGlyph(Hud, H.Glyph, bDim)
-		: StaticCastSharedRef<SWidget>(SNew(SNiKeycap).Font(KeyFont).Dim(bDim)
+		: StaticCastSharedRef<SWidget>(SNew(SNiKeycap).Hud(Hud).Font(KeyFont).Dim(bDim)
 			.Key(FText::FromString(H.Key ? FString(H.Key) : FString())));
 
 	TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
@@ -467,7 +618,8 @@ public:
 		bPosture = InArgs._bPosture;
 		UFont* F = Hud.IsValid() ? Hud->GetUiFont() : nullptr;
 		VerbFont = NiSlate::DisplayFont(F, NiType::Small, false);
-		KeyFont = NiSlate::BodyFont(F, NiType::Text, true);
+		// 鍵名 Text→Small（2026-09-10）：鍵帽從 32 降到 24，18pt 的字在裡面只剩內距
+		KeyFont = NiSlate::BodyFont(F, NiType::Small, true);
 		// SBoxPanel 是抽象的（沒有 FArguments）⇒ 兩個方向各拿具體型別
 		if (bPosture)
 		{
@@ -935,11 +1087,17 @@ private:
 class SNiFaceChip : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SNiFaceChip) : _FaceSize(NiUi::FaceM), _NameBudget(0.0f) {}
+	SLATE_BEGIN_ARGS(SNiFaceChip) : _FaceSize(NiUi::FaceM), _NameBudget(0.0f), _NameSize(NiType::Small), _Frame(nullptr), _MarkHost(true) {}
 		SLATE_ARGUMENT(TWeakObjectPtr<ANiceInkHUD>, Hud)
 		SLATE_ARGUMENT(TWeakObjectPtr<const ANiceInkPlayerState>, PS)
 		SLATE_ARGUMENT(float, FaceSize)
 		SLATE_ARGUMENT(float, NameBudget)
+		/** 名字字級（NiType）；大廳席位格＝Caption（user：「字體可以小一點」），指認列照舊 Small */
+		SLATE_ARGUMENT(int32, NameSize)
+		/** 席位格的框（大廳）；nullptr＝不畫格（指認列）。brush 由呼叫端持有、必須比本 widget 長壽。 */
+		SLATE_ARGUMENT(const FSlateBrush*, Frame)
+		/** 要不要標房主（文字標＋粗體名）。大廳＝false（2026-09-11 user 定案：不標，靠固定順序最左＝房主）。 */
+		SLATE_ARGUMENT(bool, MarkHost)
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs)
@@ -949,9 +1107,9 @@ public:
 		const float FaceSize = InArgs._FaceSize;
 		const ANiceInkPlayerState* P = PS.Get();
 		ANiceInkHUD* H = Hud.Get();
-		const bool bHost = P && P->bIsRoomHost;
+		const bool bHost = InArgs._MarkHost && P && P->bIsRoomHost;
 		UFont* F = H ? H->GetUiFont() : nullptr;
-		const FSlateFontInfo NameFont = NiSlate::BodyFont(F, NiType::Small, bHost);
+		const FSlateFontInfo NameFont = NiSlate::BodyFont(F, InArgs._NameSize, bHost);
 
 
 		// 房主＝**字**，不是歐式王冠（2026-09-09）。`LobbyHostTag` 13 語齊全
@@ -966,9 +1124,19 @@ public:
 			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
 			.Text(FText::FromString(NiLoc::T(H, ENiLocKey::LobbyHostTag)))
 		];
+		TSharedRef<SWidget> Face = SNew(SNiFace).Hud(Hud).PS(P).Size(FaceSize);
+		if (InArgs._Frame)
+		{
+			// 席位格（2026-09-11）：臉裝進 80 的格裡，格的框講狀態（空位／玩家／房主），見 NiUi::SeatFrame
+			Face = SNew(SBorder).BorderImage(InArgs._Frame).Padding(NiUi::SeatPad)
+				.HAlign(HAlign_Center).VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(FaceSize).HeightOverride(FaceSize)[Face]
+				];
+		}
 		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapS * 0.5f, 0, 0)
 		[
-			SNew(SNiFace).Hud(Hud).PS(P).Size(FaceSize)
+			Face
 		];
 		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapM, 0, 0)
 		[
@@ -983,8 +1151,9 @@ public:
 				.ColorAndOpacity(NiHudColor::Paper)
 				.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
 				.Justification(ETextJustify::Center)
+				// 截斷量測比渲染窄 ~0.5px/字（§15.13 六修），預算扣 4 讓名字真的落在盒子裡、不突出格邊
 				.Text(FText::FromString(NiSlate::Elide(P ? P->GetPlayerName() : FString(), NameFont,
-					InArgs._NameBudget > 0.0f ? InArgs._NameBudget : FaceSize * 1.6f)))
+					(InArgs._NameBudget > 0.0f ? InArgs._NameBudget : FaceSize * 1.6f) - 4.0f)))
 			]
 		];
 		ChildSlot[V];
@@ -995,7 +1164,17 @@ private:
 	TWeakObjectPtr<const ANiceInkPlayerState> PS;
 };
 
-/** 大廳底部中央：在場的人（依席位；房主有冠）。名冊會變 ⇒ 簽章比對後重建。 */
+/**
+ * 大廳底部中央：**這一房有幾個位子就幾個格**（GameState.MaxPlayers，房主開房時定 4~6），
+ * 依加入順序（SeatIndex）從左填入臉，**房主一律排最左**（排序時先房主再 SeatIndex，不靠「房主恰好是 0 號」）。
+ * 2026-09-11 user 兩輪定案：先「最左框要不一樣」，看過實拍與九款大廠調查後改為
+ * 「**不要標，所有人的框一模一樣，固定順序，大家就知道最左邊是房主**」——與 PEAK／Lethal Company／
+ * Content Warning／Liar's Bar 同一派（合作派對類不標房主；房主＝能按 START 的人）。
+ * 格＝黑 25% 圓角底、**無外框**（三修，user：「格子不需要框框，無論框框內是否有人」）；有人沒人只差臉。
+ * 房主文字標與粗體名在大廳關掉（MarkHost=false）。
+ * 這正是 §11 表裡「底部一排臉（空位＝黑 25% 淡框）」——09-08 搬 Slate 時空位格漏搬了，這次補回。
+ * 名冊或人數會變 ⇒ 簽章比對後重建。
+ */
 class SNiPlayerRow : public SCompoundWidget
 {
 public:
@@ -1006,6 +1185,12 @@ public:
 	void Construct(const FArguments& InArgs)
 	{
 		Hud = InArgs._Hud;
+		// brush 要比 widget 長壽 ⇒ 成員持有（Slate brush 不保 GC 的問題這裡沒有：純色，無貼圖）
+		// 三修（2026-09-11 user：「下面的格子不需要框框，無論框框內是否有人」）：格＝黑 25% 的圓角底，**沒有外框**。
+		// 有人／沒人只差臉在不在；容量由六塊底講。
+		FLinearColor Ground = NiHudColor::Black; Ground.A = 0.25f;
+		FrameEmpty  = MakeShared<FSlateRoundedBoxBrush>(Ground, NiUi::Radius);
+		FramePlayer = FrameEmpty;
 		ChildSlot[SAssignNew(Row, SHorizontalBox)];
 	}
 
@@ -1020,9 +1205,17 @@ public:
 		{
 			if (const ANiceInkPlayerState* N = Cast<ANiceInkPlayerState>(P)) { Sorted.Add(N); }
 		}
-		Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
+		// 房主永遠最左（這是唯一講「誰是房主」的訊號），其後依加入順序
+		Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
+		{
+			if (A.bIsRoomHost != B.bIsRoomHost) { return A.bIsRoomHost; }
+			return A.SeatIndex < B.SeatIndex;
+		});
 
-		FString Sig;
+		// 格數＝這一房的位子數；名冊比位子多（不該發生）時仍把人全畫出來
+		const int32 Seats = FMath::Max(GS->MaxPlayers, Sorted.Num());
+
+		FString Sig = FString::Printf(TEXT("seats=%d;"), Seats);
 		for (const ANiceInkPlayerState* P : Sorted)
 		{
 			Sig += FString::Printf(TEXT("%d:%s:%d;"), P->SeatIndex, *P->GetPlayerName(), P->bIsRoomHost ? 1 : 0);
@@ -1030,16 +1223,40 @@ public:
 		if (Sig == LastSig) { return; }
 		LastSig = Sig;
 
+		UFont* F = H->GetUiFont();
+		// 名字＝Caption（四修，user：「字體可以小一點」），預算＝格寬 SeatFrame（五修起 96）：名字不得比它頭上的格寬
+		//（此前 Small 13＋預算 104：Hanamichi 84 > 格 80，左右各突出 2px，user 讀成「左側被切到」）
+		const FSlateFontInfo NameFont = NiSlate::BodyFont(F, NiType::Caption, false);
 		Row->ClearChildren();
-		const float Pitch = 28.0f * NiUi::U;   // 112
-		for (const ANiceInkPlayerState* P : Sorted)
+		const float Pitch = NiUi::SeatPitch;
+		for (int32 i = 0; i < Seats; ++i)
 		{
+			const ANiceInkPlayerState* P = (i < Sorted.Num()) ? Sorted[i] : nullptr;
+			TSharedRef<SWidget> Cell = SNullWidget::NullWidget;
+			if (P)
+			{
+				Cell = SNew(SNiFaceChip).Hud(Hud).PS(P).FaceSize(NiUi::FaceSeat).NameBudget(NiUi::SeatFrame)
+					.NameSize(NiType::Caption).Frame(FramePlayer.Get()).MarkHost(false);
+			}
+			else
+			{
+				// 空位＝同尺寸的格＋一行空名字（撐住高度，讓一排格的底邊對齊），框 25%
+				Cell = SNew(SVerticalBox)
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapS * 0.5f, 0, 0)
+					[
+						SNew(SBorder).BorderImage(FrameEmpty.Get()).Padding(NiUi::SeatPad)
+						[
+							SNew(SBox).WidthOverride(NiUi::FaceSeat).HeightOverride(NiUi::FaceSeat)
+						]
+					]
+					+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapM, 0, 0)
+					[
+						SNew(STextBlock).Font(NameFont).Text(FText::FromString(TEXT(" ")))
+					];
+			}
 			Row->AddSlot().AutoWidth().VAlign(VAlign_Bottom)
 			[
-				SNew(SBox).WidthOverride(Pitch)
-				[
-					SNew(SNiFaceChip).Hud(Hud).PS(P).FaceSize(NiUi::FaceM).NameBudget(Pitch - NiUi::GapM)
-				]
+				SNew(SBox).WidthOverride(Pitch).HAlign(HAlign_Center)[Cell]
 			];
 		}
 	}
@@ -1047,6 +1264,7 @@ public:
 private:
 	TWeakObjectPtr<ANiceInkHUD> Hud;
 	TSharedPtr<SHorizontalBox> Row;
+	TSharedPtr<FSlateBrush> FrameEmpty, FramePlayer;
 	FString LastSig;
 };
 
@@ -1458,7 +1676,7 @@ public:
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 					[
-						SNew(SNiKeycap).Font(NiSlate::BodyFont(F, NiType::Text, true))
+						SNew(SNiKeycap).Hud(Hud).Font(NiSlate::BodyFont(F, NiType::Small, true))
 						.Key(FText::FromString(TEXT("ESC")))
 					]
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)

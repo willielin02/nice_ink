@@ -4876,3 +4876,166 @@ Paper 鍵帽融進牆（量測程式當時連鍵帽與牆都分不出來）。�
 
 拆：`DrawBodyMap()` 函式、宣告、`DrawHUD` 的呼叫點。閘門＝`c1f`（已負向測試）。
 `tray_layout_check` 239/239、`hud_loc_lint` 0 violations、編譯過。
+
+### 追記115 三續（2026-09-09~10）：**鍵帽三版，全站統一成實心白（Meccha／PEAK 同款）**
+
+規格＝`Docs/UI_SYSTEM.md` §15.11（三版）＋§15.12（九款按鍵提示實測）。
+
+- 一版立體（白面＋黑框）→ user 打回「黑底框很突兀」；二版白線稿 → 九款實測沒人拿空心框當鍵；
+  **三版＝實心白＋深色字**，user 指名 Meccha／PEAK 同款。
+- **09-06 否決過白色實心塊**（「看不太出來是在講按鍵」）⇒ 三版避開三個成因：軟投影取代硬陰影、
+  鍵高 32→24（§15.12 的比例；鍵名字級 Text→Small）、旁邊的滑鼠已是線稿（RV There Yet 先例）。
+- **三個載體收成同一顆**：局內 Slate／墨杯盤 canvas／主選單（選單走 `MenuHUD` 載貼圖傳入，
+  與 `LogoTex` 同路）。此前是三種鍵，選單那顆的註解還寫著「與局內同形」＝09-08 起就不成立。
+- **驗證**：編譯過；`tray_layout_check` 239/239、`hud_loc_lint` 0；真機截圖＝
+  `uishot_02_draw_standing00000.png`（作畫）／`uishot_01_lobby00000.png`（大廳，ENTER 是不可按態）／
+  `menu2_settings00001.png`（選單 ESC）；證據圖 `Saved/UiMock/keycap_v3_{ingame,lobby,menu}.png`。
+  **墨杯盤的 Q 鍵這一輪沒有截圖**（要開盤才看得到；顏色與 Slate 同源，屬**未驗**）。
+- **血價**：用 `s.replace()` 改 `KeyInk()` 沒 assert ⇒ 靜默跳過 ⇒ 白帽白字＝字母全部消失，
+  跑完一輪 PIE 才發現。**改原始碼的腳本一律先 assert 再 replace。**
+- **外觀待 user viewport。**
+
+### 追記115 四續（2026-09-10）：**鍵帽尺寸規則**（user：「長鍵整個歪掉；F 和 G 都是單鍵為什麼不一樣長」）
+
+規格＝`Docs/UI_SYSTEM.md` §15.13。兩個問題都量得出來，也都修了：
+
+- **單鍵恆方**：修前 F 27×22／G 31×23（帽寬被字寬牽著走），修後兩顆都是 22×22。
+  參照無一例外是方的（PEAK 21×21 四顆逐位相同／Meccha 23×23／RV ~25）。
+- **長鍵上限 1.75×高**（`NiUi::KeycapMaxRatio`，Meccha SPACE 實測 42×24）：
+  ENTER 77×24（3.20）→ 39×24（1.62）；選單 ESC 47×21（2.24）→ 28×20（1.40）。
+  長鍵改用 Oswald 壓縮大寫並自動縮字級——**讓字適應盒子，不是讓盒子適應字**（Meccha 的做法；
+  他們的 ESC 甚至維持 39×38 的正方形）。
+- **規則收成一支** `NiSlate::KeycapWidth()`，三個載體共用。
+- **貼圖本身也修了**：實體此前 32×29（左右佔滿、上下留投影）⇒ 24×24 格子裡是 1.10 不是方的；
+  改四邊等距內縮 1.5px ⇒ 116×116 ＝ 1.000。
+- **驗證**：編譯過；`tray_layout_check` 239/239、`hud_loc_lint` 0；真機重拍三處
+  （作畫／大廳／選單）＋離線量測腳本逐項對數字。證據圖 `Saved/UiMock/keycap_v4_*.png`。
+  **外觀待 user viewport。**
+
+### 追記115 五續（2026-09-10 晚）：鍵帽二修＝以畫面為準（user：「你要我飆罵你嗎」／「Opus 5 為什麼做不好」）
+
+規格＝`Docs/UI_SYSTEM.md` §15.13 二修（含覆盤六條）。
+- 不可按＝空心灰框 35%＋灰字 45%（此前深色實心帽＝角落裡對比最高的物件，語義倒轉）。
+- 多字母鍵名固定 `NiType::KeyLabel = 9pt`＋留白 ≥5，寬度四檔 1.0／1.25／1.5／1.75（Kenney 同套比例）。
+- 滑鼠 glyph 與鍵同高 24。
+- 真機：作畫 F／G 22×22 對齊、ENTER 空心灰、選單 ESC 1.25 方塊小字。證據 `Saved/UiMock/keycap_v5_*.png`。
+- 閘門：`tray_layout_check` 239/239、`hud_loc_lint` 0、`ui_token_audit` 12 常數在網格上。
+- **待裁**：大廳 START 是唯一 CTA 卻是畫面最小的字——推薦底部主鈕（見 §15.13 二修末段）。
+
+### 追記115 六續（2026-09-10 夜）：鍵名一個字體一個字級（user：「字體大小有均一致嗎？邊距有均一致嗎？」）
+二修把單鍵與長鍵做成兩套字（Noto Bold 13 vs Oswald 9）。三修＝全部 `NiType::KeyLabel=10` Oswald Medium，
+Slate／canvas（新 `ETextTier::Key`，pt→px 換算）／選單三載體同源。真機：字高 12~14 逐顆一致、單鍵 22×22、
+ESC 1.25、ENTER 1.75。閘門 239/239、loc 0、token 12/12。儀器 `keycap_label_check.py`。WASD 列未截到（程式同源）。
+
+### 追記115 七續（2026-09-10 夜）：user 定案鍵名字高對齊舊 F／G＝Noto Sans Bold 13pt 全站
+三修的 Oswald 10pt 矮 2px 被指名改回。長鍵寬度檔位開到 2.75（ENTER 66×24）＝字高一致的代價，user 知情。
+真機字高逐顆 14（Q 15）、閘門 239/239、loc 0。證據 `keycap_v7_*.png`。
+
+### 追記115 八續（2026-09-10 夜）：留白統一（user：「多字母鍵的字與邊框距離有與單字母統一嗎？」）
+沒有（7~8 vs 4~5）。離散檔位退役，`NiUi::KeycapPad=6` 固定留白、多字母寬度跟字走；真機 G/Q/ESC 留白 5~6 一致（F 8/7＝窄字母在方格裡）。閘門綠。證據 `keycap_v8_*.png`。
+
+### 追記115 九續（2026-09-11）：全站鍵帽普查（user：「所有有出現的按鍵的排版數據去給我調查實際的螢幕顯示的數據」）
+儀器 `Tools/UiCheck/keycap_survey.py`，31 張兩視角全流程真機截圖。結果表在 UI_SYSTEM §15.13 六修。
+字高 14／帽高 24 全等；單字母方格；多字母留白設計 6，實測 5~7／4~6、字越長右側越緊。真因＝Slate 渲染
+比所有量測 API 寬 1~2px/字（三條量法皆試）。零誤差的解＝鍵名烘成貼圖（Kenney／Meccha 做法），待裁。
+儀器血價＝我把 DPI 當 0.94 算了兩輪（其實 1.0；是 >200 門檻吃掉抗鋸齒邊）＋銭幣圖示假陽性。
+
+### 追記115 十續（2026-09-11）：字置中＋渲染補償 0.5px/字
+上下留白全 5／5；左右 ENTER 6/5、ESC 7/7、SHIFT 5/5、TAB 5/7、單字母隨字寬；±1＝字形側邊距（前進框置中）。
+六修的靠左＋墨跡內距是把誤差堆到單邊的錯法，撤回。零誤差仍只有烘貼圖，待裁。
+
+### 追記115 十一續（2026-09-11）：垂直置中對大寫墨跡（user 2560×1380 實測 ESC 上/下 9/5）
+行框置中≠墨跡置中；`KeycapTextLift` 用 Slate 該縮放的行高／基線算偏移抬回。2560×1380：ESC 7/7、C 7/7。
+新工具鏈：-game 指定解析度＋NiMenuAutoHost＋NiShot＝一分鐘拍到 user 解析度的大廳。
+
+### 追記115 十二續（2026-09-11）：DPI 算死的鍵帽版面（user：「我都有重開過」）
+user 的 bat 960×540 開再拉大；八修在建立時照 DPI 0.5 算死抬升量與帽寬 ⇒ 放大後全錯。改設計單位算，Slate 等比縮放。
+用他的流程重現（開小→拉大→拍）：ESC 上/下 9/8、C 8/7。**驗收要走 user 的啟動方式。**
+
+### 追記115 十三續（2026-09-11）：字烘進帽裡、一顆鍵一張貼圖（user 對九修：「上下依然沒有一樣啊？」）
+user 視窗（客戶區 2542×1333、縮放 1.234）實測九修：ESC 6/5、C 5/5，且 C 帽 25px／ESC 帽 26px。真因＝Slate 對盒子與
+每個字形各自取整，帽高 26 配字高 15 剩奇數 ⇒ 用 Slate 排字在非整數縮放下**不可能**對每顆鍵都做到上下相等；
+四～九修調的都是連續值。修＝字烘進貼圖、一顆鍵一張（12 鍵×兩態、`/Game/UI/Keys/T_Key_*`）、尺寸表生成
+`NiceInkKeycapData.h`、三載體同表；表外鍵名退 9-slice。字重補償 0.2px/側（Slate 排字比貼圖重 20%）。
+實測同流程：C 5/5、7/7，ESC 5/5、7/7，邊緣灰階上下對稱（181,75↔74,180）。全文 UI_SYSTEM §15.13 十修。
+**SPEC 待回寫：無**（純表現層）。未提交；外觀待 user viewport（尤其字的銳利度＝貼圖重取樣 vs 此前 Slate 直排）。
+**user 驗收：「這次終於對了」**（2026-09-11）。
+
+### 追記115 十四續（2026-09-11）：不可按＝可按的圖整顆乘透明度（user 定案）
+user 追問不可按的做法，定案「在可按的樣子的基礎上調整透明度即可」。`NiUi::KeycapDimAlpha=0.45`（與同列動詞、滑鼠圖示同值），
+三載體同一條；`_Dim` 貼圖 12 張＋`T_UI_KeycapDim` 刪除（匯入鏡像 removed 13）。09-10 空心灰框的 19 階顧慮已報告、知情選擇。
+實測障子牆 192：帽面 214／字 110。全文 UI_SYSTEM §15.13 十一修；圖 `Saved/UiMock/keycap_v11_dim_alpha.png`。未提交。
+
+### 追記116（2026-09-11）：大廳席位格（user 提案「該房間對應人數的框框，依進入順序填大頭，最左房主格不一樣」→「動工」）
+格數＝MaxPlayers、依 SeatIndex 填、格 80／席距 112／圓角 4／底黑 25%、框 1px 白明度三階（空 25／玩家 45／房主 100）。
+§11 原有的空位格在 09-08 Slate 搬遷時漏搬＝實作漂移，本次補回。四人真局三張驗證；6/6 未拍（記憶體）。
+全文 UI_SYSTEM §12.14；圖 `Saved/UiMock/lobby_seats_v1.png`。**SPEC 待回寫：無**（表現層）。未提交、待 viewport。
+**二修（同日）**：user 問「大廠怎麼標房主」→ 調查後定案「不標，框一模一樣，固定順序最左＝房主」（PEAK／Lethal／Content Warning／
+Liar's Bar 同派）。有人白 100%／空位白 25%、房主標與粗體名在大廳關、排序先房主再 SeatIndex。圖 `lobby_seats_v2.png`。§12.14 二修。
+**三修（同日）**：user「格子不需要框框，無論有沒有人」→ 黑 25% 圓角底、無外框。圖 `lobby_seats_v3.png`。§12.14 三修。
+**四修（同日）**：user「名字左側被切到？字體可以小一點」→ 量出名字（84）比格（80）寬、截斷名用滿 104 預算相鄰只隔 12；
+新字級 `NiType::Caption=11`（13 以下唯一例外）＋預算改格寬 80（截斷扣 4 餘量）。圖 `lobby_seats_v4.png`。§12.14 四修。
+**五修（同日）**：user「需要更大一點的頭貼，什麼大小符合整體設計？」→ 三檔 mock 貼在同一張實機底（`seat_size_mock.png`）
+＋推薦 80（64／96 之間唯一守住「大廳 < 揭曉」階梯的 4px 網格值；96 會跟房碼搶焦點）→ user「改」。token `FaceSeat=80`、
+格 96、席距 128；四人真局量 122/164px ↔ 預期 122.7/163.6（**這個視窗 UI 縮放是 1.278 不是 1.333**）。圖 `lobby_seats_v5.png`。§12.14 五修。
+**六修（同日）**：user「進房時頭像顯示不出來造成破圖，要嘛完整、要嘛先不顯示」→ 破圖＝三種等待退路輪流出現（名冊臉／紙框裁切／
+編譯中的灰棋盤）。`GetFaceSource` 改「肖像或 null」、PlayerState 新增複製欄位 `bFaceNone`（等不到 blob 才准畫名冊臉）、
+成品改 CreateTransient＋`IsDefaultTexture` 閘、名冊臉 `IsFullyStreamedIn` 才拍。**同一條時間軸抓到第四人被 `ReliableBufferOverflow`
+踢掉**（三張臉補發疊在初次複製上 >256 bunch）→ 上下行送前看 `NumOutRec < RELIABLE_BUFFER/2`。驗證＝`lobby4_jointimeline.sh` 每秒一張
+28~80s：修前 t=32 棋盤／t=47 第四人消失；修後 53 幀乾淨、四人到底、溢位 0。圖 `lobby_join_timeline{,_v2}.png`。§12.14 六修。
+
+## 追記117（2026-09-11）：頭像亭——v5 被打回，改回 v4 只動一件事：頭以外的身體隱形
+user 三點判讀（正交比例怪／下巴硬切／五官看不清）後我做了 v5（透視＋主補光＋固定取景＋底部漸淡，四輪 22 組校準）。
+**user 看了實機：「現在的方式超級不好，改回原來的樣子。在原來的基礎上只動一件事：把頭以外的身體部位標記上去並讓他們
+隱形，讓下巴輪廓自然地呈現，不要硬用直線截出頭部區域。」** ⇒ `git checkout` 回 v4，只加一刀。
+**現制**：拍之前在可擺骨身體（BowBody）上把 Hips 縮到 0.001（軀幹／四肢／褌／彈跳骨全塌成骨盆一點＝框外），
+再把 Head 的元件空間變換原樣寫回（Poseable 的 SetBoneTransformByName(ComponentSpace) 會把 local 反推成相對縮小父骨的
+巨大值 ⇒ 頭留原位；寫→讀之間各 RefreshBoneTransforms 一次），拍完兩根都寫回。程序化脖（NeckStretch）不入鏡。
+頭島的底＝手標切縫（NeckSeamData 84 環）＝下巴到脖子的弧線由網格自己給。肩膀切除三代啟發式（中央帶／頸窄點／
+中線段）與深度遮罩在收身時都不再用；取景 Ortho 46→64、AimZ 64→56 讓整顆頭島入框，裁切仍由 bbox 做。
+**三個定罪（都是量出來的）**：①舊制第一張永遠拍到**靜態 Body 網格**——替身生成當幀就拍、BowBody 要 tick 過才接管
+⇒ 現在等替身 tick 3 拍且 BowBody 可見才出片 ②`ShowOnlyActors` 會把替身所有面件拍進去，靜態 Body 與骨骼身體同姿
+重疊 ⇒ 骨骼上的收身被靜態網格蓋回、看起來像沒生效（三輪 A/B 像素全等）⇒ 改 `ShowOnlyComponents={BowBody}`
+③模式 2（全塌不還原頭）出空片＝收身確實到了 GPU，才敢下②的結論。
+**儀器**：`NiPortraitDump [sub]`（快取像素寫 PNG）、`NiDelayExec <s> <cmd>`、cvar `ni.PortraitCollapseBody`／`ni.PortraitDepthMask`
+（A/B）、`Tools/UiCheck/portrait_sheet.py`。v5 的校準結論（主 60／補 6／FOV 21）留在 memory 供日後參考，程式碼已無。
+**文件過期已釐清**：追記⑮寫「±XYZ 六面點光」，7bf3e37 落地的是單盞天光＋時間隔離；以程式碼為準。
+**續（同日）**：user 問「下巴下方依然有點切到」→ 解釋那是頭島的切縫（模型本身的邊）、提議底部漸淡（mock
+`portrait_chin_fade_mock.png`，未定案）；user 改問「不用正交有什麼選擇」→ 我把**同一顆頭、只換投影**烘成五檔
+（正交／135／90／50／35mm 等效；`NiPortraitProjSweep`、圖 `portrait_projection_sheet.png`），user 選「上排中間」＝
+**90mm 等效：透視、距 130cm、FOV 29.2°**，設為 `FovDeg`／`CamDistanceCm` 出貨值（FovDeg<=0 退回正交）。
+真局實拍 `Saved/UiMock/lobby_portraits_90mm.png`。底部漸淡仍未定案（透視下接縫弧度變大、已較不像切）。**SPEC 待回寫：無。**
+
+---
+
+## 追記119（2026-09-13）：退出房間／重進房間——重進的人是隱形幽靈（BUILT-自驗、待 viewport）
+user：「現在如果有玩家退出房間會有 BUG，再重新進去房間一樣會有 BUG，請自己去試玩一遍，找出所有 BUG 並修好」。
+**自駕流**＝`Saved/UiMock/ref/lobby4_leave_rejoin.sh`（主機＋P2＋P3；P2 在 60s `NiLeaveRoom`＝ESC「回主選單」同一條路、85s 以房碼重進；
+主機每 2 秒一張）與 `lobby4_leave_rejoin_x2.sh`（離開重進 ×2 ＋ 晚到第四人）。新 robo 鉤子 `NiLeaveRoom`（GameInstance Exec）。
+**修前實拍**（`lobby_leave_rejoin_row.png`／`_host.png`）：離開那一側正常（2/6、席位格縮成兩格、身體消失）；**重進那一側全壞**：
+主機與 P3 的席位格多一格有名字沒臉；重進的 P2 自己看到三個格全空（連房主的臉都沒有）、`join veil lifted (timeout, waited 0 faces)`；
+主機 log 只有 `gate hide`、永遠沒有 `gate show`＝重進的人對全房**永久隱形**，而且沒有任何 Warning。
+**定罪（加了三支診斷 log 才看見）**：`NiLobby: PostLogin … seat=-1 (new)` 之後 HUD 卻報 `NiFace: seat -1`；P2 端 `NiFaceShare: start budget
+exhausted (PS=NiceInkPlayerState_2 seat=-1)`。真因＝引擎 `AGameMode` 的重連機制：Logout 時把 PlayerState `Duplicate()` 成 inactive 副本、
+同一人重進時 `FindInactivePlayer` 把副本換回去——而 `Duplicate()` 只跑 `APlayerState::CopyProperties`（分數／名字／UniqueId），
+**我們的 SeatIndex／AvatarIndex／bIsRoomHost／PenaltyCups／Cash 一個都沒抄** ⇒ 換回來的 PlayerState 席位 −1；而且這個交換發生在
+`Super::PostLogin` 裡＝**我們派完席位之後**，派給新 PlayerState 的席位整個被丟掉。席位 −1 ⇒ 臉分發不起跑（等席位 15 秒放棄）⇒
+不 Hello ⇒ 主機不補發也收不到臉 ⇒ 現身閘永不放行。**一個欄位沒抄，整條鏈安靜地死掉。**
+**修**：①`ANiceInkPlayerState::CopyProperties` 覆寫，抄身分欄位（席位／名冊臉／房主／罰酒／現金；**刻意不抄** bAssetsRestored／
+bPersonaVerified／bFaceNone＝重進要重新還原、重新驗、重新等臉）②`PostLogin` 開頭先自己呼叫 `FindInactivePlayer`，同一人回來就拿回原席，
+否則才 `NextSeatIndex++`（引擎那次再找＝no-op）③`RegisterFaceViewer` 順手清掉離場者的弱指標④三支診斷 log 留下（只在狀態改變時寫）。
+**修後實拍**：`lobby_leave_rejoin_row_v2.png`／`_host_v2.png`——重進後 2 秒臉齊、`gate show`、三端三張臉；×2 流程兩次重進都 `seat=1
+(restored inactive PlayerState)`、第四人拿 seat 3、四端全臉（`lobby_leave_rejoin_x2_row.png`，主機末幀 READY 4/6）；三輪 log 零
+ReliableBufferOverflow（09-11 那條同日已修）。
+**離開那一側**：三輪都沒看到 user 說的 BUG；最可能就是 09-11 抓到的「第四人進房 1 秒被 ReliableBufferOverflow 踢掉」（看起來像有人退出），
+已修。若 user 仍看到離開瞬間的問題，需要他描述看到什麼。**SPEC 待回寫：無。**
+**續（同日下午）：排序規則定案＝位置完全等於排序。** user 問「下方的人頭由左至右怎麼排？第二位離開又重進排第幾？」→ 我答「五分鐘內
+回來插回原位、否則排最後」並推薦席位派（格子空著等人）→ user：「啥意思？為什麼不做成位置完全等於排序，有人離開其他人遞補，他要重新
+排隊？我聽不懂為什麼需要保留座位」→ 我把考量攤開：①格子畫法像固定座位是我從畫面反推的，不是需求 ②席位號是四條資料鏈的鍵不能重編，
+但**顯示順序與席位號分開**（現況已是）就不需要重編 ③引擎的五分鐘重連保留對我們零收益（大廳外不准中途加入、大廳裡沒有狀態值得留）、
+上午那隻 bug 就是它的成本 → user「一聲」。
+**改**：`AddInactivePlayer` 覆寫成空（回來的人一律新玩家、新席位、排最後）；拿掉 PostLogin 的 FindInactivePlayer 前置呼叫；Logout 清掉離場者的
+`FaceBlobs／FaceSeatChar／FacePendingAcks`（沒主人的臉不再補發給晚到者）；儀式方位角改 `% SeatSpots.Num()`（席位號可 ≥6）；
+`CopyProperties` 覆寫留著當衛生。**規則**＝房主第一，其餘依進房先後；離開後面往前補；回來的人拿新號碼排最後。
+**實拍** `lobby_leave_rejoin_x2_row_v2.png`：P2 兩次重進分別拿 seat 3、4，排在 P3 之後；第四人 seat 5；每次 1~2 秒臉齊、gate show；
+零溢位。**SPEC 待回寫：大廳席位排序規則（§12.14 表述「依進入順序」已涵蓋，離開重進＝重新排隊一句待補）。**

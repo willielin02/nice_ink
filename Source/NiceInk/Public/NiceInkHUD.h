@@ -37,7 +37,9 @@ protected:
 	// ---- 設計 token：字階（Slate 字級，乘 UiScale）／對齊 ----
 	// （protected：主選單 HUD 繼承共用同一套 token helpers——樣式只有一套）
 public:
-	enum class ETextTier : uint8 { Display, Title, Body, Small };
+	// Key＝鍵名（NiType::KeyLabel；2026-09-10 全站一個字級）——canvas 端只有墨杯盤的 Q 會用到，
+	// 但它與 Slate 的右緣同框，字級不同就是同一個畫面兩套鍵。
+	enum class ETextTier : uint8 { Display, Title, Body, Small, Key };
 protected:
 	enum class EHAlign : uint8 { Left, Center, Right };
 
@@ -119,6 +121,13 @@ protected:
 	UPROPERTY() TObjectPtr<UTexture2D> InkBrushTex;
 	UPROPERTY() TObjectPtr<UTexture2D> InkEdgeTex;
 	UPROPERTY() TObjectPtr<UTexture2D> InkDotTex;
+	// 鍵帽的 9-slice 貼圖（Tools/AssetPrep/keycap_texture.py）＝表外鍵名的保底（十修起主路是一顆鍵一張）。
+	// 不可按＝整顆 × NiUi::KeycapDimAlpha（十一修，user 定案）；不再另烘一張。
+	UPROPERTY() TObjectPtr<UTexture2D> KeycapTex;
+	// 一顆鍵一張（2026-09-11 十修）：/Game/UI/Keys/T_Key_<KEY>，惰性載入；Slate brush 不保 GC ⇒ 錨在這裡。
+	// 只有可按態一張；不可按＝同圖 × NiUi::KeycapDimAlpha（十一修）。
+	// 找不到也記 nullptr（不要每次重建 widget 都再 LoadObject 一次）。
+	UPROPERTY() TMap<FName, TObjectPtr<UTexture2D>> KeyTexCache;
 	void EnsureUiAssets();
 
 	// ---- 墨的原語（2026-09-07）----
@@ -341,6 +350,11 @@ public:
 	UTexture2D* GetInkBrushTex() const { return InkBrushTex; }
 	UTexture2D* GetInkDotTex() const { return InkDotTex; }
 	UTexture2D* GetInkSplatTex() const { return InkSplatTex; }
+	UTexture2D* GetKeycapTex() const { return KeycapTex; }
+	/** 一顆鍵一張的鍵帽貼圖（十修）；表裡沒有的鍵名＝nullptr ⇒ 呼叫端退回 9-slice＋排字 */
+	UTexture2D* GetKeyTex(const FString& Key);
+	// 診斷（2026-09-13）：每席位上一次的臉來源狀態，只在狀態改變時寫 log（無聲失敗先開口）
+	TMap<int32, int32> FaceSrcDiag;
 	double GetPhaseChangedAt() const { return PhaseChangedAt; }
 	/** 開發者遙測的內容（ni.DebugHud 1）；排版歸 Slate（SNiDebugPanel） */
 	void BuildDebugLines(TArray<FString>& Out) const;

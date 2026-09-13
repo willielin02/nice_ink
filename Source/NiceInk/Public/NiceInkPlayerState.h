@@ -14,6 +14,11 @@ public:
 
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	// 引擎複製 PlayerState（seamless travel／inactive 副本）只抄它自己的欄位（分數／名字／UniqueId），自訂欄位全部歸零。
+	// 2026-09-13 上午的 bug 就是這樣來的（重連副本 SeatIndex=-1 ⇒ 重進者隱形）；同日 user 定案關掉重連保留
+	//（GameMode::AddInactivePlayer 覆寫成空），這個覆寫留著是衛生：任何日後走到 Duplicate 的路都帶著身分。
+	virtual void CopyProperties(APlayerState* PlayerState) override;
+
 	// 入場順序（0 起算）；同時是環形席位與 avatar 名冊索引
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	int32 SeatIndex = INDEX_NONE;
@@ -38,6 +43,13 @@ public:
 	// 房主（listen server 本人；2026-08-13 大廳房主標示＋ESC 踢人 UI 的依據）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
 	bool bIsRoomHost = false;
+
+	// 這個席位**不會有**自訂臉 blob（無臉端／打包失敗；server 在 ServerSetFaceReady 標）。
+	// 2026-09-11 user：「頭像要嘛完整顯示、要嘛先不要顯示」——觀看端據此分辨「還在等」與「等不到」：
+	// 等得到＝空著等真肖像烘好；等不到＝名冊臉是誠實的終態、可以直接畫。此前觀看端把兩者都畫成名冊臉，
+	// 於是每個進房的人都先閃一張別人的臉。
+	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")
+	bool bFaceNone = false;
 
 	// 連續罰酒杯數（只數罰酒；猜對離座歸零；第三杯＝終局）
 	UPROPERTY(BlueprintReadOnly, Replicated, Category = "Nice Ink")

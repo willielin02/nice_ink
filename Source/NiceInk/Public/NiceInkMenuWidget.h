@@ -25,6 +25,8 @@ public:
 		SLATE_ARGUMENT(TWeakObjectPtr<APlayerController>, OwnerPC)
 		SLATE_ARGUMENT(TWeakObjectPtr<class UFont>, Font)
 		SLATE_ARGUMENT(TWeakObjectPtr<class UTexture2D>, LogoTex)   // 標誌字貼圖（MenuHUD 持有 GC）
+		SLATE_ARGUMENT(TWeakObjectPtr<class UTexture2D>, KeycapTex) // 鍵帽 9-slice（同上；表裡沒有的鍵名的保底）
+		SLATE_ARGUMENT(TWeakObjectPtr<class ANiceInkMenuHUD>, MenuHud) // 一顆鍵一張的鍵帽貼圖來源（GetKeyTex；HUD 持有 GC）
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs);
@@ -66,6 +68,7 @@ private:
 	EPage Page = EPage::Root;
 
 	TWeakObjectPtr<APlayerController> OwnerPC;
+	TWeakObjectPtr<class ANiceInkMenuHUD> MenuHud;
 
 	// --- 狀態 ---
 	FString CodeBuffer;          // 房間碼輸入（4 字母）
@@ -103,7 +106,8 @@ private:
 	FSlateBrush CardBrush, SlotBrush, RuleBrush, DividerBrush, UnderlineBrush;
 	// 頁面的「地」（2026-09-05 無卡片制）：全透明——版面樹保持原狀，只是底不畫了
 	FSlateBrush PageGroundBrush;
-	// 鍵帽底（與局內 canvas 的 DrawKeycap 同一個形狀語言：淺底、小圓角）
+	// 鍵帽底（2026-09-10：與局內 **同一張貼圖**＝T_UI_Keycap，9-slice 實心白；
+	// 缺席時退實心白圓角。此前是「深底＋白框」＝同一個遊戲第三種鍵）
 	FSlateBrush KeycapBrush;
 	FSlateBrush ChipOnBrush, ChipOffBrush;
 	FSlateBrush InsetBrush; // 卡內分組框（歸屬用「裝在同個盒子」表達，不靠間距）

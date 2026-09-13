@@ -11,6 +11,7 @@
 #include "NiceInkGameInstance.h"
 #include "NiceInkHUD.h"
 #include "NiceInkMenuWidget.h"
+#include "SNiHud.h"   // NiSlate::LoadKeycapTex（一顆鍵一張的鍵帽）
 
 UFont* ANiceInkMenuHUD::BuildMenuFont()
 {
@@ -34,9 +35,22 @@ void ANiceInkMenuHUD::BeginPlay()
 	{
 		MenuFont = BuildMenuFont();
 		LogoTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/T_UI_Logo.T_UI_Logo"));
-		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex);
+		KeycapTex = LoadObject<UTexture2D>(nullptr, TEXT("/Game/UI/T_UI_Keycap.T_UI_Keycap"));
+		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex).KeycapTex(KeycapTex).MenuHud(this);
 		GEngine->GameViewport->AddViewportWidgetContent(Menu.ToSharedRef(), /*ZOrder=*/10);
 	}
+}
+
+UTexture2D* ANiceInkMenuHUD::GetKeyTex(const FString& Key)
+{
+	const FName CacheKey(*Key);
+	if (TObjectPtr<UTexture2D>* Found = KeyTexCache.Find(CacheKey))
+	{
+		return *Found;
+	}
+	UTexture2D* Tex = NiSlate::LoadKeycapTex(Key);
+	KeyTexCache.Add(CacheKey, Tex);
+	return Tex;
 }
 
 void ANiceInkMenuHUD::EnsureScrimTex()
@@ -210,7 +224,7 @@ void ANiceInkMenuHUD::RecreateMenu(bool bOpenSettings)
 		{
 			GEngine->GameViewport->RemoveViewportWidgetContent(Menu.ToSharedRef());
 		}
-		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex);
+		Menu = SNew(SNiMenu).OwnerPC(PlayerOwner).Font(MenuFont).LogoTex(LogoTex).KeycapTex(KeycapTex).MenuHud(this);
 		if (bOpenSettings)
 		{
 			Menu->OpenSettingsPage();

@@ -12,6 +12,8 @@
 #include "Misc/Crc.h"
 #include "NiceInkBottle.h"
 #include "NiceInkCharacter.h"
+#include "Engine/ActorChannel.h"
+#include "Engine/NetConnection.h"
 #include "NiceInkTvSet.h"
 #include "NiceInkFaceShare.h"
 #include "NiceInkGameInstance.h"
@@ -77,10 +79,15 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 		}
 	}
 
-	// 席位＝入場順序；avatar 先看玩家意向、被佔用則輪派。要在 Super 之前指定，
-	// SpawnDefaultPawnFor 讀 SeatIndex 決定出生位置。
+	// 席位＝入場順序、只增不減、離開不回收；顯示順序＝在場者依席位號排（SNiPlayerRow），所以有人離開後面的人自然往前補，
+	// 回來的人拿新號碼排最後（2026-09-13 user 定案）。引擎的重連保留（FindInactivePlayer 換回舊 PlayerState）已由
+	// AddInactivePlayer 覆寫成空＝這裡永遠看到新 PlayerState。（09-13 上午那隻 bug＝引擎在 Super::PostLogin 裡把派好席位的
+	// PlayerState 換成沒抄欄位的副本 ⇒ 席位 −1 ⇒ 臉分發不起跑 ⇒ 重進者隱形；現在整條機制關掉，病根不存在。）
+	// avatar 先看玩家意向、被佔用則輪派。要在 Super 之前指定，SpawnDefaultPawnFor 讀 SeatIndex 決定出生位置。
 	if (ANiceInkPlayerState* PS = NewPlayer ? NewPlayer->GetPlayerState<ANiceInkPlayerState>() : nullptr)
 	{
+		UE_LOG(LogTemp, Log, TEXT("NiLobby: PostLogin %s seat=%d (%s) faceNone=%d"), *PS->GetPlayerName(), PS->SeatIndex,
+			PS->SeatIndex == INDEX_NONE ? TEXT("new") : TEXT("pre-assigned"), PS->bFaceNone ? 1 : 0);
 		if (PS->SeatIndex == INDEX_NONE)
 		{
 			PS->SeatIndex = NextSeatIndex++;
@@ -262,6 +269,14 @@ void ANiceInkGameMode::Logout(AController* Exiting)
 	if (ANiceInkCharacter* Char = Exiting ? Cast<ANiceInkCharacter>(Exiting->GetPawn()) : nullptr)
 	{
 		PersistCharacter(Char);
+	}
+	// 離場者的席位不回收（2026-09-13），所以他的臉 blob 也不會再有人用：清掉，晚到者的補發清單才不會多一張
+	// 沒有主人的臉（veil 等待集會白等它、多送 ~400KB）。回來的人是新席位、會重新上傳。
+	if (PS && PS->SeatIndex >= 0)
+	{
+		FaceBlobs.Remove(PS->SeatIndex);
+		FaceSeatChar.Remove(PS->SeatIndex);
+		FacePendingAcks.Remove(PS->SeatIndex);
 	}
 
 	Super::Logout(Exiting);
@@ -566,6 +581,8 @@ void ANiceInkGameMode::RegisterFaceViewer(ANiceInkCharacter* Viewer)
 	{
 		return;
 	}
+	// 離場者的弱指標順手清掉（每次廣播都會跳過它們，但名單只增不減；重進的人是新角色＝新一筆）
+	FaceViewers.RemoveAll([](const TWeakObjectPtr<ANiceInkCharacter>& V) { return !V.IsValid(); });
 	FaceViewers.AddUnique(Viewer);
 	const ANiceInkPlayerState* VPS = Viewer->GetPlayerState<ANiceInkPlayerState>();
 	const int32 OwnSeat = VPS ? VPS->SeatIndex : INDEX_NONE;
@@ -611,6 +628,22 @@ void ANiceInkGameMode::EnqueueFaceJob(ANiceInkCharacter* Target, int32 Seat,
 	}
 }
 
+// 2026-09-11 進房時間軸實拍：第四人進房 1 秒後被主機以 ReliableBufferOverflow 踢掉（log：Failed to send RPC
+// ClientFaceChunk 16401.5 bytes）。16KB 的 RPC 會被切成 ~19 個 partial reliable bunch，而 RELIABLE_BUFFER(256)
+// 數的是這條 actor channel **未被 ack** 的 bunch；晚到者報到當下，世界的初次複製也在同一條連線上排隊，
+// 三張臉的補發一疊上去就爆。節奏（每 tick 1×16KB）管的是頻寬，管不到 ack 的遲到 ⇒ 送之前看「還剩多少」。
+static bool NiGmFaceChanHasRoom(const AActor* Target)
+{
+	UNetConnection* Conn = Target ? Target->GetNetConnection() : nullptr;
+	if (!Conn)
+	{
+		return true;
+	}
+	const UActorChannel* Ch = Conn->FindActorChannelRef(const_cast<AActor*>(Target));
+	// 一次 16KB ≈ 19 bunch；留一半當世界複製與其他 RPC 的餘裕
+	return !Ch || Ch->NumOutRec < RELIABLE_BUFFER / 2;
+}
+
 void ANiceInkGameMode::TickFaceSend()
 {
 	constexpr int32 ChunkSize = 16 * 1024;
@@ -634,6 +667,11 @@ void ANiceInkGameMode::TickFaceSend()
 			continue;
 		}
 		Served.Add(C);
+		if (!NiGmFaceChanHasRoom(C))
+		{
+			++i; // reliable 緩衝快滿（進房初次複製還在路上）：這 tick 不送，等 ack 追上
+			continue;
+		}
 		const TArray<uint8>& B = *Job.Blob;
 		if (!Job.bBegun)
 		{
@@ -1564,7 +1602,8 @@ float ANiceInkGameMode::ComputeCeremonySlotOffset() const
 	Bearings.SetNum(N);
 	for (int32 i = 0; i < N; ++i)
 	{
-		const FVector2D Spot = SeatSpots.IsValidIndex(Seats[i]) ? SeatSpots[Seats[i]] : FVector2D::ZeroVector;
+		// 席位號只增不減（離開不回收）⇒ 可能 ≥6：與出生點同一條 modulo，不然第七號以後的方位角會從 (0,0) 算
+		const FVector2D Spot = SeatSpots.Num() > 0 ? SeatSpots[Seats[i] % SeatSpots.Num()] : FVector2D::ZeroVector;
 		Bearings[i] = FMath::RadiansToDegrees(FMath::Atan2(Spot.Y - Center.Y, Spot.X - Center.X));
 	}
 

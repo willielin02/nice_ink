@@ -1232,6 +1232,9 @@ public:
 	// 主選單舞台替身（2026-08-06）：無 PlayerState 的展示用角色——直接指定 avatar
 	//（正常入局走 EnsureAvatarApplied 讀 PlayerState，這裡繞過）
 	void SetupAsMenuDummy(int32 AvatarIdx);
+	// 頭像亭用：可擺骨身體與程序化脖（拍肖像時把頭以外的部位收掉）
+	UPoseableMeshComponent* GetBowBody() const { return BowBody; }
+	UNeckStretchComponent* GetNeckStretch() const { return NeckStretch; }
 
 	UFUNCTION(Exec)
 	void NiJoin();
