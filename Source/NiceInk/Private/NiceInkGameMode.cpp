@@ -56,6 +56,22 @@ FString ANiceInkGameMode::InitNewPlayer(APlayerController* NewPlayerController, 
 		{
 			PS->DesiredAvatarIndex = UGameplayStatics::GetIntOption(Options, TEXT("Avatar"), INDEX_NONE);
 		}
+		// 名字（2026-09-17）：引擎把 ?Name= 蓋成 ULocalPlayer::GetNickname（NULL 子系統＝「電腦名-GUID」，
+		// user 截圖裡的 Willie_desktop-BA902 就是它）。我們的名字走 ?NiName=；沒帶（開發直連）而且沒有平台
+		// ＝LAN，就給保底「rikishi」——LAN 本來就沒有平台名可匯入。EOS 路徑兩邊都是 Epic 名，殊途同歸。
+		FString Wanted;
+		if (UGameplayStatics::HasOption(Options, TEXT("NiName")))
+		{
+			Wanted = UNiceInkGameInstance::SanitizePlayerName(UGameplayStatics::ParseOption(Options, TEXT("NiName")));
+		}
+		else if (!UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+		{
+			Wanted = TEXT("rikishi");
+		}
+		if (!Wanted.IsEmpty() && Wanted != PS->GetPlayerName())
+		{
+			ChangeName(NewPlayerController, Wanted, false);
+		}
 	}
 	return Error;
 }
@@ -115,6 +131,17 @@ void ANiceInkGameMode::PostLogin(APlayerController* NewPlayer)
 			}
 
 			PS->AvatarIndex = PickAvatarFor(PS);
+		}
+		// 客戶端的名字也過同一道 Sanitize（2026-09-17）：正式流程帶 ?Name= 已經洗過，但開發直連
+		// （play_ingame.bat／截圖鉤子）不帶名字，引擎直接拿 NULL 子系統的假登入名「電腦名-十六進位」
+		// 進來＝沒洗過、還帶連字號以外的東西也放行。洗一次＝所有路徑同一個上限與字元集。
+		if (!NewPlayer->IsLocalController())
+		{
+			const FString Clean = UNiceInkGameInstance::SanitizePlayerName(PS->GetPlayerName());
+			if (!Clean.IsEmpty() && Clean != PS->GetPlayerName())
+			{
+				ChangeName(NewPlayer, Clean, false);
+			}
 		}
 	}
 

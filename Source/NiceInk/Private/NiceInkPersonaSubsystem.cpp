@@ -243,14 +243,11 @@ void UNiceInkPersonaSubsystem::ApplyCloudSettings(const TArray<uint8>& Bytes)
 	}
 
 	bApplyingCloudSettings = true;
-	const FString CloudName = UNiceInkGameInstance::SanitizePlayerName(CloudSave->PlayerDisplayName);
-	if (!CloudName.IsEmpty())
-	{
-		GI->PlayerDisplayName = CloudName;
-	}
+	// CloudSave->PlayerDisplayName 不再套用（09-17 自訂名退役：名字統一匯入平台）
 	GI->PreferredAvatar = CloudSave->PreferredAvatar;
 	GI->MouseSensitivityScale = FMath::Clamp(CloudSave->MouseSensitivityScale, 0.2f, 3.0f);
 	GI->MasterVolume = FMath::Clamp(CloudSave->MasterVolume, 0.0f, 1.0f);
+	GI->bHeadBobEnabled = CloudSave->bHeadBobEnabled;
 	GI->RenderScalePct = FMath::Clamp(CloudSave->RenderScalePct, 50.0f, 100.0f);
 	GI->ApplyRenderScale();
 	GI->SettingsRevision = CloudSave->Revision;
@@ -270,7 +267,7 @@ void UNiceInkPersonaSubsystem::ApplyCloudSettings(const TArray<uint8>& Bytes)
 	bApplyingCloudSettings = false;
 
 	UE_LOG(LogTemp, Log, TEXT("NiPersona: cloud settings applied (rev %d, name=%s)"),
-		CloudSave->Revision, *GI->PlayerDisplayName);
+		CloudSave->Revision, *GI->GetEffectiveDisplayName());
 }
 
 void UNiceInkPersonaSubsystem::PushSettings()

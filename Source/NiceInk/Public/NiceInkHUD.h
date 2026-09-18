@@ -153,6 +153,9 @@ protected:
 	ESysMenuPage SysMenuPage = ESysMenuPage::Root;
 public:
 	void SetSysMenuPage(int32 Page) { SysMenuPage = static_cast<ESysMenuPage>(FMath::Clamp(Page, 0, 2)); }
+	// 頁碼的單一來源（2026-09-16）：Slate 的 ESC 選單、角色端的 ESC 判斷、robo 鉤子都讀寫這一份。
+	// 此前 Slate 自己另存一份 Page ⇒ 鉤子設了頁而畫面不動＝ESC 子頁從來拍不到的真因之一。
+	int32 GetSysMenuPage() const { return static_cast<int32>(SysMenuPage); }
 protected:
 
 	// 臉像＝全 UI 身分載體（2026-08-06 SPEC #52 臉制定案：名字退出畫面）
@@ -347,6 +350,8 @@ public:
 	/** 現金＝穴あき銭、罰酒＝猪口（滿／空）。兩個都是自家記號，見 Tools/AssetPrep/nice_ink_marks.py */
 	UTexture2D* GetCoinIcon() { return Ico(TEXT("coin")); }
 	UTexture2D* GetChokoIcon(bool bFull) { return Ico(bFull ? TEXT("choko_full") : TEXT("choko_empty")); }
+	// 靴子＝ESC 選單玩家列的「踢出房間」（2026-09-17 user 定案；nice_ink_marks.py 自家線稿）
+	UTexture2D* GetBootIcon() { return Ico(TEXT("boot")); }
 	UTexture2D* GetInkBrushTex() const { return InkBrushTex; }
 	UTexture2D* GetInkDotTex() const { return InkDotTex; }
 	UTexture2D* GetInkSplatTex() const { return InkSplatTex; }

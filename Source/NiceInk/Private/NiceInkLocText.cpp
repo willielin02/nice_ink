@@ -956,6 +956,28 @@ namespace
 	{ { TEXT("copied"), TEXT("コピーした"), TEXT("已複製"), TEXT("已复制"), TEXT("복사됨"),
 		TEXT("copiado"), TEXT("copié"), TEXT("copiato"), TEXT("kopiert"),
 		TEXT("copiado"), TEXT("скопировано"), TEXT("kopyalandı"), TEXT("تم النسخ") } },
+	// HeadBob（設定：走路晃動——站姿相機黏頭骨；標籤小寫同頁慣例、德語名詞照大寫）
+	{ { TEXT("head bob"), TEXT("歩行時の揺れ"), TEXT("走路晃動"), TEXT("走路晃动"), TEXT("걷기 흔들림"),
+		TEXT("balanceo al caminar"), TEXT("balancement en marchant"), TEXT("oscillazione camminata"), TEXT("Kopfwackeln"),
+		TEXT("balanço ao andar"), TEXT("покачивание при ходьбе"), TEXT("yürüme sallanması"), TEXT("اهتزاز المشي") } },
+	// NameFromPlatformNote（個人檔案頁：名字跟著帳號走，不可在遊戲內改）
+	{ { TEXT("your name comes from your account · change it there"), TEXT("名前はアカウントのものです・変更はアカウント側で"),
+		TEXT("名字跟著你的帳號走・要改請到帳號改"), TEXT("名字跟着你的账号走・要改请到账号改"),
+		TEXT("이름은 계정 이름을 따릅니다 · 변경은 계정에서"), TEXT("tu nombre viene de tu cuenta · cámbialo allí"),
+		TEXT("ton nom vient de ton compte · change-le là-bas"), TEXT("il nome viene dal tuo account · cambialo lì"),
+		TEXT("dein Name kommt von deinem Konto · dort ändern"), TEXT("seu nome vem da sua conta · mude-o lá"),
+		TEXT("имя берётся из аккаунта · меняйте его там"), TEXT("adın hesabından gelir · oradan değiştir"),
+		TEXT("اسمك يأتي من حسابك · غيّره هناك") } },
+	// NameRandomNote（離線／LAN：session 隨機名）
+	{ { TEXT("random name (offline)"), TEXT("ランダム名（オフライン）"), TEXT("隨機名（離線）"), TEXT("随机名（离线）"),
+		TEXT("임의의 이름 (오프라인)"), TEXT("nombre aleatorio (sin conexión)"), TEXT("nom aléatoire (hors ligne)"),
+		TEXT("nome casuale (offline)"), TEXT("Zufallsname (offline)"), TEXT("nome aleatório (offline)"),
+		TEXT("случайное имя (офлайн)"), TEXT("rastgele ad (çevrimdışı)"), TEXT("اسم عشوائي (دون اتصال)") } },
+	// SettingsNote（ESC 設定頁中央副句）
+	{ { TEXT("changes apply right away"), TEXT("変更はすぐに反映"), TEXT("改了立刻生效"), TEXT("改了立刻生效"),
+		TEXT("변경 사항은 바로 적용"), TEXT("los cambios se aplican al instante"), TEXT("les changements s'appliquent aussitôt"),
+		TEXT("le modifiche si applicano subito"), TEXT("Änderungen gelten sofort"), TEXT("as mudanças valem na hora"),
+		TEXT("изменения применяются сразу"), TEXT("değişiklikler hemen uygulanır"), TEXT("تُطبَّق التغييرات فورًا") } },
 	};
 
 	// 表的大小寫在兩個地方必有一邊會舊：改成推導長度＋編譯期對賬。

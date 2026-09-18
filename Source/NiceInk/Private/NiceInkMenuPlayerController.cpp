@@ -196,16 +196,8 @@ void ANiceInkMenuPlayerController::NiMenuSelfie(const FString& SelfiePath)
 
 void ANiceInkMenuPlayerController::NiMenuSetName(const FString& Name)
 {
-	if (UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
-	{
-		const FString Clean = UNiceInkGameInstance::SanitizePlayerName(Name);
-		if (!Clean.IsEmpty())
-		{
-			GI->PlayerDisplayName = Clean;
-			GI->SaveSettings();
-			UE_LOG(LogTemp, Log, TEXT("NiMenu: name set to '%s'"), *Clean);
-		}
-	}
+	// 自訂名退役（2026-09-17 user 定案：名字統一匯入平台）。鉤子留著讓舊 robo 腳本不炸，只記 log。
+	UE_LOG(LogTemp, Warning, TEXT("NiMenu: NiMenuSetName('%s') ignored — names follow the platform account since 2026-09-17"), *Name);
 }
 
 void ANiceInkMenuPlayerController::NiMenuJoinCode(const FString& Code)

@@ -17,7 +17,7 @@
 搬的理由不是潔癖：canvas 端每個座標都是手算的，於是「程式裡寫的數字不等於畫面上的距離」
 （寫 10 畫面 16、字級 64 上螢幕是 88px 墨跡）——**同一個 repo 裡有排版引擎的那一半一個這種錯都沒有**。
 規範與全部血價＝`Docs/UI_SYSTEM.md` §15。
-**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；**2026-09-06 中性制＝§11＋§12 為現行正本：白／黑／清酒金一個強調色、展示體 Oswald（大寫＋字距，住複合字體的 Serif 三槽）＋內文 Noto Sans 13 語、三級尺度 13/18/96、全站描邊、標誌貼圖 T_UI_Logo、**圖示只剩四種＝滑鼠三顆（Kenney CC0 線稿）＋銭＋猪口滿／空（自家畫，§15.9；Lucide 全站移除）**、主鈕實心、模態面板黑 62%、相位橫幅動畫——08-06 白卡明朝制已作廢；§12.11 血價＝交付前要把每個容器當物件看（`panel_bounds_check.py`／`inspect_sheet.py`），字在盒子裡的位置要量不准猜（Slate 字級是 pt ×96/72）；§12.13 大廳三修被 user 打回還原＝版面變動沒有「不需裁決」**；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；**圖示烘焙（2026-09-09 換制）＝`Tools/AssetPrep/kenney_mouse_icons.py`（滑鼠三顆＝Kenney Input Prompts 1.5 線稿、CC0）與 `nice_ink_marks.py`（自家記號＝穴あき銭・猪口滿／空；線寬÷外框高 0.067 與 Kenney 等重）**；兩支都不開引擎、一輪 3 秒、`--preview` 出實寸對照；匯入＝`ue_import_icons.py`（**資產＝來源資料夾的鏡像，會刪來源沒有的**）。舊的 `lucide_icons.py`／`lucide_mouse_icons.py` 已刪（動詞圖示全數退役＝§15.9）；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock、`panel_bounds_check.py` 房碼面板包字閘門、`inspect_sheet.py` 交付前七區原生解析度檢視圖；**四人真局自駕截圖＝`Saved/UiMock/ref/lobby4_test.sh`**（主機 AutoHost→讀 log 房碼→三沙箱 NiMenuJoinCode→NiShot，零輸入注入）；robo 鉤子 `NiMenuBack <秒>`＝等同按 ESC）。
+**畫面的規範是 `Docs/UI_SYSTEM.md`**（2026-09-04 立；**2026-09-06 中性制＝§11＋§12 為現行正本：白／黑／清酒金一個強調色、展示體 Oswald（大寫＋字距，住複合字體的 Serif 三槽）＋內文 Noto Sans 13 語、三級尺度 13/18/96、全站描邊、標誌貼圖 T_UI_Logo、**圖示只剩五種＝滑鼠三顆（Kenney CC0 線稿）＋銭＋猪口滿／空＋靴子（踢人，09-18 第五顆；自家畫，§15.9；Lucide 全站移除）**、主鈕實心、模態面板黑 62%、相位橫幅動畫——08-06 白卡明朝制已作廢；§12.11 血價＝交付前要把每個容器當物件看（`panel_bounds_check.py`／`inspect_sheet.py`），字在盒子裡的位置要量不准猜（Slate 字級是 pt ×96/72）；§12.13 大廳三修被 user 打回還原＝版面變動沒有「不需裁決」**；全站 UI 憲法——分區職責、輸入片語文法、相位祈使句表、常駐無面板／模態才有面板、尺度正本 `NiUi`＝基準 4px。**加任何一個 UI 元素之前先讀它**；**圖示烘焙（2026-09-09 換制）＝`Tools/AssetPrep/kenney_mouse_icons.py`（滑鼠三顆＝Kenney Input Prompts 1.5 線稿、CC0）與 `nice_ink_marks.py`（自家記號＝穴あき銭・猪口滿／空；線寬÷外框高 0.067 與 Kenney 等重）**；兩支都不開引擎、一輪 3 秒、`--preview` 出實寸對照；匯入＝`ue_import_icons.py`（**資產＝來源資料夾的鏡像，會刪來源沒有的**）。舊的 `lucide_icons.py`／`lucide_mouse_icons.py` 已刪（動詞圖示全數退役＝§15.9）；儀器在 `Tools/UiCheck/`：`ui_coverage.py` 數覆蓋率、`ui_token_audit.py` 掃樣式常數、`shot_measure.py` 量真機截圖、`hud_mock.py` 離線 mock、`panel_bounds_check.py` 房碼面板包字閘門、`inspect_sheet.py` 交付前七區原生解析度檢視圖；**四人真局自駕截圖＝`Saved/UiMock/ref/lobby4_test.sh`**（主機 AutoHost→讀 log 房碼→三沙箱 NiMenuJoinCode→NiShot，零輸入注入）；robo 鉤子 `NiMenuBack <秒>`＝等同按 ESC）。
 **設計的唯一權威是 `SPEC.md`**（**v4.0j——2026-09-03 作畫操作二次收斂（墨杯盤收成一排 #59 修訂、數字鍵退役、針尖指示器全制 #60）；v4.0i=09-02 作畫全制（#57~#59）；v4.0h——2026-08-29 開場動畫改制（#55 看電視版取代「目送極道壯漢」、待定 #14 結案）＋電視節目＝祭典的新聞畫面（#56）＋皮膚色度通道改裝解剖色調＋描圖帶寬勘誤 2.2→2.4**；v4.0g=08-18 入睡儀式（轉瓶→拾瓶→喝→醉倒、
 零硬切）與舞台移到道場正中央 #53/#54；v4.0f=08-10 首啟身分與強制上傳制
 #52 追記②；v4.0=08-02 甦醒小遊戲改制描圖＋搖晃攻擊＋噴射拳腳移出核心循環）。上架衝刺（主選單/配對/大廳/音效/打包）的
@@ -561,7 +561,7 @@
   大廳=席位+臉像+**名字**+現金、揭曉/指認/頂欄=臉像+名字並列；
   DrawFaceTok=FaceIconCache+紙框+**FaceUV 版面 UV 裁切 (0.30,0.22)+(0.40,0.40)**
   （整張畫=膚色方塊鐵坑、外圈透明疊膚色底）；底層唯一鍵仍=隱形 PUID（名字=顯示
-  層可重複）。**08-06 個人檔案頁 BUILT-自驗**＝主選單第六頁（名字欄回歸+現金
+  層可重複）。**08-06 個人檔案頁 BUILT-自驗**＝主選單第六頁（名字欄回歸（09-17 起唯讀＝平台名）+現金
   （雲端資產視圖）+上傳自拍+眉毛鐵律提示 BrowHint）；**自拍→臉 runtime 接入
   （開發機版）**＝intake_selfie.py（selfie_to_face_texture+sumo 眼罩單人烘焙）
   →PersonaSubsystem 背景行程輪詢（FTSTicker）→FImageUtils 匯入三貼圖（眼罩
@@ -614,9 +614,11 @@
   08-12 起實裝形式=首啟導流頁、FaceGateHint 紅字制退役）②選單預設跳舞力士=作者本人臉
   （Content/AuthorFace 四工件 runtime 匯入、NonUFS staging；**永不成為玩家
   選項**=只活在舞台預設分支）③隱私如實聲明 PrivacyHint（本機處理/無伺服器/
-  僅同房可見——句句架構恆真）④平台名優先 GetEffectiveDisplayName()=自訂名>
-  平台帳號名（Epic 現行、B5 Steam 同 OSS 介面）>session 保底 rikishi 三位數
-  （**不落檔**；三位數=滿房撞名 1.5%）；語言=OS 偵測、Steam 拉取隨 B5。
+  僅同房可見——句句架構恆真）④**名字＝平台帳號名、不可自訂（09-17 user 定案，SPEC #62）**
+  GetEffectiveDisplayName()=平台帳號名（Epic 現行、B5 Steam 同 OSS 介面）>保底 rikishi（無數字、
+  不落檔）；重名靠臉辨識；個人檔案頁名字欄唯讀；自訂名／NiMenuSetName／雲端名字全退役。
+  **鐵坑：客戶端旅行 URL 的 `?Name=` 會被引擎用 ULocalPlayer::GetNickname 蓋掉**（NULL 子系統＝
+  電腦名-GUID）⇒ 名字走自訂選項 `?NiName=`；語言=OS 偵測、Steam 拉取隨 B5。
   鐵坑：**NULL/LAN 假登入暱稱=電腦名-編號（洩主機名）**→IsOnlineServiceConfigured
   閘住只認真平台；**EOS ini 下裸 ?listen/IP 直連=network error 回選單**→直連
   測試必帶 DefaultPlatformService=NULL（play_ingame.bat 已補）；**「誰的臉」

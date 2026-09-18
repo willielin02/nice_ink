@@ -18,16 +18,11 @@ public:
 
 	// --- 本機偏好（讀改後呼叫 SaveSettings 持久化）---
 
-	// 玩家自訂名（空＝從未自訂）。畫面與連線一律走 GetEffectiveDisplayName()——
-	// 自訂名 > 平台名 > session 保底；這欄只存「玩家親手輸入過的」
-	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
-	FString PlayerDisplayName;
-
-	// 有效顯示名（2026-08-10 user 定案：預設名直接從平台拿、減少摩擦）：
-	// ①玩家自訂名（個人檔案頁輸入）②平台帳號顯示名（現行=Epic 暱稱；B5 切
-	// Steam 票證後同一條 OSS Identity 介面自動變 Steam persona，零改動）
-	// ③離線/LAN 保底＝session 隨機 rikishiNN（transient 不落檔——別把鷹架名
-	// 寫進玩家存檔）。語言同理從 OS 偵測（Steam 語言拉取＝B5 併入）。
+	// 有效顯示名（2026-09-17 user 定案：「讓我的玩家不可以自己改名，全部統一匯入 Steam 的名稱，
+	// 要改名就去改 Steam 的名字，如果有重名就靠自拍 icon 辨識」——自訂名整條退役）：
+	// ①平台帳號顯示名（現行=Epic 暱稱；B5 切 Steam 票證後同一條 OSS Identity 介面自動變
+	//   Steam persona，零改動）②離線/LAN 保底＝「rikishi」不帶數字（09-17 user 定案；transient 不落檔）。
+	// 名字可重複（Steam persona 本來就不唯一）；身分鍵恆為 PUID／SteamID，臉像才是辨識載體。
 	FString GetEffectiveDisplayName() const;
 
 	// INDEX_NONE＝交給席位輪派
@@ -39,6 +34,12 @@ public:
 
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
 	float MasterVolume = 1.0f;
+
+	// 走路晃動（2026-09-15 user 定案：設定開關、預設開）：站姿第一人稱相機黏在頭骨眉心
+	// ＝步態的下沉／橫擺／沉浮進畫面；關＝相機回膠囊固定高（09-15 之前的行為）。
+	// 消費端＝ANiceInkCharacter::UpdateStandHeadCamera 每 tick 讀＝改了當幀生效。
+	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
+	bool bHeadBobEnabled = true;
 
 	// 渲染比例 %（50~100）：只降 3D 內部渲染解析度、UI 恆原生——立即生效零切換
 	UPROPERTY(BlueprintReadWrite, Category = "Nice Ink|Settings")
@@ -119,6 +120,19 @@ public:
 	// 用途＝-ExecCmds 在開機當下就跑完，而受測物（頭像亭、大廳）要幾十秒後才存在。
 	UFUNCTION(Exec)
 	void NiDelayExec(float DelaySeconds, const FString& Command);
+
+	// robo 鉤子（2026-09-16）：在 -game 視窗裡打開 ESC 選單（零輸入注入）——PIE 的畫面比 -game 暗
+	//（同一面障子 PIE p90 154 vs -game 210），模態暗底／面板的真實對比只有在 -game 拍得到。
+	// NiSysMenuOpen＝開到第一頁；NiSysMenuSettings＝開到設定頁；NiSysMenuClose＝關。
+	// 用法：-ExecCmds="NiDelayExec 25 NiSysMenuSettings,NiShot 30 <名>"（NiDelayExec 只吃單一 token）。
+	UFUNCTION(Exec)
+	void NiSysMenuOpen();
+	UFUNCTION(Exec)
+	void NiSysMenuSettings();
+	UFUNCTION(Exec)
+	void NiSysMenuHowTo();
+	UFUNCTION(Exec)
+	void NiSysMenuClose();
 
 	// robo 鉤子：主動離開房間（＝ESC 選單「回主選單」那顆鈕走的同一條 ReturnToMainMenu 路）。
 	// 2026-09-13 user：「玩家退出房間會有 BUG，再重新進去一樣有 BUG」→ 自駕流要能讓一個客戶端離開再回來。

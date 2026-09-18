@@ -18,6 +18,7 @@
 #include "InkCanvasComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "NiceInkCharacter.h"
+#include "NiceInkHUD.h"
 #include "NiceInkLocText.h"
 #include "NiceInkPersonaSubsystem.h"
 #include "NiceInkSessionSubsystem.h"
@@ -175,7 +176,9 @@ FString UNiceInkGameInstance::SanitizePlayerName(const FString& Raw)
 {
 	// v4.0e：名字上畫面＋13 語＝開放 Unicode（中日韓/假名/西里爾…全收）。
 	// 黑名單制，只擋三類：控制字元與空白、travel URL 語法字（?=&/\"）、
-	// 檔名保留字（<>:*|——LAN 舊制存檔槽名帶玩家名）。上限 16 字元。
+	// 檔名保留字（<>:*|——LAN 舊制存檔槽名帶玩家名）。
+	// 上限 32 字元（2026-09-17：名字統一匯入平台，Steam persona 上限 32 位元組＝最多 32 字元；
+	// 16 會把 Steam 名字切掉一半。畫面上的寬度各自用 Elide 處理，不在這裡砍）。
 	FString Out;
 	for (const TCHAR C : Raw)
 	{
@@ -186,7 +189,7 @@ FString UNiceInkGameInstance::SanitizePlayerName(const FString& Raw)
 		{
 			Out.AppendChar(C);
 		}
-		if (Out.Len() >= 16)
+		if (Out.Len() >= 32)
 		{
 			break;
 		}
@@ -205,10 +208,11 @@ void UNiceInkGameInstance::LoadSettings()
 	if (const UNiceInkSettingsSave* Save = Cast<UNiceInkSettingsSave>(
 		UGameplayStatics::LoadGameFromSlot(SettingsSlotName, 0)))
 	{
-		PlayerDisplayName = SanitizePlayerName(Save->PlayerDisplayName);
+		// Save->PlayerDisplayName 不再讀（09-17 自訂名退役；欄位留著只為舊存檔相容）
 		PreferredAvatar = Save->PreferredAvatar;
 		MouseSensitivityScale = FMath::Clamp(Save->MouseSensitivityScale, 0.2f, 3.0f);
 		MasterVolume = FMath::Clamp(Save->MasterVolume, 0.0f, 1.0f);
+		bHeadBobEnabled = Save->bHeadBobEnabled;
 		RenderScalePct = FMath::Clamp(Save->RenderScalePct, 50.0f, 100.0f);
 		SavedLang = Save->LanguageIndex;
 		SettingsRevision = Save->Revision;
@@ -238,7 +242,9 @@ void UNiceInkGameInstance::LoadSettings()
 	// 保底名只活在這個 session（2026-08-10：預設名從平台拿——鷹架名不落檔，
 	// 玩家存檔裡只該有他親手輸入的名字）。三位數＝滿房 6 人撞名 1.5%
 	//（兩位數 14%——名字要服社交叫喚，同房同名是實際干擾；2026-08-10 user 抓改）
-	SessionFallbackName = FString::Printf(TEXT("rikishi%03d"), FMath::RandRange(0, 999));
+	// 離線／LAN 保底名＝「rikishi」，不帶數字（2026-09-17 user：「叫 rikishi 就好，不需要加數字」）。
+	// 重名靠自拍臉辨識；名字不是身分鍵。
+	SessionFallbackName = TEXT("rikishi");
 }
 
 void UNiceInkGameInstance::NiShot(float DelaySeconds, const FString& Name)
@@ -278,6 +284,35 @@ void UNiceInkGameInstance::NiLeaveRoom()
 {
 	ReturnToMainMenu(FString());
 }
+
+namespace
+{
+	// 本地角色＋它的 HUD（-game 視窗只有一個本地玩家）
+	void NiSysMenuSet(UGameInstance* GI, bool bOpen, int32 Page)
+	{
+		UWorld* World = GI ? GI->GetWorld() : nullptr;
+		APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
+		ANiceInkCharacter* C = PC ? Cast<ANiceInkCharacter>(PC->GetPawn()) : nullptr;
+		if (!C)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("NiSysMenu: no local NiceInkCharacter yet"));
+			return;
+		}
+		if (C->IsSystemMenuOpen() != bOpen)
+		{
+			C->SetSystemMenuOpen(bOpen);
+		}
+		if (ANiceInkHUD* H = Cast<ANiceInkHUD>(PC->GetHUD()))
+		{
+			H->SetSysMenuPage(Page);
+		}
+	}
+}
+
+void UNiceInkGameInstance::NiSysMenuOpen() { NiSysMenuSet(this, true, 0); }
+void UNiceInkGameInstance::NiSysMenuSettings() { NiSysMenuSet(this, true, 2); }
+void UNiceInkGameInstance::NiSysMenuHowTo() { NiSysMenuSet(this, true, 1); }
+void UNiceInkGameInstance::NiSysMenuClose() { NiSysMenuSet(this, false, 0); }
 
 void UNiceInkGameInstance::NiNotaryTest()
 {
@@ -442,11 +477,7 @@ void UNiceInkGameInstance::NiSpotMap(int32 On)
 
 FString UNiceInkGameInstance::GetEffectiveDisplayName() const
 {
-	// ① 玩家自訂名
-	if (!PlayerDisplayName.IsEmpty())
-	{
-		return PlayerDisplayName;
-	}
+	// ①（已退役 2026-09-17）玩家自訂名——名字統一匯入平台，要改去平台改
 	// ② 平台帳號顯示名（Epic 現行；B5 Steam 票證＝同介面同路）。
 	// 只認真平台：NULL/LAN 的假登入會把「電腦名-編號」當暱稱回來（實測
 	// Willie_desktop-5）＝洩漏主機名，一律落到③保底。
@@ -480,10 +511,11 @@ UNiceInkSettingsSave* UNiceInkGameInstance::BuildSettingsSaveObject() const
 {
 	UNiceInkSettingsSave* Save = Cast<UNiceInkSettingsSave>(
 		UGameplayStatics::CreateSaveGameObject(UNiceInkSettingsSave::StaticClass()));
-	Save->PlayerDisplayName = SanitizePlayerName(PlayerDisplayName);
+	Save->PlayerDisplayName.Reset(); // 自訂名退役（09-17）：欄位留空、只為舊存檔相容
 	Save->PreferredAvatar = PreferredAvatar;
 	Save->MouseSensitivityScale = MouseSensitivityScale;
 	Save->MasterVolume = MasterVolume;
+	Save->bHeadBobEnabled = bHeadBobEnabled;
 	Save->RenderScalePct = RenderScalePct;
 	Save->LanguageIndex = MenuLanguage;
 	Save->Revision = SettingsRevision;

@@ -190,6 +190,13 @@ enum class ENiLocKey : uint8
 	ActMenu,
 	ActCopy,
 	LobbyCopied,
+	// 設定：走路晃動（2026-09-15；主選單設定頁與 ESC 設定頁共用）
+	HeadBob,
+	// 個人檔案頁名字欄（2026-09-17 名字統一匯入平台、不可自訂）：線上說明／離線隨機名說明
+	NameFromPlatformNote,
+	NameRandomNote,
+	// ESC 設定頁中央的副句（2026-09-18 五修：每一頁的正中央＝這一頁要做的事）
+	SettingsNote,    // 改了立刻生效
 	COUNT
 };
 

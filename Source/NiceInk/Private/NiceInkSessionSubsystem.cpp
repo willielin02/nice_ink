@@ -89,11 +89,14 @@ FString UNiceInkSessionSubsystem::BuildTravelOptions() const
 	FString Options;
 	if (const UNiceInkGameInstance* GI = Cast<UNiceInkGameInstance>(GetGameInstance()))
 	{
-		// 有效名＝自訂 > 平台 > session 保底（2026-08-10 平台名優先制）
+		// 有效名＝平台名 > 保底 rikishi（2026-09-17 名字統一匯入平台）。
+		// **?Name= 會被引擎蓋掉**（09-17 log 定罪：`Login request: ?Name=Willie_desktop-5522…` 而我們送的是
+		// rikishi）：UPendingNetGame::SendJoin 用 ULocalPlayer::GetNickname（＝OSS Identity 的暱稱，NULL 子系統
+		// 回「電腦名-GUID」）覆寫同名選項。所以自己的名字改走 ?NiName=，server 端 InitNewPlayer 認這個。
 		const FString Name = UNiceInkGameInstance::SanitizePlayerName(GI->GetEffectiveDisplayName());
 		if (!Name.IsEmpty())
 		{
-			Options += FString::Printf(TEXT("?Name=%s"), *Name);
+			Options += FString::Printf(TEXT("?Name=%s?NiName=%s"), *Name, *Name);
 		}
 		if (GI->PreferredAvatar != INDEX_NONE)
 		{

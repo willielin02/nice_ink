@@ -642,6 +642,10 @@ void ANiceInkCharacter::Tick(float DeltaSeconds)
 	}
 
 	PollSystemMenu(PC);
+	// 站姿頭黏相機（2026-09-15）：骨骼本 tick 已全部寫完（步態→彈跳→筆→脖），在任何
+	// 讀相機的輪詢（PollLeanEnter 的準星射線）之前把相機擺到眉心；選單開著／儀式中也要跟，
+	// 不然頭回位而相機留在舊偏移＝關選單那一幀跳一下。
+	UpdateStandHeadCamera();
 	if (bSystemMenuOpen)
 	{
 		// 選單開著＝遊戲輸入全停（滑鼠屬於選單按鈕）；系統演出鏡頭照常
@@ -675,6 +679,14 @@ void ANiceInkCharacter::PollSystemMenu(APlayerController* PC)
 {
 	if (PC->WasInputKeyJustPressed(EKeys::Escape))
 	{
+		// 子頁的 ESC＝回第一頁（左下鍵帽寫的就是 BACK；此前不管在哪一頁都整個關掉＝標籤說謊）；
+		// 第一頁的 ESC＝關閉（鍵帽寫 RESUME）。頁碼的單一來源＝HUD 的 SysMenuPage。
+		ANiceInkHUD* H = bSystemMenuOpen ? Cast<ANiceInkHUD>(PC->GetHUD()) : nullptr;
+		if (H && H->GetSysMenuPage() != 0)
+		{
+			H->SetSysMenuPage(0);
+			return;
+		}
 		SetSystemMenuOpen(!bSystemMenuOpen);
 	}
 }
@@ -5385,6 +5397,34 @@ FString ANiceInkCharacter::DebugRoboGaitStats() const
 		JiggleStates[4].LastSpringCm);
 }
 
+FString ANiceInkCharacter::DebugRoboHeadCam() const
+{
+	// 站姿頭黏相機機讀摘要：cam＝本體相機世界位置、brow＝本 tick 由 Head 骨算出的眉心、
+	// capCam＝舊制膠囊掛點 (0,0,64)；relZ/relY＝相機相對膠囊中心的高度／側偏（actor 座標系，
+	// +Y=右）——站著不動是常數、走路時要看到下沉與擺動，這是「真的黏上去」的下限契約。
+	FVector Cam = FVector::ZeroVector, Brow = FVector::ZeroVector, Head = FVector::ZeroVector;
+	if (FirstPersonCamera)
+	{
+		Cam = FirstPersonCamera->GetComponentLocation();
+	}
+	if (BowBody && BowBody->GetSkinnedAsset())
+	{
+		const FTransform HeadW = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace);
+		Head = HeadW.GetLocation();
+		Brow = Head + HeadW.GetRotation().RotateVector(StandHeadCamLocalBrow);
+	}
+	const FTransform CapT = GetCapsuleComponent()->GetComponentTransform();
+	const FVector CapCam = CapT.TransformPosition(FVector(0.0f, 0.0f, 64.0f));
+	const FVector RelCam = CapT.InverseTransformPositionNoScale(Cam);
+	return FString::Printf(
+		TEXT("active=%d cam=(%.2f,%.2f,%.2f) brow=(%.2f,%.2f,%.2f) head=(%.2f,%.2f,%.2f) ")
+		TEXT("capCam=(%.2f,%.2f,%.2f) relX=%.2f relY=%.2f relZ=%.2f camBrowErr=%.3f speed=%.1f stance=%.2f"),
+		bStandHeadCamActive ? 1 : 0,
+		Cam.X, Cam.Y, Cam.Z, Brow.X, Brow.Y, Brow.Z, Head.X, Head.Y, Head.Z,
+		CapCam.X, CapCam.Y, CapCam.Z, RelCam.X, RelCam.Y, RelCam.Z,
+		static_cast<float>(FVector::Dist(Cam, Brow)), GetVelocity().Size2D(), GaitStanceAlpha);
+}
+
 void ANiceInkCharacter::DebugRoboSideView(bool bEnable)
 {
 	// 側視第三人稱相機（截圖矩陣用；固定機位——探針在鏡框內走小段路）
@@ -7234,6 +7274,76 @@ void ANiceInkCharacter::UpdateLeanCamera(APlayerController* PC)
 		EyePos = GetActorLocation() + FVector(0.0f, 0.0f, 40.0f); // 無骨骼退路
 	}
 	FirstPersonCamera->SetWorldLocationAndRotation(EyePos, AimRot);
+}
+
+void ANiceInkCharacter::UpdateStandHeadCamera()
+{
+	// 站姿第一人稱＝真的黏在頭骨上（2026-09-15 user 指示：不做開關、直接換，不滿意再回滾）。
+	// 此前相機掛膠囊 (0,0,64) 固定高＝走路時頭在晃（骨盆下沉 10／橫移 3.5／步點 0.7cm、
+	// 上身前傾 6°）而畫面不晃、且走路時眼睛比相機低 10cm。現制：位置＝Head 骨的剛體附件
+	//（眉心＝Head 骨 + 臉向 13 + 頭頂 8，與 lean／沉睡的眉心同一慣例），每 tick 讀本 tick
+	// 最終骨骼重擺；朝向不黏（理由見標頭）。睡姿／鎖定作畫／儀式姿勢各自擁有相機＝讓位。
+	// 玩家開關（2026-09-15 user 定案）＝設定頁「走路晃動」，預設開；關＝退回膠囊掛點
+	//（09-15 之前的行為）。每 tick 讀＝ESC 選單裡切換當幀生效。沒有 GameInstance 的
+	// 替身（選單舞者／頭像亭）不會走到這裡（非本地控制）。
+	const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(this);
+	const bool bWantBob = !GI || GI->bHeadBobEnabled;
+	const bool bEligible = bWantBob && FirstPersonCamera && BowBody && BowBody->GetSkinnedAsset() &&
+		!bAsleep && !bLeanLocked && !bCeremonyPoseActive && bStandDoubleActive;
+	if (!bEligible)
+	{
+		if (bStandHeadCamActive)
+		{
+			bStandHeadCamActive = false;
+			// 還原膠囊掛點（硬切）。睡姿／鎖定例外：那兩條路的相機擁有者自己會擺。
+			if (!bAsleep && !bLeanLocked && FirstPersonCamera)
+			{
+				FirstPersonCamera->SetRelativeLocation(FVector(0.0f, 0.0f, 64.0f)); // 與建構子一致
+				FirstPersonCamera->SetRelativeRotation(FRotator(CameraPitch, 0.0f, 0.0f));
+			}
+		}
+		return;
+	}
+
+	// 眉心在 Head 骨局部座標：由 ref pose 一次算出（CS 慣例 +Y 臉向、+Z 頭頂——
+	// ApplyLookPitchToCS 同一套），之後每 tick 只做一次旋轉＋平移＝零額外骨骼讀取。
+	const USkinnedAsset* Asset = BowBody->GetSkinnedAsset();
+	if (StandHeadCamAsset.Get() != Asset)
+	{
+		const FReferenceSkeleton& Ref = Asset->GetRefSkeleton();
+		const int32 HeadIdx = Ref.FindBoneIndex(TEXT("Head"));
+		if (HeadIdx == INDEX_NONE)
+		{
+			return;
+		}
+		// 只組 Head 這一條父鏈（CS[i] = Local[i] * CS[Parent]，同 ApplyGaitPose；根骨 scale=100 照鏈）
+		FTransform HeadRefCS = FTransform::Identity;
+		for (int32 i = HeadIdx; i != INDEX_NONE; i = Ref.GetParentIndex(i))
+		{
+			HeadRefCS = HeadRefCS * Ref.GetRefBonePose()[i];
+		}
+		const FVector BrowOfsCS(0.0f, 13.0f, 8.0f);
+		StandHeadCamLocalBrow = HeadRefCS.GetRotation().Inverse().RotateVector(BrowOfsCS);
+		StandHeadCamAsset = Asset;
+		bStandHeadCamLogged = false;
+	}
+
+	const FTransform HeadW = BowBody->GetBoneTransformByName(TEXT("Head"), EBoneSpaces::WorldSpace);
+	// 只用旋轉＋平移（不走 TransformPosition＝不吃骨鏈上的 scale）
+	const FVector BrowW = HeadW.GetLocation() + HeadW.GetRotation().RotateVector(StandHeadCamLocalBrow);
+	FirstPersonCamera->SetWorldLocation(BrowW);
+	bStandHeadCamActive = true;
+
+	if (!bStandHeadCamLogged && IsLocallyControlled())
+	{
+		// 一次性對賬（量，不要猜）：眉心 vs 舊制膠囊掛點的靜態差——站著不動時該是 cm 級
+		bStandHeadCamLogged = true;
+		const FVector CapCamW = GetCapsuleComponent()->GetComponentTransform().TransformPosition(FVector(0.0f, 0.0f, 64.0f));
+		const FVector D = BrowW - CapCamW;
+		UE_LOG(LogTemp, Log, TEXT("NiHeadCam: on brow=(%.1f,%.1f,%.1f) capsuleCam=(%.1f,%.1f,%.1f) d=(%.2f,%.2f,%.2f) localBrow=(%.2f,%.2f,%.2f)"),
+			BrowW.X, BrowW.Y, BrowW.Z, CapCamW.X, CapCamW.Y, CapCamW.Z, D.X, D.Y, D.Z,
+			StandHeadCamLocalBrow.X, StandHeadCamLocalBrow.Y, StandHeadCamLocalBrow.Z);
+	}
 }
 
 // --- 畫墨 RPC ---

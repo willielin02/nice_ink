@@ -1275,6 +1275,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	FString DebugRoboGaitStats() const;
 
+	// robo：站姿頭黏相機機讀摘要（2026-09-15）：相機／眉心／Head 骨世界座標＋舊制膠囊掛點
+	// ＋相機相對膠囊的高度與側偏——「相機＝眉心」黏合契約與「走路真的會晃」下限的量測面
+	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
+	FString DebugRoboHeadCam() const;
+
 	// robo：第三人稱側視相機開關（步態截圖矩陣用；false=還原本體視角）
 	UFUNCTION(BlueprintCallable, Category = "Nice Ink|Debug")
 	void DebugRoboSideView(bool bEnable);
@@ -1616,6 +1621,18 @@ private:
 	FVector2D LeanCursorPx = FVector2D::ZeroVector; // 虛擬麥克筆游標（螢幕像素）
 	float LeanLockTime = 0.0f;                      // 鎖定起始（鏡頭到位前不落筆）
 	bool bLeanCamActive = false;                    // 鎖定中本體相機被世界寫入接管（退鎖要還原掛點）
+
+	// --- 站姿頭黏相機（2026-09-15 user 指示「直接換成真實黏在頭上，不滿意再回滾」）---
+	// 站立／走路時本體相機的位置＝本 tick 最終骨骼的 Head 骨眉心（頭怎麼晃畫面就怎麼晃：
+	// 骨盆下沉／重心橫移／步點沉浮／上身前傾全部進畫面）；朝向照舊＝控制器（滑鼠）——
+	// 頭骨自己的俯仰是給旁人看的壓縮曲線（LookPitchMaxDeg 12°），黏朝向＝滑鼠只能看 ±12°。
+	// 睡姿／鎖定作畫各自的相機不經此路。玩家開關＝設定頁「走路晃動」
+	//（UNiceInkGameInstance::bHeadBobEnabled，預設開；關＝相機回膠囊掛點＝舊行為）。
+	bool bStandHeadCamActive = false;               // 本體相機正被頭骨接管（退場要還原膠囊掛點）
+	FVector StandHeadCamLocalBrow = FVector::ZeroVector; // 眉心在 Head 骨局部座標（ref pose 一次算出）
+	TWeakObjectPtr<const UObject> StandHeadCamAsset;     // 上述快取所屬的骨骼資產（切變體重算）
+	bool bStandHeadCamLogged = false;
+	void UpdateStandHeadCamera();
 
 	// --- 直接畫制內部（2026-07-18）---
 

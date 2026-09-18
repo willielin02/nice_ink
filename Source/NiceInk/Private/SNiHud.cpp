@@ -1653,9 +1653,25 @@ public:
 		BodyFont = NiSlate::BodyFont(F, NiType::Text, false);
 		SmallFont = NiSlate::DisplayFont(F, NiType::Small, false);
 		LabelFont = NiSlate::BodyFont(F, NiType::Small, false);
-		CodeFont = NiSlate::DisplayFont(F, NiType::Title.Size, true, NiSlate::CodeTracking);
+		// 房碼在暫停選單裡是一則資訊不是標題（大廳左下已用主角字級講過一次）：展示體 Heading 級
+		//（三修用 Value 18＝比它的小標還窄、主從顛倒，user 打回）
+		CodeFont = NiSlate::DisplayFont(F, NiType::Heading, true, NiSlate::CodeTracking);
 
+		// 模態的地＝這一層全螢幕黑 62%（UI_SYSTEM §11.2「模態＝黑 60%」）。它就是面板：實機
+		// 量過（2026-09-16，-game 2560×1380）障子牆 204 → 78，白字對比 7.5:1。**不要在它上面
+		// 再疊一塊有邊界的面板**——那是主選單設定頁的做法，而主選單沒有全螢幕暗底；同一畫面
+		// 兩層模態處理，全遊戲沒有第二處（09-16 一版犯過、當天拆掉）。
 		Dim = MakeShared<FSlateColorBrush>(FLinearColor(0, 0, 0, NiUi::ModalDim));
+		Divider = MakeShared<FSlateColorBrush>(FLinearColor(1, 1, 1, 0.14f));
+		{
+			// 席位列的底＝黑 25% 圓角（大廳席位格同一種底；有人沒人只差內容）
+			FLinearColor Ground = NiHudColor::Black; Ground.A = 0.25f;
+			RowGround = MakeShared<FSlateRoundedBoxBrush>(Ground, NiUi::Radius);
+		}
+		AccentBar = MakeShared<FSlateColorBrush>(FLinearColor::White);
+		RowLabelFont = NiSlate::BodyFont(F, NiType::Label.Size, false, NiType::Label.Tracking);
+		ValueFont = NiSlate::BodyFont(F, NiType::Body.Size, false);
+		RowTextFont = NiSlate::BodyFont(F, NiType::Action.Size, false);   // 席位列的名字與錢：臉 80 配 24（內文體、常規字重）
 		MakeButtonStyles();
 
 		ChildSlot
@@ -1663,10 +1679,32 @@ public:
 			SNew(SBorder).BorderImage(Dim.Get()).Padding(0)
 			[
 				SNew(SOverlay)
+				// 六修（2026-09-18 user：「MENU 欄位突然往上擺是什麼原因？如果要置中，應該如何定義置中的確切位置才能符合整個遊戲的
+				// UI 設計規範？」）——左欄與中欄各自掛各自的錨點，不再共用一列：
+				// ① 左欄（動作）＝主選單動詞欄同一個錨：x=72 左軸、頂線＝剩餘高的 36%（上下撐開器 0.36／0.64，與主選單 0.22／0.78
+				//    同一種寫法、同一條線）。它的高度只由自己決定，中欄長高不會把它往上推——五修四／五版就是這樣被推的：三欄同一列，
+				//    撐開器分的是「扣掉那一列之後的剩餘」，六列 96 讓剩餘變小、36% 跟著變小，MENU 從 380 爬到 158。
+				// ② 中欄（這一頁要做的事）＝模態內容的錨：**螢幕正中**（水平＝畫面寬的一半、垂直＝畫面高的一半，量的是整塊的盒）
+				//    ——與墨杯盤／指認面板／兇手轉盤同一條規則（§11.3：模態＝置中於螢幕）；4～6 席長短不同的表都繞同一個中心長。
+				//    水平置中不再靠兩側等寬空盒：外框左右對稱、直接 HAlign_Center。
+				// 兩個錨各自成立 ⇒ 左欄的頂線與中欄的頂線不再保證同高，這是刻意的：它們是兩種東西（出口／內容）。
+				+ SOverlay::Slot().HAlign(HAlign_Left).VAlign(VAlign_Fill).Padding(Gutter - TextAxis, 0, 0, 0)
+				[
+					SNew(SVerticalBox)
+					+ SVerticalBox::Slot().FillHeight(0.36f)[SNew(SSpacer)]
+					+ SVerticalBox::Slot().AutoHeight()
+					[
+						SNew(SBox).WidthOverride(ColRW + TextAxis).HAlign(HAlign_Left)
+						.Visibility(TAttribute<EVisibility>::CreateLambda([this]()
+							{ return GetPage() == 0 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
+						[BuildRoot()]
+					]
+					+ SVerticalBox::Slot().FillHeight(0.64f)[SNew(SSpacer)]
+				]
 				+ SOverlay::Slot().HAlign(HAlign_Center).VAlign(VAlign_Center)
 				[
 					SNew(SOverlay)
-					+ SOverlay::Slot()[BuildRoot()]
+					+ SOverlay::Slot()[BuildPlayersColumn()]
 					+ SOverlay::Slot()[BuildHowTo()]
 					+ SOverlay::Slot()[BuildSettings()]
 				]
@@ -1690,120 +1728,177 @@ public:
 	}
 
 	/** 關掉選單時回到第一頁（狀態機的出口要關乾淨） */
-	void ResetPage() { Page = 0; }
+	void ResetPage() { SetPage(0); }
 
 private:
 	// ---- 樣式 ----
 	void MakeButtonStyles()
 	{
 		auto Fill = [](float A) { return FSlateRoundedBoxBrush(FLinearColor(1, 1, 1, A), NiUi::Radius); };
-		Normal.SetNormal(Fill(0.10f)).SetHovered(Fill(0.24f)).SetPressed(Fill(0.30f))
+		// 這個選單只剩一種鈕＝文字鈕（無底、hover 才淡淡浮起）：灰底方塊與實心主鈕 09-17 三修全部退役
+		//（灰方塊貼在一起讀成一塊灰板；RESUME 是預設動作，不該是畫面最響的東西）。
+		TextBtn.SetNormal(Fill(0.0f)).SetHovered(Fill(0.10f)).SetPressed(Fill(0.16f))
 			.SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
-		// 主鈕＝實心白＋黑字（無主色；hover 只動明度）
-		Primary.SetNormal(Fill(1.0f)).SetHovered(Fill(0.86f)).SetPressed(Fill(0.80f))
-			.SetNormalPadding(FMargin(0)).SetPressedPadding(FMargin(0));
-	}
-
-	TSharedRef<SWidget> MenuButton(ENiLocKey Label, bool bPrimary, TFunction<void()> OnClick)
-	{
-		return SNew(SBox).WidthOverride(80.0f * NiUi::U).HeightOverride(13.0f * NiUi::U)
-		[
-			SNew(SButton)
-			.ButtonStyle(bPrimary ? &Primary : &Normal)
-			.ContentPadding(FMargin(0))
-			.HAlign(HAlign_Center).VAlign(VAlign_Center)
-			.OnClicked(FOnClicked::CreateLambda([OnClick]() { OnClick(); return FReply::Handled(); }))
-			[
-				SNew(STextBlock).Font(BtnFont)
-				.ColorAndOpacity(bPrimary ? NiHudColor::Ink : NiHudColor::Paper)
-				.Text(NiText(Label))
-			]
-		];
 	}
 
 	FText NiText(ENiLocKey Key) const { return FText::FromString(NiLoc::T(Hud.Get(), Key).ToUpper()); }
 
+	/** 文字鈕＝主選單 MakeTextButton 的同款（無底無框、行高 Action×2.25、hover 左側 3px 短棒）。
+	 *  2026-09-17 user：「這個畫面的 UI 實在太醜了」——此前三顆非主鈕是 10% 灰底方塊、彼此貼 8px，
+	 *  讀成一塊灰板；主選單首頁早就是文字鈕堆疊，同一款遊戲不該有兩種按鈕語言。 */
+	TSharedRef<SWidget> TextButton(ENiLocKey Label, TFunction<void()> OnClick, bool bDanger)
+	{
+		// 毀滅性動作平時退一階（白 70%）、hover 才轉紅：輕重靠顏色講，不靠距離講
+		const FLinearColor Hot = bDanger ? NiHudColor::Red : NiHudColor::AccentText;
+		const FLinearColor Idle = bDanger ? NiHudColor::White70 : NiHudColor::Paper;
+		TSharedPtr<SButton> Btn;
+		SAssignNew(Btn, SButton).ButtonStyle(&TextBtn).IsFocusable(false).ContentPadding(FMargin(0))
+			.OnClicked(FOnClicked::CreateLambda([OnClick]() { OnClick(); return FReply::Handled(); }));
+		TWeakPtr<SButton> Weak = Btn;
+		auto Hovered = [Weak]() { const TSharedPtr<SButton> B = Weak.Pin(); return B.IsValid() && B->IsHovered(); };
+		Btn->SetContent(
+			SNew(SBox).HeightOverride(NiType::Action.Size * 2.25f).VAlign(VAlign_Center)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(3.0f).HeightOverride(NiType::Action.Size * 0.8f)
+					[
+						SNew(SImage).Image(AccentBar.Get()).ColorAndOpacity(Hot)
+						.Visibility_Lambda([Hovered]() { return Hovered() ? EVisibility::HitTestInvisible : EVisibility::Hidden; })
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapL, 0, 0, 0)
+				[
+					SNew(STextBlock).Font(BtnFont)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.ColorAndOpacity_Lambda([Hovered, Hot, Idle]() { return FSlateColor(Hovered() ? Hot : Idle); })
+					.Text(NiText(Label))
+				]
+			]);
+		return Btn.ToSharedRef();
+	}
+
+	// 版面常數：左軸 72（＝主選單 NiMenuLeftGutter）、文字鈕短棒＋間距 19、欄寬 320、欄距 64
+	static constexpr float Gutter = 18.0f * NiUi::U;
+	static constexpr float TextAxis = 3.0f + NiUi::GapL;
+	static constexpr float ColRW = 96.0f * NiUi::U;   // 兩側欄（動作／玩家）384：名字上限 16 字 ≈ 160px，靴子不會離名字太遠
+	static constexpr float CenterW = 160.0f * NiUi::U; // 中欄 640：一句標題＋一句副句／說明五條／設定三列都住得下
+
 	// ---- 三頁 ----
 	TSharedRef<SWidget> BuildRoot()
 	{
+		// 輕重（2026-09-17 三修，user：「不知道輕重，也不知道每個東西應該放哪裡才有美感」）：
+		// - 這一頁沒有標題。48 級的 MENU 什麼都沒說，它跟房碼並排就是兩個標題在打架；退成一行小標。
+		// - 動作清單一個字級一個字重：RESUME 不再是實心白塊（它是預設動作，ESC 鍵帽已經在說），
+		//   LEAVE THE ROOM 用顏色退一階＋隔 24，hover 才轉紅。
+		// - 玩家清單是次要資訊：臉 32、名字一種字級，房碼只是清單上方一行小字。
+		// - 所有文字掛同一條左軸（TextAxis 補回文字鈕的短棒位）。
 		TSharedRef<SVerticalBox> Left = SNew(SVerticalBox);
+		Left->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(TextAxis, 0, 0, 0)
+		[
+			SNew(STextBlock).Font(RowLabelFont).ColorAndOpacity(NiHudColor::PaperDim)
+			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+			.Text(NiText(ENiLocKey::MenuTitle))
+		];
+		Left->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, NiUi::GapM, 0, 0)
+		[
+			TextButton(ENiLocKey::MenuResume, [this]() { DoAction(0); }, false)
+		];
 		Left->AddSlot().AutoHeight().HAlign(HAlign_Left)
 		[
-			SNew(STextBlock).Font(TitleFont).ColorAndOpacity(NiHudColor::Paper).Text(NiText(ENiLocKey::MenuTitle))
+			TextButton(ENiLocKey::MenuHowToPlay, [this]() { DoAction(1); }, false)
 		];
-		Left->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, NiUi::GapL, 0, NiUi::GapL)
+		Left->AddSlot().AutoHeight().HAlign(HAlign_Left)
 		[
-			SNew(SBox).WidthOverride(24.0f * NiUi::U).HeightOverride(5.0f)
-			[
-				SNew(SImage).Image(NiSlate::Brush(Hud.IsValid() ? Hud->GetInkBrushTex() : nullptr, 5.0f))
-				.ColorAndOpacity(NiHudColor::White70)
-			]
+			TextButton(ENiLocKey::MenuSettings, [this]() { DoAction(2); }, false)
 		];
-		struct FItem { ENiLocKey Key; bool bPrimary; int32 Action; };
-		const FItem Items[] = {
-			{ ENiLocKey::MenuResume,   true,  0 },
-			{ ENiLocKey::MenuHowToPlay, false, 1 },
-			{ ENiLocKey::MenuSettings,  false, 2 },
-			{ ENiLocKey::MenuLeave,     false, 3 },
-		};
-		for (int32 i = 0; i < 4; ++i)
-		{
-			const int32 Action = Items[i].Action;
-			Left->AddSlot().AutoHeight().HAlign(HAlign_Left)
-				.Padding(0, i ? (Action == 3 ? NiUi::GapL : NiUi::GapM) : 0.0f, 0, 0)
-			[
-				MenuButton(Items[i].Key, Items[i].bPrimary, [this, Action]() { DoAction(Action); })
-			];
-		}
+		Left->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, NiUi::Margin, 0, 0)
+		[
+			TextButton(ENiLocKey::MenuLeave, [this]() { DoAction(3); }, true)
+		];
 
-		return SNew(SHorizontalBox)
-			.Visibility(TAttribute<EVisibility>::CreateLambda([this]()
-				{ return Page == 0 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top)[Left]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(16.0f * NiUi::U, 0, 0, 0)
-			[
-				SNew(SBox).WidthOverride(80.0f * NiUi::U)[BuildRightColumn()]
-			];
+		return Left;
 	}
 
-	TSharedRef<SWidget> BuildRightColumn()
+	/** 中欄標題＋副句（三頁共用的畫法）：展示體 Title 48 置中、副句內文 18 白 70% 置中，兩行相距 GapL */
+	TSharedRef<SWidget> CenterHead(ENiLocKey Head, ENiLocKey Sub, bool bHasSub, const FSlateFontInfo& HeadFontIn)
 	{
+		// 標題吃欄寬自動換行（首頁那句在 48 級展示體下寬 830 > 欄 640＝實拍被切成「HE ROOM KEEPS GOIN(」；
+		// 一句話的標題用 Heading 32，頁名一個詞才用 Title 48）
 		TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
-		// 房碼：與大廳同一組 kicker 規則（墨跡到墨跡）
-		V->AddSlot().AutoHeight().HAlign(HAlign_Left)
+		V->AddSlot().AutoHeight().HAlign(HAlign_Fill)
 		[
-			SNew(STextBlock).Font(LabelFont).ColorAndOpacity(NiHudColor::PaperDim)
-			.Visibility(this, &SNiSystemMenu::CodeVis)
-			.Text(NiText(ENiLocKey::LobbyCodeHint))
+			SNew(STextBlock).Font(HeadFontIn).ColorAndOpacity(NiHudColor::Paper).Justification(ETextJustify::Center)
+			.AutoWrapText(true)
+			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+			.Text(NiText(Head))
 		];
-		V->AddSlot().AutoHeight().HAlign(HAlign_Left)
-			.Padding(0, NiSlate::InkGapPadding(LabelFont, CodeFont, 0.20f * NiSlate::DisplayCapHeight(CodeFont), true), 0, 0)
-		[
-			SNew(STextBlock).Font(CodeFont).ColorAndOpacity(NiHudColor::Paper)
-			.Visibility(this, &SNiSystemMenu::CodeVis)
-			.Text(this, &SNiSystemMenu::GetCode)
-		];
-		V->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, NiUi::GapL * 2.0f, 0, NiUi::GapM)
-		[
-			SNew(STextBlock).Font(LabelFont).ColorAndOpacity(NiHudColor::PaperDim).Text(NiText(ENiLocKey::MenuPlayers))
-		];
-		V->AddSlot().AutoHeight()[SAssignNew(PlayerList, SVerticalBox)];
+		if (bHasSub)
+		{
+			V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapL, 0, 0)
+			[
+				SNew(STextBlock).Font(BodyFont).ColorAndOpacity(NiHudColor::White70).Justification(ETextJustify::Center)
+				.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+				.Text(NiText2(Sub))
+			];
+		}
 		return V;
+	}
+
+	TSharedRef<SWidget> BuildPlayersColumn()
+	{
+		// 首頁正中央＝這一頁要做的事：看房裡有誰、要不要踢（五修三版；user：「這有在正中央嗎？你有思考過排版嗎？頭像可以大一點嗎？」）。
+		// 二版把「左對齊的清單」塞進一個置中的盒＝盒置中、內容偏左（房碼小標 370 寬、單人列 200 寬＝臉落在中心左邊 190px）。
+		// 三版＝**整塊以中軸對稱**：房碼（小標＋展示體）置中、PLAYERS 置中、玩家＝一排席位格橫向置中（大廳底列同一種東西：
+		// 臉 96 在上、名字在下、靴子在名字下），人數 2～6 都對稱、每張臉都是主角。與左欄的小標同一條頂線。
+		// 房碼沒有時整組連同它的內距一起消失（Collapsed）。
+		TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
+		V->AddSlot().AutoHeight().HAlign(HAlign_Center)
+		[
+			SNew(SBox).Padding(FMargin(0, 0, 0, NiUi::Margin))
+			.Visibility(this, &SNiSystemMenu::CodeVis)
+			[
+				SNew(SVerticalBox)
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+				[
+					SNew(STextBlock).Font(RowLabelFont).ColorAndOpacity(NiHudColor::PaperDim).Justification(ETextJustify::Center)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(NiText(ENiLocKey::LobbyCodeHint))
+				]
+				+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Center)
+					.Padding(0, NiSlate::InkGapPadding(RowLabelFont, CodeFont, 0.20f * NiSlate::DisplayCapHeight(CodeFont), true), 0, 0)
+				[
+					SNew(STextBlock).Font(CodeFont).ColorAndOpacity(NiHudColor::Paper).Justification(ETextJustify::Center)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(this, &SNiSystemMenu::GetCode)
+				]
+			]
+		];
+		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, 0, 0, NiUi::GapL)
+		[
+			SNew(STextBlock).Font(RowLabelFont).ColorAndOpacity(NiHudColor::PaperDim).Justification(ETextJustify::Center)
+			.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+			.Text(NiText(ENiLocKey::MenuPlayers))
+		];
+		V->AddSlot().AutoHeight().HAlign(HAlign_Center)[SAssignNew(PlayerList, SVerticalBox)];
+		return SNew(SBox)
+			.Visibility(TAttribute<EVisibility>::CreateLambda([this]()
+				{ return GetPage() == 0 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
+			[V];
 	}
 
 	TSharedRef<SWidget> BuildHowTo()
 	{
+		// 中欄：標題置中，五條說明靠左排在 640 的欄裡（條列置中會讀成詩）；標題到第一條 Margin 24
 		TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
-		V->AddSlot().AutoHeight().HAlign(HAlign_Left)
-		[
-			SNew(STextBlock).Font(TitleFont).ColorAndOpacity(NiHudColor::Paper).Text(NiText(ENiLocKey::MenuHowToPlay))
-		];
+		V->AddSlot().AutoHeight().HAlign(HAlign_Fill)[CenterHead(ENiLocKey::MenuHowToPlay, ENiLocKey::MenuHowToPlay, false, TitleFont)];
 		static const ENiLocKey Lines[5] = { ENiLocKey::HowTo1, ENiLocKey::HowTo2, ENiLocKey::HowTo3,
 			ENiLocKey::HowTo4, ENiLocKey::HowTo5 };
 		for (int32 i = 0; i < 5; ++i)
 		{
 			const ENiLocKey K = Lines[i];
-			V->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, i ? NiUi::GapL : NiUi::GapL * 2.0f, 0, 0)
+			V->AddSlot().AutoHeight().HAlign(HAlign_Left).Padding(0, i ? NiUi::GapL : NiUi::Margin, 0, 0)
 			[
 				SNew(SHorizontalBox)
 				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Top).Padding(0, 6.0f, 0, 0)
@@ -1817,44 +1912,42 @@ private:
 				+ SHorizontalBox::Slot().AutoWidth().Padding(NiUi::GapL, 0, 0, 0)
 				[
 					// 換行交給 Slate（此前是自己寫的 WrapTok）
-					SNew(SBox).WidthOverride(160.0f * NiUi::U - 3.0f * NiUi::U - NiUi::GapL)
+					SNew(SBox).WidthOverride(CenterW - 3.0f * NiUi::U - NiUi::GapL)
 					[
 						SNew(STextBlock).Font(BodyFont).ColorAndOpacity(NiHudColor::Paper)
+						.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
 						.AutoWrapText(true).Text(NiText2(K))
 					]
 				]
 			];
 		}
-		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapL * 2.0f, 0, 0)
-		[
-			MenuButton(ENiLocKey::MenuBack, false, [this]() { Page = 0; })
-		];
-		return SNew(SBox)
+		// 頁內 BACK 鈕拆除（2026-09-17）：ESC 在子頁＝回上一頁、左下鍵帽寫著 BACK——一個意圖一個位置（主選單 09-05 同一條）
+		return SNew(SBox).WidthOverride(CenterW)
 			.Visibility(TAttribute<EVisibility>::CreateLambda([this]()
-				{ return Page == 1 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
+				{ return GetPage() == 1 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
 			[V];
 	}
 
 	TSharedRef<SWidget> BuildSettings()
 	{
+		// 列的畫法照抄主選單設定頁的 MakeRow（2026-09-16 user：「按鍵、內容等等的都看不清楚」
+		// ——此前這頁是 24px 方塊裡塞展示體的 −／＋（展示體沒有這兩個字形，面裡只剩一道底線）、
+		// 值欄 64px 把 100% 切成 00%）：列＝標籤｜‹ 值 ›，列底 14% 髮線。地＝全螢幕暗底，不另給面板。
+		// 中欄：標題＋副句「改了立刻生效」置中，三列設定在 640 的欄裡；副句到第一列 Margin 24
 		TSharedRef<SVerticalBox> V = SNew(SVerticalBox);
-		V->AddSlot().AutoHeight().HAlign(HAlign_Left)
-		[
-			SNew(STextBlock).Font(TitleFont).ColorAndOpacity(NiHudColor::Paper).Text(NiText(ENiLocKey::MenuSettings))
-		];
-		V->AddSlot().AutoHeight().Padding(0, NiUi::GapL * 2.0f, 0, 0)[AdjustRow(ENiLocKey::MenuSensitivity, 0)];
-		V->AddSlot().AutoHeight().Padding(0, NiUi::GapL, 0, 0)[AdjustRow(ENiLocKey::MenuVolume, 1)];
-		V->AddSlot().AutoHeight().HAlign(HAlign_Center).Padding(0, NiUi::GapL * 2.0f, 0, 0)
-		[
-			MenuButton(ENiLocKey::MenuBack, false, [this]() { Page = 0; })
-		];
-		return SNew(SBox)
+		V->AddSlot().AutoHeight().HAlign(HAlign_Fill)[CenterHead(ENiLocKey::MenuSettings, ENiLocKey::SettingsNote, true, TitleFont)];
+		V->AddSlot().AutoHeight().Padding(0, NiUi::Margin, 0, 0)[AdjustRow(ENiLocKey::MenuSensitivity, 0)];
+		V->AddSlot().AutoHeight()[AdjustRow(ENiLocKey::MenuVolume, 1)];
+		// 走路晃動（2026-09-15 user 定案：設定開關、預設開；局內也能切＝相機當幀跟著變）
+		V->AddSlot().AutoHeight()[AdjustRow(ENiLocKey::HeadBob, 2)];
+		// 頁內 BACK 鈕拆除（同 HowTo）
+		return SNew(SBox).WidthOverride(CenterW)
 			.Visibility(TAttribute<EVisibility>::CreateLambda([this]()
-				{ return Page == 2 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
+				{ return GetPage() == 2 ? EVisibility::SelfHitTestInvisible : EVisibility::Collapsed; }))
 			[V];
 	}
 
-	/** 一列設定：標籤左、［−］值［＋］右 */
+	/** 一列設定（主選單 MakeRow 的同款）：標籤左、‹ 值 › 右、列底髮線 */
 	TSharedRef<SWidget> AdjustRow(ENiLocKey Label, int32 Which)
 	{
 		auto Step = [this, Which](int32 Dir)
@@ -1865,50 +1958,68 @@ private:
 			{
 				GI->MouseSensitivityScale = FMath::Clamp(GI->MouseSensitivityScale + Dir * 0.1f, 0.2f, 3.0f);
 			}
-			else
+			else if (Which == 1)
 			{
 				GI->MasterVolume = FMath::Clamp(GI->MasterVolume + Dir * 0.05f, 0.0f, 1.0f);
 				GI->UpdateBgmVolume();
 			}
+			else
+			{
+				GI->bHeadBobEnabled = !GI->bHeadBobEnabled; // 二態：兩個箭頭都是切換
+			}
 			GI->SaveSettings();
 		};
+		// 箭號＝細字元、無底（灰方塊讀成試算表）；‹ › 在內文體裡有字形
 		auto Arrow = [this, Step](const TCHAR* Glyph, int32 Dir)
 		{
-			return SNew(SBox).WidthOverride(NiUi::KeycapH).HeightOverride(NiUi::KeycapH)
-			[
-				SNew(SButton).ButtonStyle(&Normal).ContentPadding(FMargin(0))
+			return SNew(SButton).ButtonStyle(&TextBtn).ContentPadding(FMargin(12, 4))
 				.HAlign(HAlign_Center).VAlign(VAlign_Center)
 				.OnClicked(FOnClicked::CreateLambda([Step, Dir]() { Step(Dir); return FReply::Handled(); }))
 				[
-					SNew(STextBlock).Font(BtnFont).ColorAndOpacity(NiHudColor::Paper).Text(FText::FromString(Glyph))
-				]
-			];
+					SNew(STextBlock).Font(ValueFont).ColorAndOpacity(NiHudColor::White70)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(FText::FromString(Glyph))
+				];
 		};
-		return SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+		return SNew(SVerticalBox)
+			+ SVerticalBox::Slot().AutoHeight().Padding(0, 6)
 			[
-				SNew(SBox).WidthOverride(60.0f * NiUi::U)
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
 				[
-					SNew(STextBlock).Font(SmallFont).ColorAndOpacity(NiHudColor::PaperDim).Text(NiText(Label))
+					// 列標籤＝大寫小標：設定列是「標籤｜控制」，標籤不該跟值一樣大
+					SNew(STextBlock).Font(RowLabelFont).ColorAndOpacity(NiHudColor::PaperDim)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(NiText(Label))
 				]
+				+ SHorizontalBox::Slot().AutoWidth()[Arrow(TEXT("‹"), -1)]
+				+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(150.0f)
+					[
+						SNew(STextBlock).Font(ValueFont).ColorAndOpacity(NiHudColor::Paper)
+						.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+						.Justification(ETextJustify::Center)
+						.Text(TAttribute<FText>::CreateLambda([this, Which]() { return SettingValue(Which); }))
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth()[Arrow(TEXT("›"), +1)]
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Arrow(TEXT("−"), -1)]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0)
+			+ SVerticalBox::Slot().AutoHeight()
 			[
-				SNew(SBox).WidthOverride(16.0f * NiUi::U)
-				[
-					SNew(STextBlock).Font(BtnFont).ColorAndOpacity(NiHudColor::Paper)
-					.Justification(ETextJustify::Center)
-					.Text(TAttribute<FText>::CreateLambda([this, Which]() { return SettingValue(Which); }))
-				]
-			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)[Arrow(TEXT("＋"), +1)];
+				SNew(SBox).HeightOverride(1.0f)[SNew(SImage).Image(Divider.Get())]
+			];
 	}
 
 	FText SettingValue(int32 Which) const
 	{
 		UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(Hud.Get());
 		if (!GI) { return FText::GetEmpty(); }
+		if (Which == 2)
+		{
+			// 二態值＝內文體小寫 on／off（主選單同款；不走 NiText 的 ToUpper）
+			return FText::FromString(NiLoc::T(Hud.Get(), GI->bHeadBobEnabled ? ENiLocKey::OptionOn : ENiLocKey::OptionOff));
+		}
 		return FText::FromString(Which == 0
 			? FString::Printf(TEXT("%.1f"), GI->MouseSensitivityScale)
 			: FString::Printf(TEXT("%d%%"), FMath::RoundToInt(GI->MasterVolume * 100.0f)));
@@ -1920,9 +2031,9 @@ private:
 		ANiceInkCharacter* C = (H && H->PlayerOwner) ? Cast<ANiceInkCharacter>(H->PlayerOwner->GetPawn()) : nullptr;
 		switch (Action)
 		{
-		case 0: if (C) { C->SetSystemMenuOpen(false); } Page = 0; break;
-		case 1: Page = 1; break;
-		case 2: Page = 2; break;
+		case 0: if (C) { C->SetSystemMenuOpen(false); } SetPage(0); break;
+		case 1: SetPage(1); break;
+		case 2: SetPage(2); break;
 		case 3: if (UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(H)) { GI->ReturnToMainMenu(FString()); } break;
 		default: break;
 		}
@@ -1941,49 +2052,84 @@ private:
 		{
 			if (const ANiceInkPlayerState* N = Cast<ANiceInkPlayerState>(P)) { Sorted.Add(N); }
 		}
-		Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B) { return A.SeatIndex < B.SeatIndex; });
+		// 房主永遠第一列（大廳同一條規則：這是唯一講「誰是房主」的訊號），其後依加入順序
+		Sorted.Sort([](const ANiceInkPlayerState& A, const ANiceInkPlayerState& B)
+		{
+			if (A.bIsRoomHost != B.bIsRoomHost) { return A.bIsRoomHost; }
+			return A.SeatIndex < B.SeatIndex;
+		});
+		// 列數＝這一房的位子數（房主開房時定 4~6）；名冊比位子多（不該發生）時仍把人全畫出來
+		const int32 Seats = FMath::Max(GS->MaxPlayers, Sorted.Num());
 
-		FString Sig;
+		FString Sig = FString::Printf(TEXT("seats=%d;host=%d;"), Seats, bHost ? 1 : 0);
 		for (const ANiceInkPlayerState* P : Sorted)
 		{
-			Sig += FString::Printf(TEXT("%d:%s:%d;"), P->SeatIndex, *P->GetPlayerName(), P->bIsRoomHost ? 1 : 0);
+			Sig += FString::Printf(TEXT("%d:%s:%d:%d;"), P->SeatIndex, *P->GetPlayerName(), P->bIsRoomHost ? 1 : 0, P->Cash);
 		}
 		if (Sig == LastSig) { return; }
 		LastSig = Sig;
 
 		PlayerList->ClearChildren();
-		const float FaceS = 10.0f * NiUi::U;   // 40
-		for (const ANiceInkPlayerState* P : Sorted)
+		// 五修四版（2026-09-18 user 逐字：「給我改成一個個橫列排下來的樣子，一樣先預留這個房間應該有幾個位置，等人加入再把大頭和
+		// 名字及對應人的錢數字放進去，給我編排好設計」）：
+		// 一列＝一席。列＝黑 25% 圓角底的橫條（大廳席位格同一種「底」：有人沒人只差內容），寬 RowW、高 RowH。
+		// 尺寸（五修五版，user：「頭部大小可以再更大一點嗎？應該設為多少比較符合設計語言？」）＝**照抄大廳席位格**：
+		// 臉 FaceSeat 80、臉到底邊 SeatPad 8 ⇒ 列高＝SeatFrame 96——同一個物件（席位）在兩個畫面同一個尺寸；四版的 64 是「次要清單」
+		// 的臉（FaceM），而這張表是這一頁的主角。臉變大，字跟著上一階：名字與錢從 Body 18 → Action 24（相鄰身分差兩軸：臉 80 對字 18
+		// 是 4.4 倍＝字讀成註腳；24 是 3.3 倍＝表的正文），銭從 20 → 24（與字同高）；元件間距從 16 → 24（組外距，臉與字是兩個東西）；
+		// 列寬 480 → 560（名字預算仍 ≥ 16 字）。列距維持 8（組內）——六列是一張表，不是六張卡。
+		// 內容由左到右＝臉 80（內距 8）｜24｜名字（24、吃剩餘寬、縮寫）｜錢（數字 24 靠右＋銭 24）｜24｜動作欄 24（靴子：房主畫面、
+		// 非房主列；其餘列放同寬空盒＝錢的欄位在每一列對齊）｜右內距 8。空席＝只有底條。整塊置中（BuildPlayersColumn 的 HAlign_Center）。
+		const float RowH = NiUi::SeatFrame;    // 96
+		const float RowW = 140.0f * NiUi::U;   // 560
+		const float FaceS = NiUi::FaceSeat;    // 80
+		const float PadIn = NiUi::SeatPad;     // 8：臉與底條邊
+		const float CoinS = 6.0f * NiUi::U;    // 24：與 24 級數字同高
+		const float NameW = RowW - PadIn - FaceS - NiUi::Margin - 150.0f - NiUi::Margin - NiUi::KeycapH - PadIn; // 錢欄預算 150（24 級 6 位數＋銭）
+		for (int32 i = 0; i < Seats; ++i)
 		{
+			const ANiceInkPlayerState* P = (i < Sorted.Num()) ? Sorted[i] : nullptr;
 			TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
-			Row->AddSlot().AutoWidth().VAlign(VAlign_Center)
-			[
-				SNew(SNiFace).Hud(Hud).PS(P).Size(FaceS)
-			];
-			if (P->bIsRoomHost)
+			if (P)
 			{
-				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(PadIn, 0, 0, 0)
 				[
-					SNew(STextBlock)
-					.Font(NiSlate::BodyFont(H ? H->GetUiFont() : nullptr, NiType::Small, false))
-					.ColorAndOpacity(NiHudColor::PaperDim)
-					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
-					.Text(FText::FromString(NiLoc::T(H, ENiLocKey::LobbyHostTag)))
+					SNew(SBox).WidthOverride(FaceS).HeightOverride(FaceS)[SNew(SNiFace).Hud(Hud).PS(P).Size(FaceS)]
 				];
-			}
-			Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
-			[
-				SNew(STextBlock).Font(BodyFont).ColorAndOpacity(NiHudColor::Paper)
-				.Text(FText::FromString(NiSlate::Elide(P->GetPlayerName(), BodyFont, 44.0f * NiUi::U)))
-			];
-			if (bHost && !P->bIsRoomHost)
-			{
-				ANiceInkPlayerState* Target = const_cast<ANiceInkPlayerState*>(P);
-				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
+				Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(NiUi::Margin, 0, 0, 0)
 				[
-					SNew(SBox).WidthOverride(21.0f * NiUi::U).HeightOverride(NiUi::KeycapH)
+					SNew(STextBlock).Font(RowTextFont).ColorAndOpacity(NiHudColor::Paper)
+					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+					.Text(FText::FromString(NiSlate::Elide(P->GetPlayerName(), RowTextFont, NameW)))
+				];
+				// 錢＝數字＋穴あき銭（右上角 SNiCash 同一種寫法：數字 Paper、銭 PaperDim、間 4）
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::Margin, 0, 0, 0)
+				[
+					SNew(SHorizontalBox)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
 					[
-						SNew(SButton).ButtonStyle(&Normal).ContentPadding(FMargin(0))
+						SNew(STextBlock).Font(RowTextFont).ColorAndOpacity(NiHudColor::Paper)
+						.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+						.Text(FText::AsNumber(P->Cash))
+					]
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapS, 0, 0, 0)
+					[
+						SNew(SBox).WidthOverride(CoinS).HeightOverride(CoinS)
+						[
+							SNew(SImage).Image(NiSlate::Brush(H ? H->GetCoinIcon() : nullptr, CoinS))
+							.ColorAndOpacity(NiHudColor::PaperDim)
+						]
+					]
+				];
+				// 動作欄：靴子或同寬空盒
+				TSharedRef<SWidget> Action = SNew(SBox).WidthOverride(NiUi::KeycapH).HeightOverride(NiUi::KeycapH);
+				if (bHost && !P->bIsRoomHost)
+				{
+					// 踢人＝靴子（2026-09-17 user 定案：留在 ESC 選單、鈕改成靴子圖示）。一鍵即踢、無確認（PEAK／Content Warning／
+					// Gartic 同派），本場拒再入。
+					ANiceInkPlayerState* Target = const_cast<ANiceInkPlayerState*>(P);
+					TSharedPtr<SButton> Btn;
+					SAssignNew(Btn, SButton).ButtonStyle(&TextBtn).ContentPadding(FMargin(0))
 						.HAlign(HAlign_Center).VAlign(VAlign_Center)
 						.OnClicked(FOnClicked::CreateLambda([this, Target]()
 						{
@@ -1996,14 +2142,29 @@ private:
 								}
 							}
 							return FReply::Handled();
-						}))
+						}));
+					TWeakPtr<SButton> Weak = Btn;
+					Btn->SetContent(
+						SNew(SBox).WidthOverride(5.0f * NiUi::U).HeightOverride(5.0f * NiUi::U)
 						[
-							SNew(STextBlock).Font(SmallFont).ColorAndOpacity(NiHudColor::Paper).Text(NiText(ENiLocKey::MenuKick))
-						]
-					]
-				];
+							SNew(SImage).Image(NiSlate::Brush(H ? H->GetBootIcon() : nullptr, 5.0f * NiUi::U))
+							.ColorAndOpacity_Lambda([Weak]()
+							{
+								const TSharedPtr<SButton> B = Weak.Pin();
+								return FSlateColor((B.IsValid() && B->IsHovered()) ? NiHudColor::Paper : NiHudColor::White70);
+							})
+						]);
+					Action = SNew(SBox).WidthOverride(NiUi::KeycapH).HeightOverride(NiUi::KeycapH)[Btn.ToSharedRef()];
+				}
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::Margin, 0, PadIn, 0)[Action];
 			}
-			PlayerList->AddSlot().AutoHeight().Padding(0, NiUi::GapM, 0, 0)[Row];
+			PlayerList->AddSlot().AutoHeight().Padding(0, i ? NiUi::GapM : 0.0f, 0, 0)
+			[
+				SNew(SBorder).BorderImage(RowGround.Get()).Padding(0).VAlign(VAlign_Center)
+				[
+					SNew(SBox).WidthOverride(RowW).HeightOverride(RowH).VAlign(VAlign_Center)[Row]
+				]
+			];
 		}
 	}
 
@@ -2023,16 +2184,24 @@ private:
 	FText GetEscVerb() const
 	{
 		return FText::FromString(NiLoc::T(Hud.Get(),
-			Page == 0 ? ENiLocKey::MenuResume : ENiLocKey::MenuBack).ToUpper());
+			GetPage() == 0 ? ENiLocKey::MenuResume : ENiLocKey::MenuBack).ToUpper());
 	}
 
+	// 頁碼（0 Root／1 HowTo／2 Settings）的單一來源＝HUD 的 SysMenuPage：角色端的 ESC 判斷
+	//（子頁＝回第一頁、首頁＝關閉）與 robo 鉤子 DebugRoboSystemMenuPage 都讀寫同一份。
+	int32 GetPage() const { return Hud.IsValid() ? Hud->GetSysMenuPage() : 0; }
+	void SetPage(int32 P) { if (Hud.IsValid()) { Hud->SetSysMenuPage(P); } }
+
 	TWeakObjectPtr<ANiceInkHUD> Hud;
-	TSharedPtr<SVerticalBox> PlayerList;
-	TSharedPtr<FSlateColorBrush> Dim;
-	FButtonStyle Normal, Primary;
-	FSlateFontInfo TitleFont, BtnFont, BodyFont, SmallFont, LabelFont, CodeFont;
+	TSharedPtr<SVerticalBox> PlayerList;   // 一列一席
+	TSharedPtr<FSlateColorBrush> Dim;          // 全螢幕模態暗底＝這個選單唯一的「面板」
+	TSharedPtr<FSlateColorBrush> Divider;      // 設定列底的 14% 髮線
+	TSharedPtr<FSlateColorBrush> AccentBar;    // 文字鈕 hover 的左側短棒
+	TSharedPtr<FSlateBrush> RowGround;         // 席位列的黑 25% 圓角底
+	FButtonStyle TextBtn;
+	FSlateFontInfo TitleFont, BtnFont, BodyFont, SmallFont, LabelFont, CodeFont, RowTextFont;
+	FSlateFontInfo RowLabelFont, ValueFont;    // 設定列：大寫小標（字距 150）／內文 18
 	FString LastSig;
-	int32 Page = 0;   // 0 Root／1 HowTo／2 Settings
 };
 
 

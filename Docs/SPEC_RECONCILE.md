@@ -76,6 +76,7 @@ CLAUDE.md 鐵律「未經使用者明說不得動 SPEC」擋住了 Claude 編造
 
 | 日期 | 範圍 | 發現 |
 |---|---|---|
+| 2026-09-18 | 定向回寫（名字／站姿相機／ESC 選單） | 新增定案 #62（名字＝平台名、不可自訂、重名靠臉、保底 rikishi 無數字；修訂 #52 追記②④）、#63（站姿相機黏頭骨＋走路晃動開關預設開）、#64（ESC 三頁、首頁席位表、房主靴子踢人）。實作＝`GetEffectiveDisplayName`／`?NiName=`／`SanitizePlayerName` 上限 32；`UpdateStandHeadCamera`＋`bHeadBobEnabled`；`SNiSystemMenu`。查法＝雙人直連兩端 PostLogin 皆 rikishi（log）；`robo_headcam_probe.py` 12/12；四人真局 `esc4_test.sh` 截圖 `esc18_root00000.png`。SPEC 升 v4.0l。 |
 | 2026-09-13 | 定向回寫（大廳席位列） | 新增定案 #61：容量格／進房順序／房主最左不另標／離開遞補、回來重排／頭像全有或全無。實作＝`SNiPlayerRow`＋`NiUi::FaceSeat/SeatFrame/SeatPitch`＋`ANiceInkGameMode::AddInactivePlayer` 覆寫成空。查法＝四人真局自駕流 `lobby4_leave_rejoin_x2.sh` 時間軸（`Saved/UiMock/lobby_leave_rejoin_x2_row_v2.png`）。 |
 | 2026-08-31 | 第 10 條（查法） | 「筆寬全身一致」的查法從「讀 `MarkerUvRadius` 常數」改成「量實際紋素寬」（`ink_texel_floor.py`）。**起因＝該斷言被實作推翻了一年而舊查法看不見**：解剖保護島各自成 UV chart、逃出均勻化作用域，乳暈 28% 面積上 3mm 的線不到 1 紋素。已於 08-31 修好（追記90~93）。**教訓：斷言的查法必須能看見那條斷言為假的樣子。** |
 | 2026-08-29 | **全文**（首次） | 落差 10 項全修：開場動畫概念／電視節目／皮膚色度（×2，含技術沿用表）／帶寬勘誤／筆寬 3.9→3.0／褌幾何／技術沿用表缺開場動畫列／流程圖缺開場動畫／待定 #14 結案。順帶去腐兩處程式碼註解（`InkTypes.h` 3.9mm、`DreamTrace.h` 帶寬×2）。無落差 10 項見上表。SPEC 升 v4.0h。 |

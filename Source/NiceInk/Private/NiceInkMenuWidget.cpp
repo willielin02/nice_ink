@@ -216,28 +216,6 @@ bool SNiMenu::IsBusy() const
 		St == ENiSessionUiState::Joining;
 }
 
-void SNiMenu::CommitName()
-{
-	UNiceInkGameInstance* Inst = GI();
-	if (!Inst || !NameBox.IsValid())
-	{
-		return;
-	}
-	// 只有「玩家真的改了字」才落檔成自訂名——輸入框顯示的平台/保底名原樣按下
-	// Enter 不算自訂（名字繼續跟平台走）
-	const FString Clean = UNiceInkGameInstance::SanitizePlayerName(NameBox->GetText().ToString());
-	if (!Clean.IsEmpty() && Clean != Inst->GetEffectiveDisplayName())
-	{
-		Inst->PlayerDisplayName = Clean;
-		Inst->SaveSettings();
-		NameSavedUntil = FPlatformTime::Seconds() + 2.0; // 存了要說（無聲儲存修）
-	}
-	// 呈現規則：自訂名＝實值；無自訂名＝欄位留空、保底/平台名走 hint（淡字）——
-	// 隨機名不再偽裝成「你已取好的名字」
-	NameBox->SetText(Inst->PlayerDisplayName.IsEmpty()
-		? FText::GetEmpty() : FText::FromString(Inst->GetEffectiveDisplayName()));
-}
-
 void SNiMenu::OpenJoinPage(const FString& PrefillCode)
 {
 	Page = EPage::Join;
@@ -465,7 +443,7 @@ void SNiMenu::GoBack()
 	{
 	case EPage::Credits:  Page = EPage::Settings; break;
 	case EPage::Language: Page = LangOrigin; break;
-	case EPage::Profile:  CommitName(); Page = EPage::Root; break;
+	case EPage::Profile:  Page = EPage::Root; break;
 	case EPage::Join:
 		// 根治（2026-09-06）：搜房只服務加入頁，離開它就沒有消費者——立刻取消前景搜尋，
 		// 否則 LAN 的 5 秒引擎逾時會讓主頁的 HOST／JOIN 暗上好幾秒、狀態列還寫著 looking for rooms。
@@ -636,7 +614,6 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 		[
 			MakeTextButton(Loc(ENiLocKey::HostARoom), NiType::Action, [this]()
 			{
-				CommitName();
 				ErrorBanner.Reset();
 				Page = EPage::Host;
 			}, [this]() { return !IsHostJoinLocked(); })
@@ -645,7 +622,6 @@ TSharedRef<SWidget> SNiMenu::BuildRootPage()
 		[
 			MakeTextButton(Loc(ENiLocKey::JoinARoom), NiType::Action, [this]()
 			{
-				CommitName();
 				ErrorBanner.Reset();
 				Page = EPage::Join;
 				CodeBuffer.Reset();
@@ -1157,7 +1133,6 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					})
 					.OnClicked_Lambda([this]()
 					{
-						CommitName();
 						if (UNiceInkSessionSubsystem* S = Sessions()) { S->JoinRoomByCode(CodeBuffer, IsLan()); }
 						return FReply::Handled();
 					})
@@ -1447,6 +1422,16 @@ TSharedRef<SWidget> SNiMenu::BuildSettingsPage()
 								[this]() { if (UNiceInkGameInstance* I = GI()) { I->MouseSensitivityScale = FMath::Clamp(I->MouseSensitivityScale - 0.1f, 0.2f, 3.0f); I->SaveSettings(); } },
 								[this]() { if (UNiceInkGameInstance* I = GI()) { I->MouseSensitivityScale = FMath::Clamp(I->MouseSensitivityScale + 0.1f, 0.2f, 3.0f); I->SaveSettings(); } })
 						]
+						// 走路晃動（2026-09-15 user 定案：設定開關、預設開）：站姿相機黏頭骨眉心＝
+						// 步態的下沉／橫擺／沉浮進畫面；關＝相機回膠囊固定高（09-15 之前的行為）。
+						// 二態＝兩個箭頭都是切換（同 v-sync 列）。
+						+ SVerticalBox::Slot().AutoHeight()
+						[
+							MakeRow(LocS(ENiLocKey::HeadBob),
+								[this]() { const UNiceInkGameInstance* I = GI(); return LocS((!I || I->bHeadBobEnabled) ? ENiLocKey::OptionOn : ENiLocKey::OptionOff); },
+								[this]() { if (UNiceInkGameInstance* I = GI()) { I->bHeadBobEnabled = !I->bHeadBobEnabled; I->SaveSettings(); } },
+								[this]() { if (UNiceInkGameInstance* I = GI()) { I->bHeadBobEnabled = !I->bHeadBobEnabled; I->SaveSettings(); } })
+						]
 						+ SVerticalBox::Slot().AutoHeight()
 						[
 							MakeRow(LocS(ENiLocKey::MasterVolume),
@@ -1695,82 +1680,33 @@ TSharedRef<SWidget> SNiMenu::MakeProfileFacesBlock()
 
 TSharedRef<SWidget> SNiMenu::MakeProfileNameBlock()
 {
-	// 名字（可選——隨機名可用）
+	// 名字＝平台帳號名、唯讀（2026-09-17 user 定案逐字：「讓我的玩家不可以自己改名，全部統一匯入 Steam 的
+	// 名稱，要改名就去改 Steam 的名字，如果有重名就靠自拍 icon 辨識」）。輸入框／16 字計數器／「已儲存」
+	// 回饋整組退役；剩：小標、名字（內文級）、一行說明（線上＝跟著帳號走、離線＝隨機名）。
 	return SNew(SVerticalBox)
 		+ SVerticalBox::Slot().AutoHeight()
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
-					.Text(Loc(ENiLocKey::YourName))
-			]
-			// **欄位計數器**（2026-09-05；Meccha 每個輸入框右上都有 `11/30` 綠字）：
-			// 上限此前只在打字被無聲截斷的那一刻才會被發現。數字用強調色＝
-			// 「這是一個會擋你的界線」，與其他說明小字分開。
-			+ SHorizontalBox::Slot().FillWidth(1).HAlign(HAlign_Right)
-			[
-				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::Amber)
-					.Text_Lambda([this]() -> FText
-					{
-						const int32 N = NameBox.IsValid() ? NameBox->GetText().ToString().Len() : 0;
-						return FText::FromString(FString::Printf(TEXT("%d/16"), N));
-					})
-			]
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+				.Text(Loc(ENiLocKey::YourName))
 		]
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 		[
-			SAssignNew(NameBox, SEditableTextBox)
-				.Style(&NameBoxStyle)
-				// 無自訂名＝欄位空、hint 顯示目前生效的保底/平台名（淡字）
-				// ——隨機名不再偽裝成已取好的名字
-				.HintText_Lambda([this]() -> FText
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Body)).ColorAndOpacity(NiHudColor::Paper)
+				.Text_Lambda([this]() -> FText
 				{
 					const UNiceInkGameInstance* I = GI();
-					return I ? FText::FromString(I->GetEffectiveDisplayName())
-						: Loc(ENiLocKey::ClickToType);
-				})
-				// 打字即截斷（SanitizePlayerName 的 16 碼元上限只在 commit 後
-				// 生效——輸入框裡先擋，玩家不會打一長串然後被無聲砍掉）
-				.OnTextChanged_Lambda([this](const FText& T)
-				{
-					const FString S = T.ToString();
-					if (S.Len() > 16 && NameBox.IsValid())
-					{
-						NameBox->SetText(FText::FromString(S.Left(16)));
-					}
-				})
-				.OnTextCommitted_Lambda([this](const FText&, ETextCommit::Type)
-				{
-					CommitName();
+					return I ? FText::FromString(I->GetEffectiveDisplayName()) : FText::GetEmpty();
 				})
 		]
-		// 名字狀態列：隨機名說明 ↔ 「已儲存」回饋（存了要說）
 		+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::XS, 0, 0)
 		[
-			SNew(SHorizontalBox)
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
-					.Visibility_Lambda([this]()
-					{
-						const UNiceInkGameInstance* I = GI();
-						const bool bSavedShowing = FPlatformTime::Seconds() < NameSavedUntil;
-						return (I && I->PlayerDisplayName.IsEmpty() && !bSavedShowing)
-							? EVisibility::Visible : EVisibility::Collapsed;
-					})
-					.Text(Loc(ENiLocKey::NameFallbackNote))
-			]
-			+ SHorizontalBox::Slot().AutoWidth()
-			[
-				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Amber)
-					.Visibility_Lambda([this]()
-					{
-						return FPlatformTime::Seconds() < NameSavedUntil
-							? EVisibility::Visible : EVisibility::Collapsed;
-					})
-					.Text(Loc(ENiLocKey::NameSavedNote))
-			]
+			SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
+				.Text_Lambda([this]() -> FText
+				{
+					const UNiceInkSessionSubsystem* S = Sessions();
+					const bool bPlatform = !IsLan() && S && S->IsLoggedIn();
+					return Loc(bPlatform ? ENiLocKey::NameFromPlatformNote : ENiLocKey::NameRandomNote);
+				})
 		];
 }
 
@@ -1966,8 +1902,7 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 			SNew(SHorizontalBox)
 			+ SHorizontalBox::Slot().AutoWidth().Padding(NiSpace::S, 0)
 			[
-				// Back 已歸左下 [ESC] Back（2026-09-05）——它會走 GoBack()，
-				// 而 GoBack() 在 Profile 頁本來就會先 CommitName()。
+				// Back 已歸左下 [ESC] Back（2026-09-05）——它會走 GoBack()。
 				SNew(SSpacer)
 			]
 			+ SHorizontalBox::Slot().AutoWidth().Padding(NiSpace::S, 0)
@@ -2020,13 +1955,7 @@ TSharedRef<SWidget> SNiMenu::BuildProfilePage()
 void SNiMenu::OpenProfilePage()
 {
 	Page = EPage::Profile;
-	// 開頁播種名字欄（雲端偏好可能在建 UI 後才到）＋重建臉庫列。
-	// 只播自訂名；保底/平台名走 hint 淡字（隨機名不冒充已取的名字）
-	if (NameBox.IsValid() && GI())
-	{
-		NameBox->SetText(GI()->PlayerDisplayName.IsEmpty()
-			? FText::GetEmpty() : FText::FromString(GI()->GetEffectiveDisplayName()));
-	}
+	// 名字欄唯讀且每幀讀 GetEffectiveDisplayName（09-17 自訂名退役）＝不需要播種；只重建臉庫列
 	RefreshFaceRow();
 }
 
@@ -2242,7 +2171,6 @@ void SNiMenu::RebuildRoomList()
 				})
 				.OnClicked_Lambda([this, JoinIndex]()
 				{
-					CommitName();
 					if (UNiceInkSessionSubsystem* Sub = Sessions()) { Sub->JoinFoundSession(JoinIndex); }
 					return FReply::Handled();
 				})
@@ -2444,7 +2372,6 @@ FReply SNiMenu::OnKeyDown(const FGeometry& MyGeometry, const FKeyEvent& InKeyEve
 		}
 		if (Key == EKeys::Enter && CodeBuffer.Len() == 4 && !IsBusy())
 		{
-			CommitName();
 			if (UNiceInkSessionSubsystem* S = Sessions()) { S->JoinRoomByCode(CodeBuffer, IsLan()); }
 			return FReply::Handled();
 		}

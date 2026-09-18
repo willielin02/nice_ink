@@ -13,6 +13,7 @@ class NICEINK_API UNiceInkSettingsSave : public USaveGame
 	GENERATED_BODY()
 
 public:
+	// 已退役（2026-09-17 user 定案：名字統一匯入平台、不可自訂）。欄位留著只為舊存檔／雲端偏好相容，恆空。
 	UPROPERTY()
 	FString PlayerDisplayName;
 
@@ -26,6 +27,12 @@ public:
 
 	UPROPERTY()
 	float MasterVolume = 1.0f;
+
+	// 走路晃動（2026-09-15 user 定案：設定開關、預設開）：站姿第一人稱相機黏在頭骨眉心，
+	// 步態的下沉／橫擺／沉浮全進畫面；關＝相機回膠囊固定高（09-15 之前的行為）。
+	// 舊存檔沒有這欄＝讀回預設 true。
+	UPROPERTY()
+	bool bHeadBobEnabled = true;
 
 	// 渲染比例 %（r.ScreenPercentage；50~100）——弱機效能旋鈕，取代解析度選單
 	//（2026-08-11 視窗模式簡化制：無邊框/視窗二態、獨占全螢幕與解析度選單退役）

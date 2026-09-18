@@ -92,7 +92,6 @@ private:
 	// --- 2026-08-10 選單邏輯修（20 條驗收單）---
 	EPage LangOrigin = EPage::Root;  // 語言頁從哪進（Root/Settings）＝返回與換語言後回到哪
 	double QuitArmedUntil = 0.0;     // 離開二段確認：第一擊武裝 3 秒
-	double NameSavedUntil = 0.0;     // 名字「已儲存」回饋顯示到此刻
 
 	// --- 2026-08-11 視窗模式簡化制（user 定案）：無邊框/視窗二態即點即切、
 	// 視窗＝瀏覽器式可拖拉（引擎原生）；獨占全螢幕與解析度選單退役——
@@ -130,7 +129,6 @@ private:
 	static FText Up(const FText& In);   // 展示體角色的全大寫
 
 	// --- 動態子區 ---
-	TSharedPtr<SEditableTextBox> NameBox;
 	TSharedPtr<SVerticalBox> RoomListBox;
 	TSharedPtr<SWrapBox> FaceRowBox;                    // 臉庫列（個人檔案頁；wrap＝放大後自動換行）
 	TArray<TSharedPtr<FSlateBrush>> FaceThumbBrushes;   // 縮圖 brush（比 widget 長壽）
@@ -148,7 +146,6 @@ private:
 	bool IsLan() const;
 	bool IsBusy() const;
 	bool IsHostJoinLocked() const;   // 主頁 HOST／JOIN 的鎖：只有開房中／加入中（搜房不鎖）
-	void CommitName();
 	void RebuildRoomList();
 	FText StatusText() const;
 	FSlateColor StatusColor() const;
