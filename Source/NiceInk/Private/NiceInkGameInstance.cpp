@@ -110,6 +110,68 @@ void UNiceInkGameInstance::ProbeVoiceChatOnce(UWorld* World)
 	}
 }
 
+IVoiceChatUser* UNiceInkGameInstance::VoiceUser() const
+{
+	const UWorld* World = GetWorld();
+	// 只在真的遊戲世界查（PIE／robo 零干擾；語音在 PIE 裡本來就不存在）
+	if (!World || World->WorldType != EWorldType::Game || World->GetNetMode() == NM_Standalone)
+	{
+		return nullptr;
+	}
+	if (!UNiceInkSessionSubsystem::IsOnlineServiceConfigured())
+	{
+		return nullptr;
+	}
+	IOnlineSubsystem* OSS = Online::GetSubsystem(World);
+	if (!OSS || OSS->GetSubsystemName() != FName(TEXT("EOS")))
+	{
+		return nullptr;
+	}
+	IOnlineSubsystemEOS* EOS = static_cast<IOnlineSubsystemEOS*>(OSS);
+	const ULocalPlayer* LP = GetFirstGamePlayer();
+	const FUniqueNetIdRepl NetId = LP ? LP->GetPreferredUniqueNetId() : FUniqueNetIdRepl();
+	IVoiceChatUser* Voice = NetId.IsValid() ? EOS->GetVoiceChatUserInterface(*NetId) : nullptr;
+	return (Voice && Voice->IsLoggedIn()) ? Voice : nullptr;
+}
+
+FString UNiceInkGameInstance::VoiceNameFor(const APlayerState* PS) const
+{
+	if (!PS) { return FString(); }
+	const ULocalPlayer* LP = GetFirstGamePlayer();
+	if (LP && LP->PlayerController && LP->PlayerController->PlayerState == PS)
+	{
+		IVoiceChatUser* Voice = VoiceUser();
+		return Voice ? Voice->GetLoggedInPlayerName() : FString();
+	}
+	FString Name = PS->GetUniqueId().ToString();
+	int32 Bar = INDEX_NONE;
+	if (Name.FindChar(TEXT('|'), Bar)) { Name = Name.Mid(Bar + 1); }
+	return Name;
+}
+
+void UNiceInkGameInstance::SetPlayerVoiceVolume(const APlayerState* PS, float Volume)
+{
+	if (!PS) { return; }
+	const float V = FMath::Clamp(Volume, 0.0f, 2.0f);
+	VoiceVolume.Add(PS->GetPlayerId(), V);   // 正本在這裡：UI 讀它，不每幀去問 EOS
+	if (IVoiceChatUser* Voice = VoiceUser())
+	{
+		const FString Name = VoiceNameFor(PS);
+		if (!Name.IsEmpty())
+		{
+			Voice->SetPlayerVolume(Name, V);
+		}
+	}
+	// NULL／LAN／未入頻道＝EOS 那半靜靜跳過，但值照樣記著——玩家拉的滑桿不該無聲彈回去。
+}
+
+float UNiceInkGameInstance::GetPlayerVoiceVolume(const APlayerState* PS) const
+{
+	if (!PS) { return 1.0f; }
+	const float* Found = VoiceVolume.Find(PS->GetPlayerId());
+	return Found ? *Found : 1.0f;   // 沒動過＝原樣
+}
+
 bool UNiceInkGameInstance::IsPlayerTalking(const APlayerState* PS)
 {
 	if (!PS)

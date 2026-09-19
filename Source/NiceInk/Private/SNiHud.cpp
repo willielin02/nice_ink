@@ -23,6 +23,7 @@
 #include "Widgets/Layout/SGridPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Images/SImage.h"
+#include "Widgets/Input/SSlider.h"
 #include "Rendering/DrawElements.h"
 #include "NiceInkPlayerState.h"
 #include "NiceInkGameMode.h"
@@ -1667,11 +1668,33 @@ public:
 			// 席位列的底＝黑 25% 圓角（大廳席位格同一種底；有人沒人只差內容）
 			FLinearColor Ground = NiHudColor::Black; Ground.A = 0.25f;
 			RowGround = MakeShared<FSlateRoundedBoxBrush>(Ground, NiUi::Radius);
+			// 七修（2026-09-19 踢人鈕搬到卡外、hover 才出現）用的兩塊：
+			//  ClearBrush ＝完全透明，但 SBorder 照樣參與命中測試（Slate 的命中看幾何不看 alpha）
+			//               ⇒ 拿它當「這一列」的 hover 感測器，範圍含卡與卡外的鈕。
+			//  RowHotVeil ＝白 10%，與這個選單文字鈕的 hover 同一個值（一種 hover 一個樣子）。
+			ClearBrush = MakeShared<FSlateColorBrush>(FLinearColor(0, 0, 0, 0));
+			RowHotVeil = MakeShared<FSlateRoundedBoxBrush>(FLinearColor(1, 1, 1, 0.10f), NiUi::Radius);
+			// 每人音量：SSlider 只負責拖曳，**軌與拇指都畫成全透明**；看得見的是那排楔形格子。
+			SliderBar = MakeShared<FSlateColorBrush>(FLinearColor(0, 0, 0, 0));
+			SliderThumb = MakeShared<FSlateColorBrush>(FLinearColor(0, 0, 0, 0));
+			VolStyle = FSliderStyle()
+				.SetNormalBarImage(*SliderBar).SetHoveredBarImage(*SliderBar).SetDisabledBarImage(*SliderBar)
+				.SetNormalThumbImage(*SliderThumb).SetHoveredThumbImage(*SliderThumb).SetDisabledThumbImage(*SliderThumb)
+				.SetBarThickness(4.0f);
+			VolStep = MakeShared<FSlateRoundedBoxBrush>(FLinearColor::White, 2.0f);
+			// **滑桿＝§11.2 八個元件之外的第九個**（2026-09-19，user：「我們也需要調整該玩家的音量」）。
+			// 不用設定頁那組 `‹ 值 ›` 步進器的理由：步進器是為了「你要讀那個數字」而存在的（靈敏度 1.0、
+			// 音量 100%、on／off），一頁三列；每人音量不是要讀數字，是「把這個人轉小聲」的手勢，
+			// 六列各配一組箭頭＋數字會把這張表變成試算表。滑桿在這件事上近乎普世（Content Warning／PEAK／
+			// Discord／每個作業系統）——**抄的是「這個任務的既成形狀」這條規則，不是抄它們的樣式**。
 		}
 		AccentBar = MakeShared<FSlateColorBrush>(FLinearColor::White);
 		RowLabelFont = NiSlate::BodyFont(F, NiType::Label.Size, false, NiType::Label.Tracking);
 		ValueFont = NiSlate::BodyFont(F, NiType::Body.Size, false);
 		RowTextFont = NiSlate::BodyFont(F, NiType::Action.Size, false);   // 席位列的名字與錢：臉 80 配 24（內文體、常規字重）
+		// 席位列的踢人鈕＝角色表的「次要動作／導覽」（內文體 18）：這一列的正文是名字與錢（24），
+		// 動作不該跟正文一樣響；內文體不轉大寫（展示體才大寫）。
+		ActionSmallFont = NiSlate::BodyFont(F, NiType::ActionSmall.Size, false);
 		MakeButtonStyles();
 
 		ChildSlot
@@ -2061,7 +2084,14 @@ private:
 		// 列數＝這一房的位子數（房主開房時定 4~6）；名冊比位子多（不該發生）時仍把人全畫出來
 		const int32 Seats = FMath::Max(GS->MaxPlayers, Sorted.Num());
 
-		FString Sig = FString::Printf(TEXT("seats=%d;host=%d;"), Seats, bHost ? 1 : 0);
+		// **踢人鈕的字進簽章**（2026-09-19）：它現在是譯文，玩家在同一個 ESC 選單的設定頁就能換語言
+		// ⇒ 不進簽章的話列不會重建，鈕會留著上一個語言的字。放字串本身而不是語言索引＝來源換了就一定重建。
+		const FString KickLabel = NiLoc::T(H, ENiLocKey::MenuKick);
+		// 哪一列是我——**自己那一列不給音量條**（調不了自己的音量）。進簽章是因為它可能晚一點才解析得到。
+		const ANiceInkPlayerState* MyPS = H->PlayerOwner
+			? Cast<ANiceInkPlayerState>(H->PlayerOwner->PlayerState) : nullptr;
+		FString Sig = FString::Printf(TEXT("seats=%d;host=%d;kick=%s;me=%d;"), Seats, bHost ? 1 : 0,
+			*KickLabel, MyPS ? MyPS->GetPlayerId() : -1);
 		for (const ANiceInkPlayerState* P : Sorted)
 		{
 			Sig += FString::Printf(TEXT("%d:%s:%d:%d;"), P->SeatIndex, *P->GetPlayerName(), P->bIsRoomHost ? 1 : 0, P->Cash);
@@ -2078,32 +2108,73 @@ private:
 		// 的臉（FaceM），而這張表是這一頁的主角。臉變大，字跟著上一階：名字與錢從 Body 18 → Action 24（相鄰身分差兩軸：臉 80 對字 18
 		// 是 4.4 倍＝字讀成註腳；24 是 3.3 倍＝表的正文），銭從 20 → 24（與字同高）；元件間距從 16 → 24（組外距，臉與字是兩個東西）；
 		// 列寬 480 → 560（名字預算仍 ≥ 16 字）。列距維持 8（組內）——六列是一張表，不是六張卡。
-		// 內容由左到右＝臉 80（內距 8）｜24｜名字（24、吃剩餘寬、縮寫）｜錢（數字 24 靠右＋銭 24）｜24｜動作欄 24（靴子：房主畫面、
-		// 非房主列；其餘列放同寬空盒＝錢的欄位在每一列對齊）｜右內距 8。空席＝只有底條。整塊置中（BuildPlayersColumn 的 HAlign_Center）。
-		const float RowH = NiUi::SeatFrame;    // 96
-		const float RowW = 140.0f * NiUi::U;   // 560
+		// 內容由左到右＝臉 80｜名字（24、吃剩餘寬、縮寫）｜錢（數字 24 靠右＋銭 24）｜動作欄 24（靴子：房主畫面、
+		// 非房主列；其餘列放同寬空盒＝錢的欄位在每一列對齊）。空席＝只有底條。整塊置中（BuildPlayersColumn 的 HAlign_Center）。
+		// **五修的 8／24 已於六修作廢**（下面那段）——上面那句「臉到底邊 SeatPad 8 ⇒ 列高 SeatFrame 96」
+		// 只剩「列高是臉＋兩個內距推出來的」這條推導還成立，值本身已換。
+		// **間距（2026-09-19 六修）**：五修是框邊 8／元件間 24＝1︰3 的**反比**（框咬著內容、內容彼此散開
+		// ——同一列的臉／名字／錢／靴子屬於同一個人，框的邊界才是人與人的分界）。
+		// 六修一版 user：「內容與框邊、內容之間的間距都改成 12」⇒ 兩者同值；
+		// 二版 user 看過實拍：「內容之間的間距都改成 16；內容與框邊維持 12」⇒ **框邊 12／元件間 16**。
+		// 列高只由框邊內距決定（臉 80 ＋ 兩個 12）＝104，所以二版沒有動到列高。
+		// **八修（2026-09-19，user：「我們也需要調整該玩家的音量」）——這一列從「名冊」變成「控制台」。**
+		// 七修把踢出移到卡外、hover 才出現，理由是「臉／名字／錢是他的屬性，動作混進去不對」。
+		// 音量一進來那個理由就消滅了：這一列現在裝的是 **我對這個人的兩件事**（聽他多大聲、要不要踢他），
+		// 正是 Content Warning（頭像→VOL→紅色 KICK 同一張卡）與 PEAK（靴子貼著音量滑桿）那張卡的性質
+		// ——而那也正是「踢人放在裡面不突兀」的原因。所以踢出**收回列內、常駐**，與兩款參照對齊；
+		// 把兩個對同一個人的控制分放兩處（音量在內、踢出在外）反而比七修之前更糟。
+		// 列寬 560 → 840：臉 80 ｜名字 ｜錢 150 ｜音量 128 ｜踢出（譯文寬）。840 是讓**德文**（rauswerfen
+		// ＝最長的譯文）也保得住「名字 ≥242＝16 字不縮寫」（§13.6 四修 user 定案）的最小值。
+		// hover 的整列亮起留著——兩個控制在同一列時，「我現在在動哪一個人」值得被講出來。
+		const float RowH = NiUi::SeatRowFrame; // 104 ＝ 臉 80 ＋ 兩個框邊內距 12
+		const float RowW = 210.0f * NiUi::U;   // 840
+		const float VolW = 32.0f * NiUi::U;    // 128：音量條
+		// 楔形音軌的格數：16 格 × 6 寬 ＋ 15 個 2 的間隙 ＝ 126（VolW 128），高 4→32。
+		const int32 NiVolSteps = 16;
 		const float FaceS = NiUi::FaceSeat;    // 80
-		const float PadIn = NiUi::SeatPad;     // 8：臉與底條邊
+		const float PadIn = NiUi::SeatRowPad;  // 12：框邊 ↔ 內容
+		const float Gap   = NiUi::SeatRowGap;  // 16：內容 ↔ 內容
 		const float CoinS = 6.0f * NiUi::U;    // 24：與 24 級數字同高
-		const float NameW = RowW - PadIn - FaceS - NiUi::Margin - 150.0f - NiUi::Margin - NiUi::KeycapH - PadIn; // 錢欄預算 150（24 級 6 位數＋銭）
+		// **動作欄的寬度由譯文決定，不是寫死的**（2026-09-19 靴子換成文字鈕）：同一顆鈕在 ja「キック」是 3 字、
+		// 在 de「rauswerfen」是 10 字，差三倍以上。寫死一個寬度只會讓某些語言被切或某些語言空一大塊 ⇒ 量了再排。
+		// 一場局裡所有人同一個語言 ⇒ 每一列的鈕等寬，錢的欄位照樣對齊。下限 KeycapH 防譯文極短時鈕小到按不到。
+		const FText KickText = FText::FromString(KickLabel);
+		const float KickInk = FSlateApplication::IsInitialized()
+			? NiSlate::Measure()->Measure(KickLabel, ActionSmallFont).X : 0.0f;
+		const float ActionW = FMath::Max(NiUi::KeycapH, FMath::CeilToFloat(KickInk) + 2.0f * NiUi::GapM);
+		// **不做成「hover 臉就變踢出鈕」**（user 曾提的另一案）：§11.3 明文臉是身分的唯一載體，而臉在指認
+		// 相位**已經是可點的**（點臉＝指認嫌疑人）⇒ 同一個手勢在兩個畫面會意思相反，其中一邊還不可逆。
+		// 仍然一鍵即踢、無確認（09-17 定案不動）。
+		// 名字吃剩下的：840 −（框 12×2 ＋ 臉 80 ＋ 錢 150 ＋ 音量 128 ＋ 踢出 ＋ 四個 16 的間距）。
+		const float NameW = RowW - PadIn - FaceS - Gap - 150.0f - Gap - VolW - Gap - ActionW - Gap - PadIn;
 		for (int32 i = 0; i < Seats; ++i)
 		{
 			const ANiceInkPlayerState* P = (i < Sorted.Num()) ? Sorted[i] : nullptr;
 			TSharedRef<SHorizontalBox> Row = SNew(SHorizontalBox);
+			// 動作欄的占位（空席與房主自己那一列＝同寬空盒，讓每一列的卡等寬、整塊仍然置中）
+			TSharedRef<SWidget> Action = SNew(SBox).WidthOverride(ActionW);
 			if (P)
 			{
 				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(PadIn, 0, 0, 0)
 				[
 					SNew(SBox).WidthOverride(FaceS).HeightOverride(FaceS)[SNew(SNiFace).Hud(Hud).PS(P).Size(FaceS)]
 				];
-				Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(NiUi::Margin, 0, 0, 0)
+				Row->AddSlot().FillWidth(1.0f).VAlign(VAlign_Center).Padding(Gap, 0, 0, 0)
 				[
 					SNew(STextBlock).Font(RowTextFont).ColorAndOpacity(NiHudColor::Paper)
 					.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
 					.Text(FText::FromString(NiSlate::Elide(P->GetPlayerName(), RowTextFont, NameW)))
 				];
-				// 錢＝數字＋穴あき銭（右上角 SNiCash 同一種寫法：數字 Paper、銭 PaperDim、間 4）
-				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::Margin, 0, 0, 0)
+				// 錢＝數字＋穴あき銭（數字 Paper、銭 PaperDim）。
+				// **間距 4 → 8**（2026-09-19，user：「現在錢的數字和錢的符號之間的間距是？？？」）：
+				// 4 是從右上角現金顯示 `SNiCash` 抄來的，而**那裡的現金旁邊沒有別的東西，4 是它唯一的間距**；
+				// 這一列裡它的鄰居全是 12，4 就讀成黏上去的。又一次抄值沒抄前提。
+				// 不跟著元件間距走的理由：數字與銭是**一個數值加它的單位**，不是兩個並列的成員——給成
+				// 一樣的值會讓銭離數字和離靴子一樣遠，它就不再屬於那個數字。8＝§14.3 明文的「組內」值，
+				// 對元件間距（六修二版起 16）仍然小，分組保住、而且比一版的 12 更清楚。
+				//（user 原本要 6，但 6 不在 §14.1.3 的 Carbon 級距表上也推導不出來——專案裡唯一的 6 是
+				// KeycapPad，那是 (24−12)/2 的幾何結果，不是挑的。）
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(Gap, 0, 0, 0)
 				[
 					SNew(SHorizontalBox)
 					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center)
@@ -2112,7 +2183,7 @@ private:
 						.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
 						.Text(FText::AsNumber(P->Cash))
 					]
-					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapS, 0, 0, 0)
+					+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::GapM, 0, 0, 0)
 					[
 						SNew(SBox).WidthOverride(CoinS).HeightOverride(CoinS)
 						[
@@ -2121,15 +2192,83 @@ private:
 						]
 					]
 				];
-				// 動作欄：靴子或同寬空盒
-				TSharedRef<SWidget> Action = SNew(SBox).WidthOverride(NiUi::KeycapH).HeightOverride(NiUi::KeycapH);
+				// **這個人的音量**（八修）：0~2、1＝原樣，正是 `IVoiceChatUser::SetPlayerVolume` 的值域，
+				// 不另發明一套。滑桿走 0~1 ⇒ ×2 換算；**預設落在正中央**＝「原樣」，往左轉小、拉到底就是靜音。
+				// **不另給靜音鈕**：EOS 那邊 SetPlayerVolume(0) 與 SetPlayerMuted 是兩個 API，但玩家心裡只有
+				// 一件事；多一顆鈕就多一個要對賬的狀態。
+				// 值的正本在 GameInstance（`GetPlayerVoiceVolume`），**不每幀去問 EOS**——09-07 血價：
+				// 一版每幀每張臉都叫 GetVoiceChatUserInterface，PIE 開始五秒就 D3D12 E_OUTOFMEMORY。
+				// **自己那一列不給音量條**（八修二版，實拍抓到）：你調不了自己的音量，那是一個
+				// 按了不會發生任何事的控制項。改放同寬空盒 ⇒ 其餘欄位照樣對齊（與踢出欄同一個處理）。
+				if (P == MyPS)
+				{
+					Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(Gap, 0, 0, 0)
+					[
+						SNew(SBox).WidthOverride(VolW)
+					];
+				}
+				else
+				{
+					ANiceInkPlayerState* VolTarget = const_cast<ANiceInkPlayerState*>(P);
+					auto VolAt = [this, VolTarget]()
+					{
+						const UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(Hud.Get());
+						return GI ? GI->GetPlayerVoiceVolume(VolTarget) * 0.5f : 0.5f;   // 0~1
+					};
+					// 看得見的軌＝一排逐格長高的格子（16 格 × 6 寬 ＋ 15 個 2 的間隙 ＝ 126，欄寬 128）。
+					// 高度 4→32 對稱於中線。亮／暗以格子的位置與現值比大小 ⇒ 填到哪裡就是多大聲。
+					TSharedRef<SHorizontalBox> Steps = SNew(SHorizontalBox);
+					for (int32 S = 0; S < NiVolSteps; ++S)
+					{
+						const float Frac = (NiVolSteps > 1) ? (S / float(NiVolSteps - 1)) : 0.0f;
+						Steps->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(S ? 2.0f : 0.0f, 0, 0, 0)
+						[
+							SNew(SBox).WidthOverride(6.0f).HeightOverride(4.0f + Frac * 28.0f)
+							[
+								SNew(SImage).Image(VolStep.Get())
+								.ColorAndOpacity_Lambda([VolAt, Frac]()
+									{ return FSlateColor(VolAt() >= Frac ? NiHudColor::Paper : NiHudColor::White45); })
+							]
+						];
+					}
+					Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(Gap, 0, 0, 0)
+					[
+						SNew(SBox).WidthOverride(VolW)
+						[
+							SNew(SOverlay)
+							+ SOverlay::Slot().VAlign(VAlign_Center)[Steps]
+							+ SOverlay::Slot()
+							[
+								SNew(SSlider).Style(&VolStyle).IndentHandle(false)
+								.Value_Lambda(VolAt)
+								.OnValueChanged_Lambda([this, VolTarget](float V)
+								{
+									if (UNiceInkGameInstance* GI = UNiceInkGameInstance::Get(Hud.Get()))
+									{
+										GI->SetPlayerVoiceVolume(VolTarget, V * 2.0f);
+									}
+								})
+							]
+						]
+					];
+				}
+				// 動作欄：踢人的**文字鈕**（只鎖寬不鎖高——2026-09-19 實拍打回：一版寫了
+				// HeightOverride(KeycapH=24)，而 18pt 的字行框約 32 ⇒ 字被橫向裁掉一半。
+				// 鍵帽的 24 是「圖形的高」，拿來當「文字的盒」是抄值沒抄前提）。
 				if (bHost && !P->bIsRoomHost)
 				{
-					// 踢人＝靴子（2026-09-17 user 定案：留在 ESC 選單、鈕改成靴子圖示）。一鍵即踢、無確認（PEAK／Content Warning／
-					// Gartic 同派），本場拒再入。
+					// **踢人＝寫著字的文字鈕**（2026-09-19 user：「把靴子換掉，換成符合我們遊戲設計語言的按鈕，
+					// 按鈕上就用玩家選擇的語言告訴玩家這是踢人的按鈕」）。09-17 的 24×24 靴子退役。
+					// 選這個形式的依據＝§11.2 的八個元件裡只有兩種鈕：**主鈕**（強調色實填，一頁一顆）與
+					// **文字鈕**（無底無框、hover 才浮起）。一張表上最多五顆，主鈕的「一頁一顆」用不了 ⇒ 文字鈕。
+					// 字級＝`NiType::ActionSmall`（內文體 18）＝角色表裡「次要動作／導覽」那一格：這一列的正文是
+					// 名字與錢（24），動作不該跟正文一樣響。內文體**不轉大寫**（展示體才大寫，設定頁的 on／off 同款）。
+					// 危險態沿用 TextButton 的同一條語言：平時白 70%、hover 轉紅。
+					// 仍是一鍵即踢、無確認（09-17 定案不動；PEAK／Content Warning／Gartic 同派），本場拒再入。
 					ANiceInkPlayerState* Target = const_cast<ANiceInkPlayerState*>(P);
 					TSharedPtr<SButton> Btn;
-					SAssignNew(Btn, SButton).ButtonStyle(&TextBtn).ContentPadding(FMargin(0))
+					SAssignNew(Btn, SButton).ButtonStyle(&TextBtn)
+						.ContentPadding(FMargin(NiUi::GapM, NiUi::GapS))
 						.HAlign(HAlign_Center).VAlign(VAlign_Center)
 						.OnClicked(FOnClicked::CreateLambda([this, Target]()
 						{
@@ -2145,25 +2284,53 @@ private:
 						}));
 					TWeakPtr<SButton> Weak = Btn;
 					Btn->SetContent(
-						SNew(SBox).WidthOverride(5.0f * NiUi::U).HeightOverride(5.0f * NiUi::U)
-						[
-							SNew(SImage).Image(NiSlate::Brush(H ? H->GetBootIcon() : nullptr, 5.0f * NiUi::U))
-							.ColorAndOpacity_Lambda([Weak]()
-							{
-								const TSharedPtr<SButton> B = Weak.Pin();
-								return FSlateColor((B.IsValid() && B->IsHovered()) ? NiHudColor::Paper : NiHudColor::White70);
-							})
-						]);
-					Action = SNew(SBox).WidthOverride(NiUi::KeycapH).HeightOverride(NiUi::KeycapH)[Btn.ToSharedRef()];
+						SNew(STextBlock).Font(ActionSmallFont)
+						.ShadowOffset(FVector2D(1, 1)).ShadowColorAndOpacity(FLinearColor(0, 0, 0, 0.6f))
+						.ColorAndOpacity_Lambda([Weak]()
+						{
+							const TSharedPtr<SButton> B = Weak.Pin();
+							return FSlateColor((B.IsValid() && B->IsHovered()) ? NiHudColor::Red : NiHudColor::White70);
+						})
+						.Text(KickText));
+					Action = SNew(SBox).WidthOverride(ActionW)[Btn.ToSharedRef()];
 				}
-				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(NiUi::Margin, 0, PadIn, 0)[Action];
+				// 踢出**收回列內、常駐**（八修）：這一列現在是控制台，兩個對同一個人的控制不該分放兩處。
+				Row->AddSlot().AutoWidth().VAlign(VAlign_Center).Padding(Gap, 0, PadIn, 0)[Action];
 			}
+
+			// hover 掛在**最外層的 SBorder**（全透明、只為了收 hover）：整列亮起＝「我現在在動哪一個人」。
+			// 兩個控制在同一列時這句值得被講出來；七修那版「鈕在卡外、hover 才出現」已隨踢出收回而退役。
+			TSharedPtr<SBorder> RowHover;
+			SAssignNew(RowHover, SBorder).BorderImage(ClearBrush.Get()).Padding(0);
+			TWeakPtr<SBorder> WeakRow = RowHover;
+			auto RowHot = [WeakRow]()
+			{
+				const TSharedPtr<SBorder> B = WeakRow.Pin();
+				return B.IsValid() && B->IsHovered();
+			};
+			RowHover->SetContent(
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SBox).WidthOverride(RowW).HeightOverride(RowH)
+					[
+						SNew(SOverlay)
+						+ SOverlay::Slot()[SNew(SImage).Image(RowGround.Get())]
+						// hover 的地＝白 10%，與這個選單的文字鈕 hover 同一個值（一種 hover 一個樣子）。
+						// 疊在列底上、壓在內容下 ⇒ 整列一起亮，機制自己現身。
+						+ SOverlay::Slot()
+						[
+							SNew(SImage).Image(RowHotVeil.Get())
+							.Visibility_Lambda([RowHot]()
+								{ return RowHot() ? EVisibility::HitTestInvisible : EVisibility::Collapsed; })
+						]
+						+ SOverlay::Slot().VAlign(VAlign_Center)[Row]
+					]
+				]);
+
 			PlayerList->AddSlot().AutoHeight().Padding(0, i ? NiUi::GapM : 0.0f, 0, 0)
 			[
-				SNew(SBorder).BorderImage(RowGround.Get()).Padding(0).VAlign(VAlign_Center)
-				[
-					SNew(SBox).WidthOverride(RowW).HeightOverride(RowH).VAlign(VAlign_Center)[Row]
-				]
+				RowHover.ToSharedRef()
 			];
 		}
 	}
@@ -2198,9 +2365,14 @@ private:
 	TSharedPtr<FSlateColorBrush> Divider;      // 設定列底的 14% 髮線
 	TSharedPtr<FSlateColorBrush> AccentBar;    // 文字鈕 hover 的左側短棒
 	TSharedPtr<FSlateBrush> RowGround;         // 席位列的黑 25% 圓角底
+	TSharedPtr<FSlateBrush> RowHotVeil;        // 席位列 hover 的白 10%（疊在底上、壓在內容下）
+	TSharedPtr<FSlateBrush> ClearBrush;        // 全透明：只為了讓外層 SBorder 收得到 hover
+	TSharedPtr<FSlateBrush> SliderBar, SliderThumb, VolStep;  // 每人音量：透明軌／透明拇指／楔形的一格
+	FSliderStyle VolStyle;
 	FButtonStyle TextBtn;
 	FSlateFontInfo TitleFont, BtnFont, BodyFont, SmallFont, LabelFont, CodeFont, RowTextFont;
 	FSlateFontInfo RowLabelFont, ValueFont;    // 設定列：大寫小標（字距 150）／內文 18
+	FSlateFontInfo ActionSmallFont;            // 席位列的踢人鈕：內文體 18（次要動作）
 	FString LastSig;
 };
 

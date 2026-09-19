@@ -691,10 +691,11 @@ namespace
 	{ { TEXT("start"), TEXT("開始"), TEXT("開局"), TEXT("开局"),
 		TEXT("시작"), TEXT("empezar"), TEXT("démarrer"), TEXT("inizia"), TEXT("starten"),
 		TEXT("começar"), TEXT("начать"), TEXT("başlat"), TEXT("ابدأ") } },
-	// ActKick
-	{ { TEXT("kick"), TEXT("追い出す"), TEXT("踢人"), TEXT("踢人"),
-		TEXT("내보내기"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
-		TEXT("expulsar"), TEXT("выгнать"), TEXT("at"), TEXT("اطرد") } },
+	// ActKick（常駐操作提示的動詞版；目前無呼叫點）——**與 MenuKick 同一個概念，字跟著它走**：
+	// 同義的兩個鍵各有一套譯文＝必有一邊會舊，所以 09-19 重審 MenuKick 時一併對齊（理由見該列）。
+	{ { TEXT("kick"), TEXT("キック"), TEXT("踢出"), TEXT("踢出"),
+		TEXT("추방"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
+		TEXT("expulsar"), TEXT("выгнать"), TEXT("odadan at"), TEXT("طرد") } },
 	// ActTrace
 	{ { TEXT("trace"), TEXT("なぞる"), TEXT("描線"), TEXT("描线"),
 		TEXT("따라 그리기"), TEXT("trazar"), TEXT("tracer"), TEXT("traccia"), TEXT("nachziehen"),
@@ -799,10 +800,20 @@ namespace
 	{ { TEXT("players"), TEXT("参加者"), TEXT("玩家"), TEXT("玩家"),
 		TEXT("참가자"), TEXT("jugadores"), TEXT("joueurs"), TEXT("giocatori"), TEXT("Spieler"),
 		TEXT("jogadores"), TEXT("игроки"), TEXT("oyuncular"), TEXT("اللاعبون") } },
-	// MenuKick
-	{ { TEXT("kick"), TEXT("追い出す"), TEXT("踢出"), TEXT("踢出"),
-		TEXT("내보내기"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
-		TEXT("expulsar"), TEXT("выгнать"), TEXT("at"), TEXT("اطرد") } },
+	// MenuKick（ESC 首頁席位列的踢人鈕。2026-09-19 user：「按鈕上就用玩家選擇的語言告訴玩家這是踢人的
+	// 按鈕，確切要寫什麼文字請你依據每個語言仔細想清楚」⇒ 逐語重審，四條改掉）：
+	//   ja  追い出す → キック：追い出す 是辭書形動詞，讀起來是敘述不是按鈕標籤；日文 UI 這個動作的既成詞
+	//       是 キック（Discord 日文同款），而且只有 3 字。**不用「蹴る」**——本作的拳腳曾是遊戲機制，字面會混淆。
+	//   ko  내보내기 → 추방：내보내기 是「送出／匯出」，語氣偏軟又離遊戲語境；추방 才是韓文遊戲／Discord 的既成詞。
+	//   tr  at → odadan at：「at」單獨當按鈕有歧義（也是「馬」、也是「丟」），兩個字母擺在列尾會被讀成被截斷。
+	//       「oda」是本表既有的用詞（Oda Kur＝開房間），所以 odadan at 讀得順、也講清楚是「從這個房間」。
+	//   ar  اطرد → طرد：阿拉伯文的按鈕標籤慣例用**動名詞（masdar）**而不是命令式；طرد 也是 Discord 阿文的用詞。
+	// 其餘沿用：en kick（通用遊戲詞——remove 太公文、ban 不對，我們只擋本場）／zh 踢出／es・ptBR expulsar／
+	// fr expulser／it espelli／de rauswerfen（最長，欄寬由它決定）／ru выгнать。
+	// **ko 與 ar 這兩條最需要母語者過目**（本檔檔頭那句對這兩條特別適用）。
+	{ { TEXT("kick"), TEXT("キック"), TEXT("踢出"), TEXT("踢出"),
+		TEXT("추방"), TEXT("expulsar"), TEXT("expulser"), TEXT("espelli"), TEXT("rauswerfen"),
+		TEXT("expulsar"), TEXT("выгнать"), TEXT("odadan at"), TEXT("طرد") } },
 	// MenuSensitivity
 	{ { TEXT("mouse sensitivity"), TEXT("マウス感度"), TEXT("滑鼠靈敏度"), TEXT("鼠标灵敏度"),
 		TEXT("마우스 감도"), TEXT("sensibilidad del ratón"), TEXT("sensibilité de la souris"), TEXT("sensibilità del mouse"), TEXT("Mausempfindlichkeit"),

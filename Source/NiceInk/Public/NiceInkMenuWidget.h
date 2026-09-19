@@ -39,6 +39,7 @@ public:
 
 	// robo 鉤子（NiMenuShowJoin/NiMenuJoinCode）：切加入頁＋預填房間碼
 	void OpenJoinPage(const FString& PrefillCode);
+	void RoboOpenJoinLangPicker();   // robo 截圖：加入頁＋語言選擇列展開（沒房的語言畫暗，要能拍到）
 	void RoboBack() { if (CanGoBack()) { GoBack(); } }   // robo：等同按 ESC
 
 	// robo 鉤子（NiMenuFontSample）：標題下顯示多文字系統取樣行（字體矩陣驗證）
@@ -200,5 +201,12 @@ private:
 	TSharedRef<SWidget> MakeMaxPlayersRow(); // 建房頁人數 2~6 chips
 	TSharedRef<SWidget> MakeHostLangRow();   // 建房頁公開房語言 chips（13 語 wrap）
 	TSharedRef<SWidget> MakeJoinLangRow();   // 加入頁列表語言過濾 chips（全部+13 語 wrap）
+	/**
+	 * 送進 SearchSessions 的語言參數（2026-09-19）。**選擇列打開時一律不過濾查詢。**
+	 * 因為那張列要回答的是「哪些語言有房」，而 EOS 的語言過濾在查詢端——帶著過濾去搜，
+	 * 回來的永遠只有一種語言，其他語言就會被畫成「沒房」。收合之後恢復過濾（規模化的理由不變）。
+	 * 顯示層的 `JoinLangFilter` 不受影響 ⇒ 下面的清單不會因為打開選擇列而變。
+	 */
+	int32 SearchLangArg() const { return bJoinLangOpen ? INDEX_NONE : JoinLangFilter; }
 	EVisibility PageVis(EPage P) const { return Page == P ? EVisibility::Visible : EVisibility::Collapsed; }
 };

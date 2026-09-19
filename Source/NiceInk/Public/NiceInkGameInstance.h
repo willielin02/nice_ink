@@ -169,11 +169,27 @@ public:
 	// 語音：這位玩家現在在說話嗎（EOS RTC；NULL／LAN／未入頻道＝恆 false）。
 	// 2026-09-07：這是一個靠語音推理的遊戲而全站沒有說話者指示；沉睡者端不畫（感官剝奪是設計）。
 	bool IsPlayerTalking(const class APlayerState* PS);
+
+	/**
+	 * 「我聽到的他」有多大聲（2026-09-19；ESC 席位列的音量條）。
+	 * 值域 0.0~2.0、1.0＝原樣——這是 `IVoiceChatUser::SetPlayerVolume` 自己的值域，不另發明一套。
+	 * **本機設定**：我把他轉小聲只影響我這一端。
+	 * **只活這一局，不進偏好存檔**——EOS 本來就不跨 session 保存，我們若自己存，就會生出
+	 * 「三個月前把某人靜音、今天遇到他聽不見卻查不出原因」這種查不到的長期 bug。
+	 */
+	void SetPlayerVoiceVolume(const class APlayerState* PS, float Volume);
+	float GetPlayerVoiceVolume(const class APlayerState* PS) const;
 private:
 	// 快取（2026-09-07 血價）：一版每幀每張臉都叫 EOS 的 GetVoiceChatUserInterface ⇒ PIE 開始 5 秒
 	// D3D12 E_OUTOFMEMORY。只在 Game 世界查、每 0.1s 一次、結果按 PlayerId 快取。
 	TMap<int32, bool> TalkingCache;
 	double TalkingCacheAt = -1.0;
+	// 音量的正本住這裡（不每幀去問 EOS——同上那條血價）。PlayerId → 0~2，缺席＝1.0。
+	TMap<int32, float> VoiceVolume;
+	// 語音層的入口與「這個 PlayerState 在語音層叫什麼名字」——**IsPlayerTalking 與音量共用同一條解析**
+	//（同一個規則寫在兩個地方必有一邊會舊）。本人走語音層自報的名字，其他人取 UniqueId `EAS|PUID` 的後半。
+	class IVoiceChatUser* VoiceUser() const;
+	FString VoiceNameFor(const class APlayerState* PS) const;
 public:
 
 private:

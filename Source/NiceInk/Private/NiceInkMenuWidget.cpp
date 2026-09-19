@@ -224,6 +224,18 @@ void SNiMenu::OpenJoinPage(const FString& PrefillCode)
 	FSlateApplication::Get().SetAllUserFocus(AsShared());
 }
 
+void SNiMenu::RoboOpenJoinLangPicker()
+{
+	// robo 截圖用（2026-09-19）：加入頁＋語言選擇列展開。這一列現在帶著判斷
+	//（沒房的語言畫暗），而畫面上的判斷沒有截圖就等於沒有驗過。
+	OpenJoinPage(FString());
+	bJoinLangOpen = true;
+	if (UNiceInkSessionSubsystem* S = Sessions())
+	{
+		S->SearchSessions(IsLan(), INDEX_NONE); // 與真的點開 chip 同一條路：先把跨語言的知識補齊
+	}
+}
+
 void SNiMenu::Construct(const FArguments& InArgs)
 {
 	OwnerPC = InArgs._OwnerPC;
@@ -899,7 +911,24 @@ TSharedRef<SWidget> SNiMenu::MakeJoinLangRow()
 			S->SearchSessions(IsLan(), JoinLangFilter); // 忙碌中=重入護欄自擋，12s 自動更新會補
 		}
 	};
-	auto MakeLangChip = [this, PickLang](int32 Lang, const FText& Label) -> TSharedRef<SWidget>
+	// **哪些語言現在有房**（2026-09-19，user：「把沒有房間的語言選擇全部弄暗，讓玩家一眼可以看出
+	// 哪些語言是有房間的」）。兩件事要分清楚：
+	//   ①「有沒有房」只算**公開房**——列表本來就不列私房，把私房算進去會讓某個語言亮著卻點進去是空的。
+	//   ② **不知道 ≠ 沒有**：EOS 指定語言時查詢端就濾掉了，我們對其他語言一無所知（見
+	//      `LastSearchCoveredAllLangs`）。那種時候一律照常亮，不准畫暗——畫暗會把「我沒去問」
+	//      說成「那裡沒有房」。這也是為什麼 chip 一打開就補一次不過濾的搜尋（見過濾列的 OnClicked）。
+	auto RoomsInLang = [this](int32 Lang) -> int32
+	{
+		const UNiceInkSessionSubsystem* S = Sessions();
+		if (!S) { return 0; }
+		int32 N = 0;
+		for (const FNiFoundSession& F : S->GetFoundSessions())
+		{
+			if (F.bPublic && (Lang == INDEX_NONE || F.LangIndex == Lang)) { ++N; }
+		}
+		return N;
+	};
+	auto MakeLangChip = [this, PickLang, RoomsInLang](int32 Lang, const FText& Label) -> TSharedRef<SWidget>
 	{
 		return SNew(SBorder)
 			.BorderImage_Lambda([this, Lang]() -> const FSlateBrush*
@@ -910,8 +939,19 @@ TSharedRef<SWidget> SNiMenu::MakeJoinLangRow()
 				{ PickLang(Lang); return FReply::Handled(); })
 			[
 				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note))
-					.ColorAndOpacity_Lambda([this, Lang]()
-						{ return JoinLangFilter == Lang ? FSlateColor(NiHudColor::AccentText) : FSlateColor(NiHudColor::PaperDim); })
+					// **兩個通道各講一件事，不互相蓋**：底（ChipOn／ChipOff）＝選中沒選中；
+					// 字的明度＝有沒有房。有房＝Paper 100%／沒房＝White45（全站「現在用不上」的既有值，
+					// 與 KeycapDimAlpha 同值）。有房的從原本的 70 升到 100 是刻意的：100 對 45 一眼分得開，
+					// 70 對 45 不是（user 的要求是「一眼可以看出」）。
+					// **選中的那顆也照這條規則**——預設選中的就是玩家自己的語言，而他打開這張列最想
+					// 知道的正是「我的語言有沒有房」；讓選中色蓋掉可用性等於把唯一重要的那格關掉。
+					.ColorAndOpacity_Lambda([this, Lang, RoomsInLang]()
+					{
+						const UNiceInkSessionSubsystem* S = Sessions();
+						const bool bKnow = S && S->LastSearchCoveredAllLangs();
+						return FSlateColor((bKnow && RoomsInLang(Lang) == 0)
+							? NiHudColor::White45 : NiHudColor::Paper);
+					})
 					.Text(Label)
 			];
 	};
@@ -1149,8 +1189,87 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 			MakeStatusRow()
 		]
 
-		// 公開房：沒房＝一行字（空盒子不上桌）、有房才展開白卡列表
+		// **公開房的過濾列＝永遠在**（2026-09-19，user：「我要讓搜尋房間可以有選擇語言的地方」）。
+		// 此前語言 chip 與語言選擇列住在下面那張清單卡裡，而卡片的顯示條件是「至少有一間房**通過現在的
+		// 過濾**」⇒ **過濾器把清單濾空 → 卡片收合 → 而過濾器就在那張卡裡 → 再也碰不到它**。
+		// 英文玩家遇到一屋子中文房時，畫面只給他「Refresh」（用同一個過濾再搜一次）與「host one yourself」
+		// （放棄），兩個都通不到解答；唯一的出口是離開選單去改自己的介面語言，或跟房主要房碼。
+		// （配對邊界＝語言/文化 是 08-14 定案，沒有動；動的只是「控制在哪裡」——
+		//  **一個只在有結果時才存在的過濾器，在它唯一該被用到的時刻不存在。**）
+		// 標籤、chip、Refresh 三件一起搬出來：它們管的是這整段，不是那張卡。
 		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::L, 0, 0)
+		[
+			SNew(SBox).WidthOverride(NiSpace::CardWWide).Padding(FMargin(NiMenuGroundPad, 0))
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
+				[
+					SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
+						.Text(Loc(ENiLocKey::PublicRooms))
+				]
+				// 語言過濾 chip：顯示現值（母語名／全部語言）、點開選擇列
+				+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, NiSpace::S, 0)
+				[
+					SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
+						.ContentPadding(FMargin(14, 4))
+						.OnClicked_Lambda([this]()
+						{
+							bJoinLangOpen = !bJoinLangOpen;
+							// 打開＝玩家要看「哪些語言有房」⇒ 先確保我們真的知道。EOS 指定語言時查詢端
+							// 已經濾掉其他語言，這裡補一次不過濾的搜尋；LAN 本來就不過濾查詢 ⇒ 恆不觸發。
+							//（之後的 Refresh／12s 自動更新由 SearchLangArg() 接手，不會再把知識收窄回去。）
+							if (bJoinLangOpen)
+							{
+								if (UNiceInkSessionSubsystem* S = Sessions())
+								{
+									if (!S->LastSearchCoveredAllLangs())
+									{
+										S->SearchSessions(IsLan(), INDEX_NONE); // 忙碌中＝重入護欄自擋
+									}
+								}
+							}
+							return FReply::Handled();
+						})
+					[
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
+							.Text_Lambda([this]()
+							{
+								return JoinLangFilter == INDEX_NONE
+									? Loc(ENiLocKey::AllLanguages)
+									: FText::FromString(NiLoc::LangNativeName(JoinLangFilter));
+							})
+					]
+				]
+				+ SHorizontalBox::Slot().AutoWidth()
+				[
+					SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
+						.ContentPadding(FMargin(14, 4))
+						.IsEnabled_Lambda([this]() { return !IsBusy(); })
+						.OnClicked_Lambda([this]()
+						{
+							if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan(), SearchLangArg()); }
+							return FReply::Handled();
+						})
+					[
+						SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
+							.Text(Loc(ENiLocKey::Refresh))
+					]
+				]
+			]
+		]
+		// 語言選擇列（chip 點開才展；選定即重搜收合）——跟著 chip 一起搬出卡片
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::S, 0, 0)
+		[
+			SNew(SBox).WidthOverride(NiSpace::CardWWide).Padding(FMargin(NiMenuGroundPad, 0))
+				.Visibility_Lambda([this]()
+					{ return bJoinLangOpen ? EVisibility::Visible : EVisibility::Collapsed; })
+			[
+				MakeJoinLangRow()
+			]
+		]
+
+		// 公開房：沒房＝一行字（空盒子不上桌）、有房才展開白卡列表
+		+ SVerticalBox::Slot().AutoHeight().HAlign(HAlign_Left).Padding(NiMenuLeftGutter, NiSpace::S, 0, 0)
 		[
 			SNew(SHorizontalBox)
 			.Visibility_Lambda([this]()
@@ -1174,15 +1293,10 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 				SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::PaperDim)
 					.Text(Loc(ENiLocKey::NoPublicRooms))
 			]
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::M, 0, 0, 0)
-			[
-				MakeGhostButton(LocS(ENiLocKey::Refresh), [this]()
-				{
-					if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan()); }
-				})
-			]
+			// 這裡原本還有一顆 Refresh——已隨 chip 一起搬進上面那條永遠在的過濾列
+			//（同一個意圖在同一頁不放兩份；而且它在這裡也解不開語言過濾造成的空）
 			// 空狀態出口（2026-08-14 列表 UX）：死路變轉化——沒房就自己開
-			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::S, 0, 0, 0)
+			+ SHorizontalBox::Slot().AutoWidth().VAlign(VAlign_Center).Padding(NiSpace::M, 0, 0, 0)
 			[
 				MakeGhostButton(LocS(ENiLocKey::OpenPublicShortcut), [this]()
 				{
@@ -1213,61 +1327,10 @@ TSharedRef<SWidget> SNiMenu::BuildJoinPage()
 					SNew(SBorder).BorderImage(&PageGroundBrush).Padding(FMargin(NiMenuGroundPad))
 					[
 						SNew(SVerticalBox)
-						// 標籤列＋語言過濾 chip＋重新整理（鈕住在它管的列表旁）
+						// 這張卡現在**只裝清單**：標籤列、語言 chip、Refresh、語言選擇列都搬到卡外
+						// 那條永遠在的過濾列（2026-09-19；理由寫在那裡）。卡片會隨過濾結果收合，
+						// 而**會收合的容器不可以裝改變它收合條件的控制**。
 						+ SVerticalBox::Slot().AutoHeight()
-						[
-							SNew(SHorizontalBox)
-							+ SHorizontalBox::Slot().FillWidth(1).VAlign(VAlign_Center)
-							[
-								SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Label)).ColorAndOpacity(NiHudColor::PaperDim)
-									.Text(Loc(ENiLocKey::PublicRooms))
-							]
-							// 語言過濾 chip：顯示現值（母語名/全部語言）、點開選擇列
-							+ SHorizontalBox::Slot().AutoWidth().Padding(0, 0, NiSpace::S, 0)
-							[
-								SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
-									.ContentPadding(FMargin(14, 4))
-									.OnClicked_Lambda([this]()
-									{
-										bJoinLangOpen = !bJoinLangOpen;
-										return FReply::Handled();
-									})
-								[
-									SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
-										.Text_Lambda([this]()
-										{
-											return JoinLangFilter == INDEX_NONE
-												? Loc(ENiLocKey::AllLanguages)
-												: FText::FromString(NiLoc::LangNativeName(JoinLangFilter));
-										})
-								]
-							]
-							+ SHorizontalBox::Slot().AutoWidth()
-							[
-								SNew(SButton).ButtonStyle(&OnCardStyle).IsFocusable(false)
-									.ContentPadding(FMargin(14, 4))
-									.IsEnabled_Lambda([this]() { return !IsBusy(); })
-									.OnClicked_Lambda([this]()
-									{
-										if (UNiceInkSessionSubsystem* S = Sessions()) { S->SearchSessions(IsLan(), JoinLangFilter); }
-										return FReply::Handled();
-									})
-								[
-									SNew(STextBlock).ShadowOffset(NiTextShadowOffset).ShadowColorAndOpacity(NiTextShadowColor).Font(Ty(NiType::Note)).ColorAndOpacity(NiHudColor::Paper)
-										.Text(Loc(ENiLocKey::Refresh))
-								]
-							]
-						]
-						// 語言選擇列（chip 點開才展；選定即重搜收合）
-						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
-						[
-							SNew(SBox).Visibility_Lambda([this]()
-								{ return bJoinLangOpen ? EVisibility::Visible : EVisibility::Collapsed; })
-							[
-								MakeJoinLangRow()
-							]
-						]
-						+ SVerticalBox::Slot().AutoHeight().Padding(0, NiSpace::S, 0, 0)
 						[
 							// 超過約 5 列由捲動接手（上限 8 列；卡片高度封頂）
 							SNew(SBox).MaxDesiredHeight(300)
@@ -2291,7 +2354,7 @@ void SNiMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime
 		{
 			if (UNiceInkSessionSubsystem* S = Sessions())
 			{
-				S->SearchSessions(IsLan(), JoinLangFilter);
+				S->SearchSessions(IsLan(), SearchLangArg());
 				bSearchKicked = true;
 				NextAutoSearchTime = InCurrentTime + 12.0;
 			}
@@ -2306,7 +2369,7 @@ void SNiMenu::Tick(const FGeometry& AllottedGeometry, const double InCurrentTime
 			{
 				if (S->GetUiState() == ENiSessionUiState::Idle)
 				{
-					S->SearchSessions(IsLan(), JoinLangFilter, /*bBackground=*/true);
+					S->SearchSessions(IsLan(), SearchLangArg(), /*bBackground=*/true);
 				}
 			}
 		}

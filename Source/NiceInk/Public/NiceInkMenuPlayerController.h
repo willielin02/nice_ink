@@ -34,6 +34,10 @@ public:
 	UFUNCTION(Exec)
 	void NiMenuShowJoin(const FString& Code);
 
+	// 開加入頁並展開語言選擇列（截圖自查用：驗「沒房的語言畫暗」）
+	UFUNCTION(Exec)
+	void NiMenuJoinLangPicker();
+
 	// robo：DelaySeconds 後等同按 ESC（回上一頁）——驗證「離開加入頁取消搜房」用
 	UFUNCTION(Exec)
 	void NiMenuBack(float DelaySeconds);

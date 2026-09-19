@@ -172,6 +172,14 @@ void ANiceInkMenuHUD::RoboOpenJoinPage(const FString& PrefillCode)
 	}
 }
 
+void ANiceInkMenuHUD::RoboOpenJoinLangPicker()
+{
+	if (Menu.IsValid())
+	{
+		Menu->RoboOpenJoinLangPicker();
+	}
+}
+
 void ANiceInkMenuHUD::RoboShowFontSample(const FString& Sample)
 {
 	if (Menu.IsValid())

@@ -135,6 +135,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Session")
 	const TArray<FNiFoundSession>& GetFoundSessions() const { return FoundSummaries; }
 
+	/**
+	 * 上一次搜尋回來的結果，是否涵蓋**全部語言**（2026-09-19）。
+	 * 加入頁要把「沒有房間的語言」畫暗，而那個判斷只能從 GetFoundSessions() 數——
+	 * **前提是那份清單真的看得到別的語言**：
+	 *   LAN  ＝查詢不帶語言條件（顯示層才過濾）⇒ 恆涵蓋全部語言。
+	 *   EOS  ＝語言過濾在**查詢端**（08-14 規模化決定：撈回來的就已經是要的語言）
+	 *          ⇒ 指定語言時伺服器只回那一種，**對其他語言一無所知**。
+	 * 這個時候若照樣把其他語言畫暗，畫出來的是「我沒去問」而不是「那裡沒有房」——
+	 * **沒有知識與知識為零是兩件事，UI 不可以把前者畫成後者。**
+	 */
+	bool LastSearchCoveredAllLangs() const { return bLastSearchLan || LastSearchLang == INDEX_NONE; }
+
 	// 線上模式（EOS）是否已設定（DefaultPlatformService=EOS）——否則選單只開 LAN
 	UFUNCTION(BlueprintPure, Category = "Nice Ink|Session")
 	static bool IsOnlineServiceConfigured();

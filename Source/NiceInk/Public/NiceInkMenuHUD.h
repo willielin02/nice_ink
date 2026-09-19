@@ -32,6 +32,7 @@ public:
 
 	// robo 鉤子（NiMenuShowJoin/NiMenuJoinCode exec 用）：切到加入頁＋預填房間碼
 	void RoboOpenJoinPage(const FString& PrefillCode);
+	void RoboOpenJoinLangPicker();
 	void RoboGoBack();   // robo：等同按 ESC（NiMenuBack）
 
 	// robo 鉤子（NiMenuFontSample）：多文字系統取樣行上牆
